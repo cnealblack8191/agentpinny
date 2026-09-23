@@ -1,0 +1,26 @@
+{
+  "tolerance_px": 10,
+  "counts": {
+    "tp": 2,
+    "fp": 2,
+    "fn": 0
+  },
+  "precision": 0.5,
+  "recall": 1.0,
+  "matched": [
+    [
+      "d1",
+      "g1"
+    ],
+    [
+      "d4",
+      "g2"
+    ]
+  ],
+  "false_positives": [
+    "d2",
+    "d3"
+  ],
+  "false_negatives": [],
+  "notes": "three predictions near g1 (1, 2, 5 px); only the nearest gets credit"
+}

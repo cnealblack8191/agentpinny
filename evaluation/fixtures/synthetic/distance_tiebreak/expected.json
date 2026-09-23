@@ -1,0 +1,23 @@
+{
+  "tolerance_px": 10,
+  "counts": {
+    "tp": 2,
+    "fp": 0,
+    "fn": 0
+  },
+  "precision": 1.0,
+  "recall": 1.0,
+  "matched": [
+    [
+      "d1",
+      "g1"
+    ],
+    [
+      "d2",
+      "g2"
+    ]
+  ],
+  "false_positives": [],
+  "false_negatives": [],
+  "notes": "both pairings have 2 matches; total distance 2 beats 18"
+}

@@ -1,0 +1,51 @@
+{
+  "format": "pinny.detections",
+  "format_version": 1,
+  "provenance": "original_detector_output",
+  "scan_id": "synthetic-scan-duplicates",
+  "document": {
+    "document_id": "synthetic-doc-001",
+    "document_version": "sha256:synthetic-v1",
+    "page_index": 0
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "width": 1000,
+    "height": 800,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "detector": {
+    "name": "synthetic-fixture",
+    "version": "n/a",
+    "settings": {
+      "note": "hand-placed points; no detector was run"
+    }
+  },
+  "detections": [
+    {
+      "id": "d1",
+      "x": 401,
+      "y": 400,
+      "source": "detector"
+    },
+    {
+      "id": "d2",
+      "x": 398,
+      "y": 400,
+      "source": "detector"
+    },
+    {
+      "id": "d3",
+      "x": 403,
+      "y": 404,
+      "source": "detector"
+    },
+    {
+      "id": "d4",
+      "x": 700,
+      "y": 300,
+      "source": "detector"
+    }
+  ]
+}

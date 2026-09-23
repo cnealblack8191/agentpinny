@@ -1,0 +1,47 @@
+{
+  "format": "pinny.evaluation_report",
+  "format_version": 1,
+  "evaluator": {
+    "name": "pinny_eval",
+    "version": "0.1.0"
+  },
+  "status": {
+    "real_drawing_accuracy": "Not measured — verified reference pending",
+    "scope": "no_reference",
+    "note": "No reference file was supplied. Detector output is recorded with its provenance only."
+  },
+  "document": {
+    "document_id": "synthetic-doc-001",
+    "document_version": "sha256:synthetic-v1",
+    "page_index": 0
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "width": 1000,
+    "height": 800,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "detector_provenance": {
+    "scan_id": "synthetic-scan-mixed_sample",
+    "detector": {
+      "name": "synthetic-fixture",
+      "version": "n/a",
+      "settings": {
+        "note": "hand-placed points; no detector was run"
+      }
+    },
+    "results_file": "fixtures/synthetic/mixed_sample/detections.json",
+    "results_sha256": "1e375b29b96321cd6bd52ff6fac0d00fe38e2e04f35bcbafcc0c9b25f9cd068b",
+    "provenance": "original_detector_output"
+  },
+  "dataset": null,
+  "matching": null,
+  "counts": {
+    "predictions": 6
+  },
+  "metrics": null,
+  "matched": [],
+  "false_positives": [],
+  "false_negatives": []
+}

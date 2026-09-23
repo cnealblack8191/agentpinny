@@ -1,0 +1,27 @@
+{
+  "tolerance_px": 10,
+  "counts": {
+    "tp": 3,
+    "fp": 0,
+    "fn": 0
+  },
+  "precision": 1.0,
+  "recall": 1.0,
+  "matched": [
+    [
+      "d1",
+      "g1"
+    ],
+    [
+      "d2",
+      "g2"
+    ],
+    [
+      "d3",
+      "g3"
+    ]
+  ],
+  "false_positives": [],
+  "false_negatives": [],
+  "notes": "d1-g1 sqrt(5)=2.236, d2-g2 5.0, d3-g3 0.0"
+}

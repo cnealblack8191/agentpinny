@@ -1,0 +1,34 @@
+{
+  "tolerance_px": 10,
+  "counts": {
+    "tp": 3,
+    "fp": 3,
+    "fn": 2
+  },
+  "precision": 0.5,
+  "recall": 0.6,
+  "matched": [
+    [
+      "d2",
+      "g1"
+    ],
+    [
+      "d3",
+      "g2"
+    ],
+    [
+      "d4",
+      "g3"
+    ]
+  ],
+  "false_positives": [
+    "d1",
+    "d5",
+    "d6"
+  ],
+  "false_negatives": [
+    "g4",
+    "g5"
+  ],
+  "notes": "d2 (2.236 px) beats duplicate d1 (3.606 px) for g1; d4-g3 exactly 10 px; d6 is 11 px from g5"
+}

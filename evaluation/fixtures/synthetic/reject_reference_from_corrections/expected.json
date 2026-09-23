@@ -1,0 +1,4 @@
+{
+  "tolerance_px": 10,
+  "reject": "independent_of_detector"
+}
