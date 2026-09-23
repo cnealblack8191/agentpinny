@@ -20,7 +20,11 @@ DETECTIONS_FORMAT = "pinny.detections"
 GROUND_TRUTH_FORMAT = "pinny.ground_truth"
 SUPPORTED_VERSION = 1
 CANONICAL_SPACE = "canonical_raster_px"
-FRAME_KEYS = ("space", "width", "height", "origin", "y_axis")
+# docs/contracts.md section 2: the canonical raster is always rendered at 200 DPI.
+# `dpi` is optional in files; when present it must be 200, and when absent it is
+# taken to be 200, so both spellings describe the same frame.
+CANONICAL_DPI = 200
+FRAME_KEYS = ("space", "dpi", "width", "height", "origin", "y_axis")
 
 # Item sources that mark a pin as a manual edit. None of these may appear
 # in a detections file: corrections are not detector output.
@@ -50,6 +54,7 @@ class Identity:
 @dataclass
 class Frame:
     space: str
+    dpi: int
     width: int
     height: int
     origin: str
@@ -69,6 +74,8 @@ class Detections:
     detector: Dict[str, Any]
     points: List[Point]
     confidences: Dict[str, Optional[float]] = field(default_factory=dict)
+    # Optional scan-level provenance carried through from contracts section 4.
+    scan_provenance: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -156,8 +163,15 @@ def _parse_frame(data: Dict[str, Any], path: str) -> Frame:
     y_axis = _req(fr, "y_axis", where)
     if origin != "top-left" or y_axis != "down":
         raise InputError(f"{where}: only origin 'top-left' with y_axis 'down' is accepted")
+    dpi = fr.get("dpi", CANONICAL_DPI)
+    if isinstance(dpi, bool) or not isinstance(dpi, (int, float)) or dpi != CANONICAL_DPI:
+        raise InputError(
+            f"{where}.dpi is {dpi!r}; the canonical raster is {CANONICAL_DPI} DPI "
+            "(docs/contracts.md section 2). Omit dpi or set it to 200"
+        )
     return Frame(
         space=space,
+        dpi=CANONICAL_DPI,
         width=_positive_int(_req(fr, "width", where), f"{where}.width"),
         height=_positive_int(_req(fr, "height", where), f"{where}.height"),
         origin=origin,
@@ -230,6 +244,7 @@ def load_detections(path: str) -> Detections:
         detector=detector,
         points=points,
         confidences=confidences,
+        scan_provenance={k: data[k] for k in ("template", "created_at") if k in data},
     )
 
 

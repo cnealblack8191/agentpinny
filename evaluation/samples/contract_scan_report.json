@@ -1,0 +1,141 @@
+{
+  "format": "pinny.evaluation_report",
+  "format_version": 1,
+  "evaluator": {
+    "name": "pinny_eval",
+    "version": "0.1.0"
+  },
+  "status": {
+    "real_drawing_accuracy": "Not measured — verified reference pending",
+    "scope": "synthetic_fixture",
+    "note": "Synthetic fixture. These numbers validate the evaluator's behaviour; they say nothing about how the detector performs on real drawings."
+  },
+  "document": {
+    "document_id": "0f8e2c1a-5b7d-4e3a-9c61-2d4b8f0a7e15",
+    "document_version": "sha256:5d41402abc4b2a76b9719d911017c592aaf1e1b2c3d4e5f60718293a4b5c6d7e",
+    "page_index": 2
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "dpi": 200,
+    "width": 1000,
+    "height": 800,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "detector_provenance": {
+    "scan_id": "7c1d0e2a-4b5f-4a9e-8d13-6f2b9c0a1e47",
+    "detector": {
+      "name": "opencv-template",
+      "version": "git:0000000",
+      "settings": {
+        "threshold": 0.6,
+        "rotations": [
+          0,
+          90,
+          180,
+          270
+        ]
+      }
+    },
+    "results_file": "samples/contract_scan_detections.json",
+    "results_sha256": "46c883878d7bda1752eb9b52b9fe65f99243ea93272b75e0dd34aea72b00442e",
+    "provenance": "original_detector_output",
+    "template": {
+      "box": {
+        "x": 100,
+        "y": 200,
+        "width": 40,
+        "height": 40
+      },
+      "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    },
+    "created_at": "2026-09-23T12:00:00Z"
+  },
+  "dataset": {
+    "dataset_id": "synthetic-contract-scan",
+    "labeled_by": "evaluation agent (synthetic, hand-authored)",
+    "labeled_at": "2026-09-23",
+    "verification": {
+      "status": "synthetic",
+      "independent_of_detector": true,
+      "method": "points authored by hand to exercise the scan adapter; frame omits dpi on purpose"
+    },
+    "reference_file": "fixtures/contracts/scan_result/ground_truth.json",
+    "reference_sha256": "f5b994d60b659673e15070babeb1c2850643646c4c9686a33c1cb5b5ec82ccbf"
+  },
+  "matching": {
+    "tolerance_px": 10.0,
+    "tolerance_units": "canonical raster pixels",
+    "distance": "euclidean",
+    "inclusive": true,
+    "algorithm": "maximum-cardinality one-to-one matching; minimum total distance as tie-breaker"
+  },
+  "counts": {
+    "predictions": 3,
+    "references": 3,
+    "true_positives": 2,
+    "false_positives": 1,
+    "false_negatives": 1
+  },
+  "metrics": {
+    "precision": {
+      "value": 0.6666666666666666,
+      "numerator": 2,
+      "denominator": 3,
+      "undefined_reason": null
+    },
+    "recall": {
+      "value": 0.6666666666666666,
+      "numerator": 2,
+      "denominator": 3,
+      "undefined_reason": null
+    }
+  },
+  "matched": [
+    {
+      "prediction": {
+        "id": "det-1",
+        "x": 120.0,
+        "y": 220.0
+      },
+      "reference": {
+        "id": "g1",
+        "x": 121.0,
+        "y": 222.0
+      },
+      "distance_px": 2.23606797749979
+    },
+    {
+      "prediction": {
+        "id": "det-2",
+        "x": 321.5,
+        "y": 168.5
+      },
+      "reference": {
+        "id": "g2",
+        "x": 321.5,
+        "y": 160.0
+      },
+      "distance_px": 8.5
+    }
+  ],
+  "false_positives": [
+    {
+      "id": "det-3",
+      "x": 620.0,
+      "y": 520.0,
+      "reason": "no_reference_within_tolerance",
+      "references_within_tolerance": []
+    }
+  ],
+  "false_negatives": [
+    {
+      "id": "g3",
+      "x": 800.0,
+      "y": 700.0,
+      "reason": "no_prediction_within_tolerance",
+      "predictions_within_tolerance": []
+    }
+  ]
+}

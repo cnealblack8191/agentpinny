@@ -1,0 +1,10 @@
+{
+  "notes": "Hand-computed. Centers: det-1 (100+20, 200+20) = (120, 220); det-2 (301+20.5, 149+19.5) = (321.5, 168.5); det-3 has no x/y, box center (620, 520). At 10 px: det-1-g1 sqrt(1+4) = 2.236, det-2-g2 8.5, det-3 has nothing near, g3 is missed.",
+  "points": { "det-1": [120.0, 220.0], "det-2": [321.5, 168.5], "det-3": [620.0, 520.0] },
+  "confidence": { "det-1": 0.93, "det-2": 0.81, "det-3": 0.62 },
+  "tolerance_px": 10,
+  "counts": { "tp": 2, "fp": 1, "fn": 1 },
+  "matched": [["det-1", "g1"], ["det-2", "g2"]],
+  "false_positives": ["det-3"],
+  "false_negatives": ["g3"]
+}

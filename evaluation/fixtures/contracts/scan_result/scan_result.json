@@ -1,0 +1,17 @@
+{
+  "scan_id": "7c1d0e2a-4b5f-4a9e-8d13-6f2b9c0a1e47",
+  "document": {
+    "document_id": "0f8e2c1a-5b7d-4e3a-9c61-2d4b8f0a7e15",
+    "document_version": "sha256:5d41402abc4b2a76b9719d911017c592aaf1e1b2c3d4e5f60718293a4b5c6d7e",
+    "page_index": 2
+  },
+  "coordinate_frame": { "space": "canonical_raster_px", "dpi": 200, "width": 1000, "height": 800, "origin": "top-left", "y_axis": "down" },
+  "template": { "box": { "x": 100, "y": 200, "width": 40, "height": 40 }, "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" },
+  "detector": { "name": "opencv-template", "version": "git:0000000", "settings": { "threshold": 0.6, "rotations": [0, 90, 180, 270] } },
+  "created_at": "2026-09-23T12:00:00Z",
+  "detections": [
+    { "id": "det-1", "box": { "x": 100, "y": 200, "width": 40, "height": 40 }, "x": 120.0, "y": 220.0, "score": 0.93, "rotation": 0, "source": "detector" },
+    { "id": "det-2", "box": { "x": 301, "y": 149, "width": 41, "height": 39 }, "x": 321.5, "y": 168.5, "score": 0.81, "rotation": 90, "source": "detector" },
+    { "id": "det-3", "box": { "x": 600, "y": 500, "width": 40, "height": 40 }, "score": 0.62, "rotation": 180, "source": "detector" }
+  ]
+}

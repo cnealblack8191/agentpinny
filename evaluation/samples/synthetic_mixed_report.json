@@ -17,6 +17,7 @@
   },
   "coordinate_frame": {
     "space": "canonical_raster_px",
+    "dpi": 200,
     "width": 1000,
     "height": 800,
     "origin": "top-left",
