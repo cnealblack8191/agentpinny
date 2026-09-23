@@ -101,6 +101,11 @@ A scan is immutable once written. Corrections never modify it.
   `pinny.learning.store.local_reviewer_identity()`.
 * `source` records which surface issued the action (`"viewer"`, `"cli"`,
   `"test"`).
+* **Rescans:** a new scan starts entirely `unreviewed`. Reviews are never
+  copied across scans. The viewer may show a *hint* on a new pin that lies
+  within the evaluation tolerance of an approved or rejected pin from an
+  earlier scan of the same `canonical_page_id` and template. Accepting the
+  hint issues a normal `approve` or `reject`, which logs a real review event.
 * A corrected pin set is **never** a detections file. The evaluator
   rejects it.
 
@@ -149,13 +154,19 @@ Dependencies are declared once in the root `pyproject.toml`, which the
 foundation owns. Other sessions ask the coordinator for additions.
 Detection needs `numpy` and `opencv-python-headless`; dev deps include `pytest`.
 
-## 9. Render service interface (*foundation* fills in)
+## 9. Render service interface (`pinny.render.RenderService`)
 
-At minimum:
+This is the foundation's real service; see `docs/render-service.md`. Every
+consumer calls it directly. There are no parallel stubs.
 
-* `render_page(document_version, page_index) -> np.ndarray` returns the
-  canonical RGB raster described in section 2.
-* `page_frame(document_version, page_index) -> dict` returns the frame
-  descriptor described in section 2.
-* `crop_renderer(spec) -> bytes` returns the PNG crop described in
-  section 6.
+| Call | Returns |
+|---|---|
+| `ingest_pdf(...)` | `DocumentVersion`. Upload and versioning, content-addressed, bounded streaming |
+| `get_version(document_version)` | `DocumentVersion` |
+| `list_versions(document_id=None)` | `list[DocumentVersion]` |
+| `page_frame(document_version, page_index)` | the frame descriptor in section 2 |
+| `render_page(document_version, page_index)` | uint8 RGB `(H, W, 3)` canonical raster, cached per page |
+| `render_page_png(document_version, page_index)` | PNG bytes of that raster, cached (for the browser) |
+| `crop_renderer(spec)` | PNG bytes of `spec.pixel_box`, cut from the cached raster |
+
+Detection and learning need nothing beyond `render_page` and `crop_renderer`.
