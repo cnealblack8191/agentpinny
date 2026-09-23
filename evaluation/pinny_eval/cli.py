@@ -3,6 +3,7 @@
   score     Score original detector results against a separately supplied reference.
   pending   Record detector provenance for a page that has no verified reference yet.
   validate  Check a ground-truth file (e.g. after manual labelling).
+  adapt-scan  Convert a contracts section 4 scan result into a pinny.detections v1 file.
 
 Exit codes: 0 success, 2 rejected input (mismatch, malformed, corrected pins), 64 usage error.
 """
@@ -12,11 +13,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
+import tempfile
 from typing import List, Optional
 
 from .inputs import Identity, InputError, check_consistency, load_detections, load_ground_truth
 from .report import build_report, render_markdown
+from .scan_adapter import scan_result_to_detections
 
 EXIT_REJECTED = 2
 EXIT_USAGE = 64
@@ -86,6 +90,11 @@ def _parser() -> argparse.ArgumentParser:
 
     v = sub.add_parser("validate", help="validate a ground-truth file")
     v.add_argument("--ground-truth", required=True)
+
+    a = sub.add_parser("adapt-scan", help="contracts section 4 scan result -> pinny.detections v1")
+    a.add_argument("--scan", required=True, help="scan result JSON (docs/contracts.md section 4)")
+    a.add_argument("--out", required=True, help="pinny.detections v1 file to write")
+    a.add_argument("--overwrite", action="store_true", help="replace --out if it already exists")
     return parser
 
 
@@ -102,6 +111,41 @@ def _emit(report: dict, args: argparse.Namespace) -> None:
         sys.stdout.write(md)
     else:
         sys.stdout.write(f"Real-drawing accuracy: {report['status']['real_drawing_accuracy']}\n")
+
+
+def _adapt_scan(args: argparse.Namespace) -> int:
+    if os.path.exists(args.out) and not args.overwrite:
+        raise InputError(f"{args.out}: already exists (pass --overwrite to replace it)")
+    try:
+        with open(args.scan, "rb") as fh:
+            scan = json.loads(fh.read().decode("utf-8"))
+    except OSError as exc:
+        raise InputError(f"{args.scan}: cannot read file ({exc})") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise InputError(f"{args.scan}: not valid UTF-8 JSON ({exc})") from exc
+    detections = scan_result_to_detections(scan, where=args.scan)
+
+    # Write next to the target, validate with the same loader `score` uses,
+    # and only then move it into place, so a bad scan never leaves a file behind.
+    out_dir = os.path.dirname(os.path.abspath(args.out))
+    fd, tmp = tempfile.mkstemp(prefix=".adapt-", suffix=".json", dir=out_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(detections, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        loaded = load_detections(tmp)
+        os.replace(tmp, args.out)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    print(
+        f"Wrote {args.out}: scan '{loaded.scan_id}', {len(loaded.points)} detections, "
+        f"document '{loaded.identity.document_id}' version '{loaded.identity.document_version}' "
+        f"page {loaded.identity.page_index}, raster {loaded.frame.width}x{loaded.frame.height} at "
+        f"{loaded.frame.dpi} DPI"
+    )
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -121,6 +165,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"verification '{gt.verification_status}'"
             )
             return 0
+
+        if args.command == "adapt-scan":
+            return _adapt_scan(args)
 
         identity = Identity(args.document_id, args.document_version, args.page)
         det = load_detections(args.detections)

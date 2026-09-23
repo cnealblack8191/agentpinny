@@ -16,11 +16,10 @@ in `samples/` and `fixtures/` comes from hand-authored synthetic points. Those
 numbers show that the evaluator counts correctly. They say nothing about how
 the detector performs on real drawings.
 
-> **Contract caveat.** `docs/contracts.md` and `docs/agent-ownership.md` did not
-> exist when this was written (the repository was empty). The two input formats
-> below are the evaluator's own. Once the scan-result contract is defined, the
-> app's output needs an adapter into `pinny.detections` v1, or these loaders
-> need updating to match. Treat both formats as provisional until then.
+The formats follow [`docs/contracts.md`](../docs/contracts.md) v1. A §4 scan
+result is converted into `pinny.detections` v1 with `adapt-scan` (see below).
+`evaluation/` is standalone: it uses only the standard library and never
+imports `pinny`.
 
 ## Requirements and tests
 
@@ -49,6 +48,8 @@ python3 -m pinny_eval score \
 * `pending` records detector provenance for a page that has no reference yet.
   Its report states **Not measured — verified reference pending**.
 * `validate --ground-truth FILE` checks a labelled file before you use it.
+* `adapt-scan --scan SCAN.json --out detections.json` converts a contracts §4
+  scan result into `pinny.detections` v1 (see "From a scan result").
 
 The identity arguments (`--document-id`, `--document-version`, `--page`,
 `--width`, `--height`) and `--tolerance-px` are all required and have no
@@ -109,11 +110,18 @@ The final corrected pin set is the user's deliverable, not a measurement.
 Report it separately, for example as the number of pins added, removed or
 moved. Never report it as detector precision or recall.
 
-## Formats (v1, provisional)
+## Formats (v1)
 
-Coordinates are in the page's **canonical raster** (`canonical_raster_px`),
-with the origin at the top-left and y increasing downward. Points must lie
-within `[0, width] × [0, height]`. IDs must be unique within a file.
+Coordinates are in the page's **canonical raster** (`canonical_raster_px`,
+contracts §2), with the origin at the top-left and y increasing downward.
+Points must lie within `[0, width] × [0, height]`. IDs must be unique within
+a file.
+
+`coordinate_frame.dpi` is optional. The canonical raster is always 200 DPI,
+so if `dpi` is present it must be `200`. Any other value is rejected. A frame
+without `dpi` is treated as 200 DPI, so a file that omits it and a file that
+has `"dpi": 200` describe the same frame and can be scored together. Reports
+always show `dpi: 200`.
 
 ### `pinny.detections`
 
@@ -124,7 +132,7 @@ within `[0, width] × [0, height]`. IDs must be unique within a file.
   "provenance": "original_detector_output",
   "scan_id": "scan-2026-09-23T10:00:00Z-abc",
   "document": { "document_id": "doc-123", "document_version": "sha256:…", "page_index": 0 },
-  "coordinate_frame": { "space": "canonical_raster_px", "width": 7200, "height": 4800,
+  "coordinate_frame": { "space": "canonical_raster_px", "dpi": 200, "width": 7200, "height": 4800,
                         "origin": "top-left", "y_axis": "down" },
   "detector": { "name": "pinny-detector", "version": "git:abc1234", "settings": { "threshold": 0.6 } },
   "detections": [ { "id": "det-1", "x": 1234.5, "y": 678.0, "confidence": 0.91, "source": "detector" } ]
@@ -132,7 +140,35 @@ within `[0, width] × [0, height]`. IDs must be unique within a file.
 ```
 
 The report copies the `detector` block (name, version, settings) verbatim and
-also records the SHA-256 of the results file.
+also records the SHA-256 of the results file. If the file carries the scan's
+`template` and `created_at` fields (as `adapt-scan` output does), the report
+records those too. Other fields, such as `box`, `score` and `rotation` on each
+detection, are kept in the file but not used for scoring.
+
+### From a scan result (contracts §4)
+
+```sh
+python3 -m pinny_eval adapt-scan --scan scan_result.json --out detections.json
+```
+
+The output is the scan object unchanged, plus `"format": "pinny.detections"`,
+`"format_version": 1` and `"provenance": "original_detector_output"`. For each
+detection:
+
+* The scored point is the **box center**, `(box.x + box.width/2, box.y + box.height/2)`
+  (contracts §3). If the scan item also has `x`/`y`, they must equal the center
+  to within 1e-6 px. Otherwise the scan is rejected, because the evaluator
+  can't know which point is right.
+* `score` is copied into `confidence`, and the original `score` is kept too. It
+  is a raw matching score, not a probability.
+* `source` must be `"detector"`. The adapter rejects any other source, and also
+  rejects input that already has `format` or `provenance` (a detections file or
+  a corrected pin set).
+
+The adapter writes to a temporary file, validates it with the same loader
+`score` uses, and only then moves it into place. It won't replace an existing
+`--out` unless you pass `--overwrite`. Keep the original scan-result file next
+to the adapted one.
 
 ### `pinny.ground_truth`
 
@@ -185,6 +221,7 @@ detector in general need several labelled pages from different drawing sets.
 pinny_eval/        matching, input validation, report, CLI
 tests/             evaluator self-tests
 fixtures/synthetic/<case>/{detections,ground_truth,expected}.json
+fixtures/contracts/scan_result/   hand-authored §4 scan result + reference
 templates/         blank ground-truth file
 samples/           example reports generated from synthetic fixtures
 INTEGRATION_CHECKS.md

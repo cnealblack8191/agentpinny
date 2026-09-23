@@ -77,6 +77,7 @@ def build_report(
             "results_file": detections.path,
             "results_sha256": detections.sha256,
             "provenance": "original_detector_output",
+            **detections.scan_provenance,
         },
         "dataset": None,
         "matching": None,
@@ -212,10 +213,18 @@ def render_markdown(report: Dict[str, Any]) -> str:
         "## Identity",
         "",
         f"- Document: `{doc['document_id']}` version `{doc['document_version']}`, page index {doc['page_index']}",
-        f"- Coordinate frame: {fr['space']}, {fr['width']}x{fr['height']}, origin {fr['origin']}, y {fr['y_axis']}",
+        f"- Coordinate frame: {fr['space']} at {fr['dpi']} DPI, {fr['width']}x{fr['height']}, "
+        f"origin {fr['origin']}, y {fr['y_axis']}",
         f"- Scan: `{prov['scan_id']}`",
         f"- Detector: `{prov['detector']['name']}` version `{prov['detector']['version']}`",
         f"- Detector settings: `{_compact(prov['detector']['settings'])}`",
+    ]
+    if "template" in prov:
+        tpl = prov["template"]
+        lines.append(f"- Template: box `{_compact(tpl.get('box'))}`, sha256 `{str(tpl.get('sha256'))[:16]}…`")
+    if "created_at" in prov:
+        lines.append(f"- Scan created: {prov['created_at']}")
+    lines += [
         f"- Detector results: `{prov['results_file']}` (sha256 `{prov['results_sha256'][:16]}…`), "
         "original detector output only (manual corrections are not scored)",
     ]

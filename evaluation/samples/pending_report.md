@@ -7,7 +7,7 @@
 ## Identity
 
 - Document: `synthetic-doc-001` version `sha256:synthetic-v1`, page index 0
-- Coordinate frame: canonical_raster_px, 1000x800, origin top-left, y down
+- Coordinate frame: canonical_raster_px at 200 DPI, 1000x800, origin top-left, y down
 - Scan: `synthetic-scan-mixed_sample`
 - Detector: `synthetic-fixture` version `n/a`
 - Detector settings: `{"note":"hand-placed points; no detector was run"}`
