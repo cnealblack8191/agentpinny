@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pinny viewer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside id="panel">
+    <h1>Pinny</h1>
+    <div id="stub-banner" class="banner" hidden>
+      Stub render service: page images are synthetic stand-ins, not the PDF content.
+    </div>
+
+    <section>
+      <h2>1. Document</h2>
+      <input type="file" id="file" accept="application/pdf,.pdf">
+      <label for="doc-select">or open</label>
+      <select id="doc-select"><option value="">- uploaded documents -</option></select>
+      <p id="doc-status" class="status" role="status"></p>
+    </section>
+
+    <section>
+      <h2>2. Page</h2>
+      <div id="pages" class="pages"><span class="muted">Upload a PDF first.</span></div>
+    </section>
+
+    <section>
+      <h2>3. Template</h2>
+      <p class="muted">Choose <b>Template box</b> mode and drag a rectangle around one receptacle.</p>
+      <p id="template-info">No template selected.</p>
+      <label>Threshold <input id="threshold" type="number" min="-1" max="1" step="0.01" value="0.80"></label>
+      <button id="scan-btn" disabled>Scan this page</button>
+      <p id="scan-status" class="status" role="status"></p>
+    </section>
+
+    <section>
+      <h2>4. Review</h2>
+      <label for="scan-select">Scan</label>
+      <select id="scan-select" disabled><option value="">- none -</option></select>
+      <p id="counts"></p>
+      <p id="save-status" class="status" role="status"></p>
+      <div id="failures"></div>
+      <div id="pin-actions">
+        <p id="pin-info" class="muted">Click a pin (Pan mode) to review it.</p>
+        <button id="approve-btn" disabled title="A">Approve</button>
+        <button id="reject-btn" disabled title="X or Delete">Reject / delete</button>
+        <button id="next-btn" disabled title="N">Next unreviewed</button>
+      </div>
+      <label><input type="checkbox" id="show-hidden"> Show rejected and removed pins</label>
+      <p><a id="report-link" class="disabled" aria-disabled="true">Export report (JSON)</a></p>
+      <table id="pin-table"><thead><tr><th>Pin</th><th>Score</th><th>State</th></tr></thead><tbody></tbody></table>
+    </section>
+  </aside>
+
+  <main id="main">
+    <div id="toolbar" role="toolbar">
+      <span class="group" id="modes">
+        <label><input type="radio" name="mode" value="pan" checked> Pan / pick pin (V)</label>
+        <label><input type="radio" name="mode" value="template"> Template box (T)</label>
+        <label><input type="radio" name="mode" value="add"> Add pin (P)</label>
+      </span>
+      <span class="group">
+        <button id="zoom-out" title="-">-</button>
+        <span id="zoom-label">-</span>
+        <button id="zoom-in" title="+">+</button>
+        <button id="fit-btn" title="0">Fit</button>
+        <button id="rotate-btn" title="R">Rotate view</button>
+        <label><input type="checkbox" id="hide-pins"> Hide pins (H)</label>
+      </span>
+      <span id="cursor-pos" class="muted"></span>
+    </div>
+    <div id="viewport" tabindex="0" aria-label="Page view">
+      <canvas id="canvas"></canvas>
+      <div id="view-message" class="view-message">Upload a PDF and choose a page.</div>
+    </div>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
