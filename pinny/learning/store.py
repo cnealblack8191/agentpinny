@@ -1,13 +1,15 @@
 """SQLite persistence for scans, pin state, review events and training examples.
 
-The store captures examples only; it never trains or adjusts the detector.
+Implements docs/contracts.md sections 4-6. The store captures examples only;
+it never trains or adjusts the detector.
 
 Invariants:
   * Every review action updates pin state and appends an immutable event in a
     single ``BEGIN IMMEDIATE`` transaction.
-  * Every action carries a caller-supplied ``request_id``. Replaying the same
-    request returns the original result without writing anything; reusing a
-    ``request_id`` for a different request raises ``IdempotencyConflict``.
+  * Every action carries a client-generated ``request_id`` (uuid4). Replaying
+    the same request returns the original result without writing anything;
+    reusing a ``request_id`` for a different request raises
+    ``IdempotencyConflict``.
   * Crop specs are committed with the event, before any image is written.
     Image writing happens after commit; a failure leaves the crop ``pending``
     or ``failed`` and ``process_pending_crops()`` regenerates it later, so a
@@ -20,16 +22,26 @@ import datetime as _dt
 import getpass
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from . import contract
 from .contract import Box, CropSpec
+
+try:  # docs/contracts.md section 7; pinny/errors.py is owned by the foundation.
+    from pinny.errors import PinnyError as _ErrorBase
+except ImportError:  # pragma: no cover - until the foundation lands
+    class _ErrorBase(Exception):  # type: ignore[no-redef]
+        def __init__(self, code: str, message: str) -> None:
+            super().__init__(message)
+            self.code = code
+            self.message = message
 
 DB_FILENAME = "pinny.sqlite3"
 CROPS_DIRNAME = "crops"
@@ -38,7 +50,7 @@ EXPORTS_DIRNAME = "exports"
 # Deterministic ids derived from request ids so retries converge.
 _ID_NAMESPACE = uuid.UUID("5d0f6c1e-7a51-4b8e-9f0e-6b1f3c0a9e21")
 
-# Pin origins / states / actions.
+# Pin origins / states / actions (contracts section 5).
 MACHINE = "machine"
 MANUAL = "manual"
 
@@ -50,8 +62,10 @@ REMOVED = "removed"
 
 APPROVE = "approve"
 REJECT = "reject"
-ADD = "add"
+ADD_MANUAL = "add_manual"
 REMOVE_MANUAL = "remove_manual"
+
+SOURCES = frozenset({"viewer", "cli", "test"})
 
 # Crop file states.
 CROP_PENDING = "pending"
@@ -59,38 +73,53 @@ CROP_WRITTEN = "written"
 CROP_FAILED = "failed"
 
 
-class LearningStoreError(Exception):
-    pass
+class LearningStoreError(_ErrorBase):
+    code = "learning_store_error"
+
+    def __init__(self, message: str, code: Optional[str] = None) -> None:
+        super().__init__(code or type(self).code, message)
+
+
+class InvalidArgument(LearningStoreError):
+    code = "invalid_argument"
 
 
 class IdempotencyConflict(LearningStoreError):
     """A request/event/scan id was reused for a different payload."""
 
+    code = "idempotency_conflict"
+
 
 class NotFound(LearningStoreError):
-    pass
+    code = "not_found"
 
 
 class InvalidTransition(LearningStoreError):
-    pass
+    code = "invalid_transition"
 
 
 class StaleVersion(LearningStoreError):
     """``expected_version`` did not match the pin's current version."""
 
+    code = "stale_version"
+
+
+class SchemaMismatch(LearningStoreError):
+    code = "schema_mismatch"
+
 
 class CropRenderer(Protocol):
-    """Renders a crop to PNG bytes from the exact document version/page.
+    """Cuts ``spec.box`` from the canonical raster and returns PNG bytes.
 
-    Supplied by integration (the PDF/page rendering owner). The store never
-    fetches drawings itself and never sends them anywhere.
+    Supplied by the foundation's render service (contracts sections 6, 9).
+    The store never reads drawings itself and never sends them anywhere.
     """
 
     def __call__(self, spec: CropSpec) -> bytes: ...
 
 
 def local_reviewer_identity() -> Optional[str]:
-    """Best-effort local reviewer id: ``$PINNY_REVIEWER`` then the OS user."""
+    """Contracts section 5: ``$PINNY_REVIEWER``, then the OS user, then ``None``."""
     env = os.environ.get("PINNY_REVIEWER")
     if env:
         return env
@@ -126,6 +155,10 @@ def _derive_id(kind: str, request_id: str) -> str:
     return str(uuid.uuid5(_ID_NAMESPACE, f"{kind}:{request_id}"))
 
 
+def _pt(x: float, y: float) -> Dict[str, float]:
+    return {"x": x, "y": y}
+
+
 # --------------------------------------------------------------------------
 # Public records
 # --------------------------------------------------------------------------
@@ -133,28 +166,66 @@ def _derive_id(kind: str, request_id: str) -> str:
 
 @dataclass(frozen=True)
 class Detection:
+    """One entry of a section-4 scan result's ``detections``."""
+
     detection_id: str
-    box: Box
-    score: Optional[float] = None
-    label: Optional[str] = None
-    # Pin point; defaults to the box centre.
+    box: Any  # Box, {x, y, width, height} mapping, or BoundingBox-like
+    score: float
+    rotation: int = 0
+    source: str = "detector"
+    # Pin point; defaults to the detection centre (section 3).
     x: Optional[float] = None
     y: Optional[float] = None
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: Dict[str, Any] = field(default_factory=dict)  # any extra keys, kept verbatim
 
 
 @dataclass(frozen=True)
 class Scan:
+    """Section-4 scan metadata (everything except ``detections``)."""
+
     scan_id: str
-    document_version_id: str
-    canonical_page_id: str
-    page_width: float
-    page_height: float
+    document_id: str
+    document_version: str
+    page_index: int
+    frame_width: int
+    frame_height: int
+    detector_name: str
     detector_version: str
-    matching_settings: Dict[str, Any]
-    template_id: Optional[str] = None
-    page_index: Optional[int] = None
+    detector_settings: Dict[str, Any]
+    template_box: Optional[Any] = None
+    template_sha256: Optional[str] = None
+    created_at: Optional[str] = None  # RFC3339 UTC; defaults to record time
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def canonical_page_id(self) -> str:
+        return contract.canonical_page_id(self.document_version, self.page_index)
+
+    @property
+    def coordinate_frame(self) -> Dict[str, Any]:
+        return contract.frame_descriptor(self.frame_width, self.frame_height)
+
+    @classmethod
+    def from_scan_result(cls, d: Mapping[str, Any]) -> Tuple["Scan", List[Detection]]:
+        """Parse a section-4 scan result dict."""
+        try:
+            w, h = contract.validate_frame(d["coordinate_frame"])
+            doc, det, tpl = d["document"], d["detector"], d.get("template") or {}
+            scan = cls(scan_id=d["scan_id"], document_id=doc["document_id"],
+                       document_version=doc["document_version"], page_index=int(doc["page_index"]),
+                       frame_width=w, frame_height=h, detector_name=det["name"],
+                       detector_version=det["version"], detector_settings=dict(det.get("settings") or {}),
+                       template_box=tpl.get("box"), template_sha256=tpl.get("sha256"),
+                       created_at=d.get("created_at"))
+            known = {"id", "box", "x", "y", "score", "rotation", "source"}
+            dets = [Detection(detection_id=e["id"], box=e["box"], score=e["score"],
+                              rotation=int(e.get("rotation", 0)), source=e.get("source", "detector"),
+                              x=e.get("x"), y=e.get("y"),
+                              raw={k: v for k, v in e.items() if k not in known})
+                    for e in d.get("detections", [])]
+        except (KeyError, TypeError, ValueError) as e:
+            raise InvalidArgument(f"malformed scan result: {e!r}") from e
+        return scan, dets
 
 
 @dataclass(frozen=True)
@@ -174,7 +245,7 @@ class Pin:
     def snapshot(self) -> Dict[str, Any]:
         return {
             "pin_id": self.pin_id, "origin": self.origin, "state": self.state,
-            "x": self.x, "y": self.y, "box": list(self.box) if self.box else None,
+            "point": _pt(self.x, self.y), "box": self.box.to_dict() if self.box else None,
             "detection_id": self.detection_id, "version": self.version,
         }
 
@@ -204,7 +275,7 @@ class ReviewResult:
 @dataclass(frozen=True)
 class ScanState:
     scan: Scan
-    created_at: str
+    recorded_at: str
     detections: List[Detection]
     pins: List[Pin]
     events: List[ReviewEvent]
@@ -222,20 +293,25 @@ CREATE TABLE IF NOT EXISTS store_meta (
 
 CREATE TABLE IF NOT EXISTS scans (
     scan_id               TEXT PRIMARY KEY,
-    document_version_id   TEXT NOT NULL,
+    document_id           TEXT NOT NULL,
+    document_version      TEXT NOT NULL,
+    page_index            INTEGER NOT NULL,
     canonical_page_id     TEXT NOT NULL,
-    page_index            INTEGER,
-    page_width            REAL NOT NULL,
-    page_height           REAL NOT NULL,
-    template_id           TEXT,
+    frame_width           INTEGER NOT NULL,
+    frame_height          INTEGER NOT NULL,
+    dpi                   INTEGER NOT NULL,
+    template_box          TEXT,
+    template_sha256       TEXT,
+    detector_name         TEXT NOT NULL,
     detector_version      TEXT NOT NULL,
-    matching_settings     TEXT NOT NULL,
-    matching_settings_sha TEXT NOT NULL,
+    detector_settings     TEXT NOT NULL,
+    detector_settings_sha TEXT NOT NULL,
     metadata              TEXT NOT NULL,
     fingerprint           TEXT NOT NULL,
-    created_at            TEXT NOT NULL
+    created_at            TEXT NOT NULL,
+    recorded_at           TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS scans_by_page ON scans(document_version_id, canonical_page_id);
+CREATE INDEX IF NOT EXISTS scans_by_page ON scans(document_version, page_index);
 
 -- Original detector output; never mutated after insert.
 CREATE TABLE IF NOT EXISTS detections (
@@ -243,8 +319,9 @@ CREATE TABLE IF NOT EXISTS detections (
     detection_id TEXT NOT NULL,
     x0 REAL NOT NULL, y0 REAL NOT NULL, x1 REAL NOT NULL, y1 REAL NOT NULL,
     x  REAL NOT NULL, y  REAL NOT NULL,
-    score        REAL,
-    label        TEXT,
+    score        REAL NOT NULL,
+    rotation     INTEGER NOT NULL,
+    source       TEXT NOT NULL,
     raw          TEXT NOT NULL,
     PRIMARY KEY (scan_id, detection_id)
 );
@@ -286,7 +363,7 @@ CREATE TABLE IF NOT EXISTS review_events (
     request_sha  TEXT NOT NULL,
     scan_id      TEXT NOT NULL REFERENCES scans(scan_id),
     pin_id       TEXT NOT NULL,
-    action       TEXT NOT NULL CHECK (action IN ('approve','reject','add','remove_manual')),
+    action       TEXT NOT NULL CHECK (action IN ('approve','reject','add_manual','remove_manual')),
     prior_state  TEXT,
     new_state    TEXT NOT NULL,
     source       TEXT NOT NULL,
@@ -313,7 +390,9 @@ END;
 
 # Label implied by an event at capture time. Removal of a manual pin carries
 # no detector label; interpretation lives in export and can change later.
-_EVENT_LABEL = {APPROVE: "positive", REJECT: "negative", ADD: "positive", REMOVE_MANUAL: None}
+_EVENT_LABEL = {APPROVE: "positive", REJECT: "negative", ADD_MANUAL: "positive", REMOVE_MANUAL: None}
+
+_AUTO = object()
 
 
 class LearningStore:
@@ -321,23 +400,29 @@ class LearningStore:
 
     def __init__(self, data_dir: Optional[os.PathLike] = None, *,
                  crop_renderer: Optional[CropRenderer] = None,
-                 default_reviewer: Optional[str] = None,
+                 default_reviewer: Any = _AUTO,
                  clock: Callable[[], str] = _utcnow) -> None:
         self.data_dir = Path(data_dir) if data_dir is not None else default_data_dir()
         self.crops_dir = self.data_dir / CROPS_DIRNAME
         self.exports_dir = self.data_dir / EXPORTS_DIRNAME
         self.crops_dir.mkdir(parents=True, exist_ok=True)
         self.crop_renderer = crop_renderer
-        self.default_reviewer = default_reviewer
+        self.default_reviewer = (local_reviewer_identity() if default_reviewer is _AUTO
+                                 else default_reviewer)
         self._clock = clock
-        self._db = sqlite3.connect(self.data_dir / DB_FILENAME, isolation_level=None,
-                                   timeout=30.0)
+        self._db = sqlite3.connect(self.data_dir / DB_FILENAME, isolation_level=None, timeout=30.0)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
         self._db.execute("PRAGMA journal_mode = WAL")
         self._db.execute("PRAGMA synchronous = FULL")
-        self._db.executescript(_SCHEMA)
-        self._init_meta()
+        try:
+            self._check_schema_version()
+            self._db.executescript(_SCHEMA)
+            self._db.execute("INSERT OR IGNORE INTO store_meta(key, value) VALUES ('schema_version', ?)",
+                             (str(contract.STORE_SCHEMA_VERSION),))
+        except BaseException:
+            self._db.close()
+            raise
 
     # ------------------------------------------------------------------ infra
 
@@ -350,14 +435,17 @@ class LearningStore:
     def __exit__(self, *exc) -> None:
         self.close()
 
-    def _init_meta(self) -> None:
+    def _check_schema_version(self) -> None:
+        has_meta = self._db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='store_meta'").fetchone()
+        if not has_meta:
+            return
         row = self._db.execute("SELECT value FROM store_meta WHERE key='schema_version'").fetchone()
-        if row is None:
-            self._db.execute("INSERT INTO store_meta(key, value) VALUES ('schema_version', ?)",
-                             (str(contract.STORE_SCHEMA_VERSION),))
-        elif int(row["value"]) != contract.STORE_SCHEMA_VERSION:
-            raise LearningStoreError(
-                f"store schema {row['value']} != supported {contract.STORE_SCHEMA_VERSION}")
+        if row is not None and int(row["value"]) != contract.STORE_SCHEMA_VERSION:
+            raise SchemaMismatch(
+                f"{self.data_dir / DB_FILENAME} has store schema {row['value']}, this code supports "
+                f"{contract.STORE_SCHEMA_VERSION}; move it aside (pre-contract prototype stores "
+                f"are not migrated)")
 
     class _Tx:
         def __init__(self, db: sqlite3.Connection):
@@ -382,30 +470,35 @@ class LearningStore:
         Idempotent on ``scan_id``: re-recording identical content is a no-op;
         different content under the same id raises ``IdempotencyConflict``.
         """
-        norm_dets = []
-        for d in detections:
-            box = contract.normalize_box(d.box)
-            x = d.x if d.x is not None else (box[0] + box[2]) / 2.0
-            y = d.y if d.y is not None else (box[1] + box[3]) / 2.0
-            x, y = contract.normalize_point(x, y)
-            norm_dets.append((d, box, x, y))
-        ids = [d.detection_id for d, *_ in norm_dets]
+        try:
+            w, h = contract.validate_frame(scan.coordinate_frame)
+            tpl_box = Box.coerce(scan.template_box).to_dict() if scan.template_box is not None else None
+            norm = []
+            for d in detections:
+                box = Box.coerce(d.box)
+                cx, cy = box.center
+                x, y = contract.normalize_point(d.x if d.x is not None else cx,
+                                                d.y if d.y is not None else cy)
+                if d.rotation not in (0, 90, 180, 270):
+                    raise ValueError(f"detection {d.detection_id}: rotation {d.rotation} not in 0/90/180/270")
+                if not all(math.isfinite(v) for v in (x, y, float(d.score))):
+                    raise ValueError(f"detection {d.detection_id}: non-finite value")
+                norm.append((d, box, x, y))
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            raise InvalidArgument(f"invalid scan {scan.scan_id}: {e}") from e
+        ids = [d.detection_id for d, *_ in norm]
         if len(set(ids)) != len(ids):
-            raise ValueError("duplicate detection_id in scan")
+            raise InvalidArgument(f"duplicate detection id in scan {scan.scan_id}")
 
         fingerprint = _sha({
-            "scan": {
-                "document_version_id": scan.document_version_id,
-                "canonical_page_id": scan.canonical_page_id,
-                "page_index": scan.page_index,
-                "page_size": contract.normalize_point(scan.page_width, scan.page_height),
-                "template_id": scan.template_id,
-                "detector_version": scan.detector_version,
-                "matching_settings": scan.matching_settings,
-                "metadata": scan.metadata,
-            },
-            "detections": [[d.detection_id, list(b), x, y, d.score, d.label, d.raw]
-                           for d, b, x, y in norm_dets],
+            "document": [scan.document_id, scan.document_version, scan.page_index],
+            "frame": [w, h, contract.CANONICAL_DPI],
+            "template": [tpl_box, scan.template_sha256],
+            "detector": [scan.detector_name, scan.detector_version, scan.detector_settings],
+            "created_at": scan.created_at,
+            "metadata": scan.metadata,
+            "detections": [[d.detection_id, b.to_dict(), x, y, d.score, d.rotation, d.source, d.raw]
+                           for d, b, x, y in norm],
         })
         now = self._clock()
         with self._tx() as db:
@@ -415,72 +508,103 @@ class LearningStore:
                 if existing["fingerprint"] != fingerprint:
                     raise IdempotencyConflict(f"scan {scan.scan_id} already recorded with different content")
                 return
-            pw, ph = contract.normalize_point(scan.page_width, scan.page_height)
             db.execute(
-                "INSERT INTO scans VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (scan.scan_id, scan.document_version_id, scan.canonical_page_id, scan.page_index,
-                 pw, ph, scan.template_id, scan.detector_version,
-                 _canon(scan.matching_settings), _sha(scan.matching_settings),
-                 _canon(scan.metadata), fingerprint, now))
-            for d, b, x, y in norm_dets:
-                db.execute("INSERT INTO detections VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                           (scan.scan_id, d.detection_id, *b, x, y, d.score, d.label, _canon(d.raw)))
+                "INSERT INTO scans VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (scan.scan_id, scan.document_id, scan.document_version, scan.page_index,
+                 scan.canonical_page_id, w, h, contract.CANONICAL_DPI,
+                 _canon(tpl_box) if tpl_box else None, scan.template_sha256,
+                 scan.detector_name, scan.detector_version, _canon(scan.detector_settings),
+                 _sha(scan.detector_settings), _canon(scan.metadata), fingerprint,
+                 scan.created_at or now, now))
+            for d, b, x, y in norm:
+                db.execute("INSERT INTO detections VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (scan.scan_id, d.detection_id, *b.edges(), x, y, float(d.score),
+                            d.rotation, d.source, _canon(d.raw)))
                 db.execute(
                     "INSERT INTO pins VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (scan.scan_id, d.detection_id, MACHINE, UNREVIEWED, d.detection_id,
-                     x, y, *b, 1, now, now))
+                     x, y, *b.edges(), 1, now, now))
 
-    def list_scans(self, document_version_id: Optional[str] = None,
-                   canonical_page_id: Optional[str] = None) -> List[Scan]:
+    def record_scan_result(self, result: Mapping[str, Any]) -> str:
+        """Record a section-4 scan result dict; returns its ``scan_id``."""
+        scan, dets = Scan.from_scan_result(result)
+        self.record_scan(scan, dets)
+        return scan.scan_id
+
+    def list_scans(self, document_version: Optional[str] = None, page_index: Optional[int] = None,
+                   *, document_id: Optional[str] = None) -> List[Scan]:
         q, args = "SELECT * FROM scans WHERE 1=1", []
-        if document_version_id is not None:
-            q += " AND document_version_id=?"
-            args.append(document_version_id)
-        if canonical_page_id is not None:
-            q += " AND canonical_page_id=?"
-            args.append(canonical_page_id)
-        return [self._scan(r) for r in self._db.execute(q + " ORDER BY created_at, scan_id", args)]
+        for col, val in (("document_version", document_version), ("page_index", page_index),
+                         ("document_id", document_id)):
+            if val is not None:
+                q += f" AND {col}=?"
+                args.append(val)
+        return [self._scan(r) for r in self._db.execute(q + " ORDER BY recorded_at, rowid", args)]
 
     def load_scan(self, scan_id: str) -> ScanState:
         row = self._db.execute("SELECT * FROM scans WHERE scan_id=?", (scan_id,)).fetchone()
         if row is None:
-            raise NotFound(f"scan {scan_id}")
-        dets = [Detection(detection_id=r["detection_id"], box=(r["x0"], r["y0"], r["x1"], r["y1"]),
-                          score=r["score"], label=r["label"], x=r["x"], y=r["y"], raw=json.loads(r["raw"]))
+            raise NotFound(f"scan {scan_id} not found")
+        dets = [Detection(detection_id=r["detection_id"],
+                          box=Box.from_edges((r["x0"], r["y0"], r["x1"], r["y1"])),
+                          score=r["score"], rotation=r["rotation"], source=r["source"],
+                          x=r["x"], y=r["y"], raw=json.loads(r["raw"]))
                 for r in self._db.execute(
                     "SELECT * FROM detections WHERE scan_id=? ORDER BY rowid", (scan_id,))]
         pins = [self._pin(r) for r in self._db.execute(
             "SELECT * FROM pins WHERE scan_id=? ORDER BY created_at, rowid", (scan_id,))]
         events = [self._event(r) for r in self._db.execute(
             "SELECT * FROM review_events WHERE scan_id=? ORDER BY seq", (scan_id,))]
-        return ScanState(scan=self._scan(row), created_at=row["created_at"],
+        return ScanState(scan=self._scan(row), recorded_at=row["recorded_at"],
                          detections=dets, pins=pins, events=events)
+
+    def scan_result(self, scan_id: str) -> Dict[str, Any]:
+        """The original detector output as a section-4 scan result dict."""
+        st = self.load_scan(scan_id)
+        s = st.scan
+        dets = []
+        for d in st.detections:
+            e = {"id": d.detection_id, "box": d.box.to_dict(), "x": d.x, "y": d.y,
+                 "score": d.score, "rotation": d.rotation, "source": d.source}
+            e.update(d.raw)
+            dets.append(e)
+        return {
+            "scan_id": s.scan_id,
+            "document": {"document_id": s.document_id, "document_version": s.document_version,
+                         "page_index": s.page_index},
+            "coordinate_frame": s.coordinate_frame,
+            "template": {"box": s.template_box, "sha256": s.template_sha256},
+            "detector": {"name": s.detector_name, "version": s.detector_version,
+                         "settings": s.detector_settings},
+            "created_at": s.created_at,
+            "detections": dets,
+        }
 
     def get_pin(self, scan_id: str, pin_id: str) -> Pin:
         r = self._db.execute("SELECT * FROM pins WHERE scan_id=? AND pin_id=?",
                              (scan_id, pin_id)).fetchone()
         if r is None:
-            raise NotFound(f"pin {scan_id}/{pin_id}")
+            raise NotFound(f"pin {pin_id} not found in scan {scan_id}")
         return self._pin(r)
 
     # ---------------------------------------------------------------- reviews
 
     def approve(self, scan_id: str, pin_id: str, *, request_id: str, source: str,
-                reviewer: Optional[str] = None, expected_version: Optional[int] = None,
+                reviewer: Any = _AUTO, expected_version: Optional[int] = None,
                 event_id: Optional[str] = None) -> ReviewResult:
         """Approve a machine detection (positive example)."""
         return self._review(APPROVE, scan_id, pin_id, request_id=request_id, source=source,
                             reviewer=reviewer, expected_version=expected_version, event_id=event_id)
 
     def reject(self, scan_id: str, pin_id: str, *, request_id: str, source: str,
-               reviewer: Optional[str] = None, expected_version: Optional[int] = None,
+               reviewer: Any = _AUTO, expected_version: Optional[int] = None,
                event_id: Optional[str] = None) -> ReviewResult:
         """Reject a machine detection (negative example)."""
         return self._review(REJECT, scan_id, pin_id, request_id=request_id, source=source,
                             reviewer=reviewer, expected_version=expected_version, event_id=event_id)
 
     def remove_manual(self, scan_id: str, pin_id: str, *, request_id: str, source: str,
-                      reviewer: Optional[str] = None, expected_version: Optional[int] = None,
+                      reviewer: Any = _AUTO, expected_version: Optional[int] = None,
                       event_id: Optional[str] = None) -> ReviewResult:
         """Remove a manually added pin. Not treated as a negative example."""
         return self._review(REMOVE_MANUAL, scan_id, pin_id, request_id=request_id, source=source,
@@ -497,22 +621,28 @@ class LearningStore:
         return self._review(action, scan_id, pin_id, request_id=request_id, **kw)
 
     def add_manual(self, scan_id: str, x: float, y: float, *, request_id: str, source: str,
-                   reviewer: Optional[str] = None, pin_id: Optional[str] = None,
+                   reviewer: Any = _AUTO, pin_id: Optional[str] = None,
                    event_id: Optional[str] = None) -> ReviewResult:
-        """Add a missed receptacle (positive example). ``pin_id`` defaults to
-        an id derived from ``request_id`` so retries create exactly one pin."""
-        return self._review(ADD, scan_id, pin_id or _derive_id("pin", request_id),
+        """Add a missed receptacle at canonical px ``(x, y)`` (positive example).
+
+        ``pin_id`` defaults to an id derived from ``request_id`` so retries
+        create exactly one pin."""
+        try:
+            point = contract.normalize_point(x, y)
+        except (TypeError, ValueError) as e:
+            raise InvalidArgument(f"invalid point ({x!r}, {y!r})") from e
+        return self._review(ADD_MANUAL, scan_id, pin_id or _derive_id("pin", request_id),
                             request_id=request_id, source=source, reviewer=reviewer,
-                            point=contract.normalize_point(x, y), event_id=event_id)
+                            point=point, event_id=event_id)
 
     def _review(self, action: str, scan_id: str, pin_id: str, *, request_id: str, source: str,
-                reviewer: Optional[str] = None, expected_version: Optional[int] = None,
+                reviewer: Any = _AUTO, expected_version: Optional[int] = None,
                 event_id: Optional[str] = None, point: Optional[tuple] = None) -> ReviewResult:
-        if not request_id:
-            raise ValueError("request_id is required")
-        if not source:
-            raise ValueError("source is required")
-        reviewer = reviewer if reviewer is not None else self.default_reviewer
+        if not request_id or not isinstance(request_id, str):
+            raise InvalidArgument("request_id is required")
+        if source not in SOURCES:
+            raise InvalidArgument(f"source must be one of {sorted(SOURCES)}, got {source!r}")
+        reviewer = self.default_reviewer if reviewer is _AUTO else reviewer
         event_id = event_id or _derive_id("event", request_id)
         request_sha = _sha({"action": action, "scan_id": scan_id, "pin_id": pin_id,
                             "point": list(point) if point else None, "source": source,
@@ -534,15 +664,19 @@ class LearningStore:
                     raise IdempotencyConflict(f"event_id {event_id} already used")
                 scan = db.execute("SELECT * FROM scans WHERE scan_id=?", (scan_id,)).fetchone()
                 if scan is None:
-                    raise NotFound(f"scan {scan_id}")
+                    raise NotFound(f"scan {scan_id} not found")
                 row = db.execute("SELECT * FROM pins WHERE scan_id=? AND pin_id=?",
                                  (scan_id, pin_id)).fetchone()
                 prior = self._pin(row) if row is not None else None
-                self._check_transition(action, prior, expected_version)
+                self._check_transition(action, prior, pin_id, expected_version)
                 now = self._clock()
 
-                if action == ADD:
+                if action == ADD_MANUAL:
                     x, y = point  # type: ignore[misc]
+                    if not (0 <= x < scan["frame_width"] and 0 <= y < scan["frame_height"]):
+                        raise InvalidArgument(
+                            f"point ({x}, {y}) is outside the {scan['frame_width']}x"
+                            f"{scan['frame_height']} canonical raster")
                     db.execute(
                         "INSERT INTO pins VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (scan_id, pin_id, MANUAL, ADDED, None, x, y, None, None, None, None, 1, now, now))
@@ -555,10 +689,7 @@ class LearningStore:
 
                 crop_key = None
                 if _EVENT_LABEL[action] is not None:
-                    spec = contract.pin_crop(scan["document_version_id"], scan["canonical_page_id"],
-                                             scan["page_width"], scan["page_height"],
-                                             pin.x, pin.y, pin.box)
-                    crop_key = self._ensure_crop(db, spec, now)
+                    crop_key = self._ensure_crop(db, self._crop_spec(scan, pin), now)
 
                 db.execute(
                     "INSERT INTO review_events(event_id, request_id, request_sha, scan_id, pin_id, action,"
@@ -577,15 +708,17 @@ class LearningStore:
         return result
 
     @staticmethod
-    def _check_transition(action: str, prior: Optional[Pin], expected_version: Optional[int]) -> None:
-        if action == ADD:
+    def _check_transition(action: str, prior: Optional[Pin], pin_id: str,
+                          expected_version: Optional[int]) -> None:
+        if action == ADD_MANUAL:
             if prior is not None:
-                raise IdempotencyConflict(f"pin {prior.pin_id} already exists")
+                raise IdempotencyConflict(f"pin {pin_id} already exists")
             return
         if prior is None:
-            raise NotFound("pin not found")
+            raise NotFound(f"pin {pin_id} not found")
         if expected_version is not None and prior.version != expected_version:
-            raise StaleVersion(f"pin {prior.pin_id} is at version {prior.version}, expected {expected_version}")
+            raise StaleVersion(f"pin {pin_id} is at version {prior.version}, expected {expected_version}; "
+                               f"reload and retry")
         if action in (APPROVE, REJECT):
             if prior.origin != MACHINE:
                 raise InvalidTransition(f"{action} applies to machine detections; use remove_manual")
@@ -593,9 +726,14 @@ class LearningStore:
             if prior.origin != MANUAL:
                 raise InvalidTransition("remove_manual applies to manual pins; use reject")
             if prior.state == REMOVED:
-                raise InvalidTransition("manual pin already removed")
+                raise InvalidTransition(f"manual pin {pin_id} is already removed")
 
     # ------------------------------------------------------------------ crops
+
+    @staticmethod
+    def _crop_spec(scan: Mapping[str, Any], pin: Pin) -> CropSpec:
+        return contract.pin_crop(scan["document_version"], scan["page_index"],
+                                 scan["frame_width"], scan["frame_height"], pin.x, pin.y, pin.box)
 
     def _ensure_crop(self, db: sqlite3.Connection, spec: CropSpec, now: str) -> str:
         spec_d = spec.to_dict()
@@ -610,7 +748,7 @@ class LearningStore:
     def _materialize(self, crop_key: str) -> str:
         row = self._db.execute("SELECT * FROM crops WHERE crop_key=?", (crop_key,)).fetchone()
         if row is None:
-            raise NotFound(f"crop {crop_key}")
+            raise NotFound(f"crop {crop_key} not found")
         if row["status"] == CROP_WRITTEN and (self.data_dir / row["rel_path"]).exists():
             return CROP_WRITTEN
         if self.crop_renderer is None:
@@ -620,7 +758,7 @@ class LearningStore:
         try:
             data = self.crop_renderer(spec)
             if not isinstance(data, (bytes, bytearray)) or not data:
-                raise LearningStoreError("crop renderer returned no bytes")
+                raise LearningStoreError("crop renderer returned no bytes", "crop_render_failed")
             path.parent.mkdir(parents=True, exist_ok=True)
             fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".png")
             try:
@@ -666,7 +804,7 @@ class LearningStore:
 
     # ----------------------------------------------------------------- export
 
-    def export(self, *, document_version_id: Optional[str] = None,
+    def export(self, *, document_version: Optional[str] = None,
                include_unlabeled: bool = True, out_path: Optional[os.PathLike] = None) -> Dict[str, Any]:
         """Versioned metadata export with crop references.
 
@@ -674,13 +812,14 @@ class LearningStore:
         ``interpret_pin``); raw events are included so they can be
         reinterpreted later without the database.
         """
-        scans = self.list_scans(document_version_id=document_version_id)
+        scans = self.list_scans(document_version=document_version)
         crops: Dict[str, Dict[str, Any]] = {}
         examples: List[Dict[str, Any]] = []
         raw_events: List[Dict[str, Any]] = []
 
         for s in scans:
             state = self.load_scan(s.scan_id)
+            scan_row = self._db.execute("SELECT * FROM scans WHERE scan_id=?", (s.scan_id,)).fetchone()
             dets = {d.detection_id: d for d in state.detections}
             by_pin: Dict[str, List[ReviewEvent]] = {}
             for ev in state.events:
@@ -693,12 +832,17 @@ class LearningStore:
                     continue
                 crop_key = label_event.crop_key if label_event else None
                 if crop_key is None:
-                    crop_key = self._spec_key(s, pin)
-                crops.setdefault(crop_key, self._crop_ref(crop_key, s, pin))
+                    spec = self._crop_spec(scan_row, pin)
+                    crop_key = _sha(spec.to_dict())
+                    crops.setdefault(crop_key, {"status": "not_captured", "path": None,
+                                                "sha256": None, "spec": spec.to_dict()})
+                else:
+                    crops.setdefault(crop_key, self._crop_ref(crop_key))
                 det = dets.get(pin.detection_id) if pin.detection_id else None
                 examples.append({
                     "example_id": f"{s.scan_id}/{pin.pin_id}",
                     "scan_id": s.scan_id,
+                    "canonical_page_id": s.canonical_page_id,
                     "pin_id": pin.pin_id,
                     "origin": pin.origin,
                     "pin_state": pin.state,
@@ -706,10 +850,10 @@ class LearningStore:
                     "label_status": status,
                     "label_event_id": label_event.event_id if label_event else None,
                     "event_ids": [e.event_id for e in evs],
-                    "point": [pin.x, pin.y],
-                    "box": list(pin.box) if pin.box else None,
-                    "detection": ({"score": det.score, "label": det.label, "raw": det.raw}
-                                  if det else None),
+                    "point": _pt(pin.x, pin.y),
+                    "box": pin.box.to_dict() if pin.box else None,
+                    "detection": ({"id": det.detection_id, "score": det.score, "rotation": det.rotation,
+                                   "source": det.source, "raw": det.raw} if det else None),
                     "reviewer": label_event.reviewer if label_event else None,
                     "source": label_event.source if label_event else None,
                     "labeled_at": label_event.created_at if label_event else None,
@@ -721,17 +865,18 @@ class LearningStore:
             "schema_version": contract.EXPORT_SCHEMA_VERSION,
             "store_schema_version": contract.STORE_SCHEMA_VERSION,
             "exported_at": self._clock(),
-            "filter": {"document_version_id": document_version_id,
-                       "include_unlabeled": include_unlabeled},
+            "filter": {"document_version": document_version, "include_unlabeled": include_unlabeled},
             "crop_settings": {
                 "spec_version": contract.CROP_SPEC_VERSION,
-                "manual_crop_size": contract.MANUAL_CROP_SIZE,
-                "detection_crop_margin": contract.DETECTION_CROP_MARGIN,
-                "dpi": contract.CROP_RENDER_DPI,
-                "units": "canonical page units, origin top-left",
+                "units": contract.FRAME_SPACE,
+                "dpi": contract.CANONICAL_DPI,
+                "manual_crop_size_px": contract.MANUAL_CROP_SIZE_PX,
+                "detection_crop_margin_px": contract.DETECTION_CROP_MARGIN_PX,
+                "manual_rule": "x0 = floor(x - size/2 + 0.5), x1 = x0 + size (same for y), clipped",
+                "detection_rule": "floor(x) - margin .. ceil(x + width) + margin (same for y), clipped",
             },
             "label_policy": {
-                "approve": "positive", "reject": "negative", "add": "positive",
+                "approve": "positive", "reject": "negative", "add_manual": "positive",
                 "remove_manual": "none (manual pin withdrawn; not a detector negative)",
                 "unreviewed": "unlabeled", "multiple_reviews": "latest approve/reject wins",
             },
@@ -748,17 +893,8 @@ class LearningStore:
             os.replace(tmp, out)
         return doc
 
-    def _spec_key(self, s: Scan, pin: Pin) -> str:
-        spec = contract.pin_crop(s.document_version_id, s.canonical_page_id,
-                                 s.page_width, s.page_height, pin.x, pin.y, pin.box)
-        return _sha(spec.to_dict())
-
-    def _crop_ref(self, crop_key: str, s: Scan, pin: Pin) -> Dict[str, Any]:
+    def _crop_ref(self, crop_key: str) -> Dict[str, Any]:
         r = self._db.execute("SELECT * FROM crops WHERE crop_key=?", (crop_key,)).fetchone()
-        if r is None:  # unlabeled pins: spec only, never rendered
-            spec = contract.pin_crop(s.document_version_id, s.canonical_page_id,
-                                     s.page_width, s.page_height, pin.x, pin.y, pin.box)
-            return {"status": "not_captured", "path": None, "sha256": None, "spec": spec.to_dict()}
         return {"status": r["status"], "path": r["rel_path"], "sha256": r["sha256"],
                 "spec": json.loads(r["spec"]), "last_error": r["last_error"]}
 
@@ -766,25 +902,32 @@ class LearningStore:
 
     @staticmethod
     def _scan(r: sqlite3.Row) -> Scan:
-        return Scan(scan_id=r["scan_id"], document_version_id=r["document_version_id"],
-                    canonical_page_id=r["canonical_page_id"], page_width=r["page_width"],
-                    page_height=r["page_height"], detector_version=r["detector_version"],
-                    matching_settings=json.loads(r["matching_settings"]), template_id=r["template_id"],
-                    page_index=r["page_index"], metadata=json.loads(r["metadata"]))
+        return Scan(scan_id=r["scan_id"], document_id=r["document_id"],
+                    document_version=r["document_version"], page_index=r["page_index"],
+                    frame_width=r["frame_width"], frame_height=r["frame_height"],
+                    detector_name=r["detector_name"], detector_version=r["detector_version"],
+                    detector_settings=json.loads(r["detector_settings"]),
+                    template_box=json.loads(r["template_box"]) if r["template_box"] else None,
+                    template_sha256=r["template_sha256"], created_at=r["created_at"],
+                    metadata=json.loads(r["metadata"]))
 
     def _scan_dict(self, s: Scan) -> Dict[str, Any]:
-        r = self._db.execute("SELECT matching_settings_sha, created_at FROM scans WHERE scan_id=?",
+        r = self._db.execute("SELECT detector_settings_sha, recorded_at FROM scans WHERE scan_id=?",
                              (s.scan_id,)).fetchone()
-        return {"scan_id": s.scan_id, "document_version_id": s.document_version_id,
-                "canonical_page_id": s.canonical_page_id, "page_index": s.page_index,
-                "page_size": [s.page_width, s.page_height], "template_id": s.template_id,
-                "detector_version": s.detector_version, "matching_settings": s.matching_settings,
-                "matching_settings_sha256": r["matching_settings_sha"], "metadata": s.metadata,
-                "created_at": r["created_at"]}
+        return {"scan_id": s.scan_id,
+                "document": {"document_id": s.document_id, "document_version": s.document_version,
+                             "page_index": s.page_index},
+                "canonical_page_id": s.canonical_page_id,
+                "coordinate_frame": s.coordinate_frame,
+                "template": {"box": s.template_box, "sha256": s.template_sha256},
+                "detector": {"name": s.detector_name, "version": s.detector_version,
+                             "settings": s.detector_settings,
+                             "settings_sha256": r["detector_settings_sha"]},
+                "metadata": s.metadata, "created_at": s.created_at, "recorded_at": r["recorded_at"]}
 
     @staticmethod
     def _pin(r: sqlite3.Row) -> Pin:
-        box = (r["x0"], r["y0"], r["x1"], r["y1"]) if r["x0"] is not None else None
+        box = Box.from_edges((r["x0"], r["y0"], r["x1"], r["y1"])) if r["x0"] is not None else None
         return Pin(pin_id=r["pin_id"], scan_id=r["scan_id"], origin=r["origin"], state=r["state"],
                    x=r["x"], y=r["y"], box=box, detection_id=r["detection_id"], version=r["version"],
                    created_at=r["created_at"], updated_at=r["updated_at"])
@@ -822,7 +965,7 @@ def interpret_pin(pin: Pin, events: Iterable[ReviewEvent]):
         last = labeling[-1]
         status = "reviewed" if len(labeling) == 1 else "re-reviewed"
         return _EVENT_LABEL[last.action], last, status
-    add = next((e for e in evs if e.action == ADD), None)
+    add = next((e for e in evs if e.action == ADD_MANUAL), None)
     if pin.state == REMOVED:
         return None, add, "manual_removed"
     return "positive", add, "manual_added"
