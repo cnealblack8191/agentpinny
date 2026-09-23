@@ -1,0 +1,35 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; font: 14px/1.4 system-ui, sans-serif; color: #111; background: #fff; }
+body { display: flex; }
+#panel { width: 320px; flex: none; overflow-y: auto; padding: 8px 12px; border-right: 1px solid #ccc; }
+#panel h1 { font-size: 18px; margin: 4px 0 8px; }
+#panel h2 { font-size: 14px; margin: 14px 0 6px; }
+#panel select, #panel input[type=file] { max-width: 100%; }
+section { border-top: 1px solid #eee; }
+.banner { background: #fff3cd; border: 1px solid #e0c060; padding: 6px; font-size: 13px; }
+.muted { color: #666; }
+.status { min-height: 1.4em; margin: 4px 0; }
+.status.error, .error { color: #b00020; }
+.status.ok { color: #1b6e20; }
+.pages { display: flex; flex-wrap: wrap; gap: 4px; }
+.pages button[aria-pressed=true] { font-weight: bold; outline: 2px solid #333; }
+#failures .failure { border: 1px solid #b00020; padding: 4px; margin: 4px 0; font-size: 13px; }
+#pin-actions button { margin: 2px 2px 2px 0; }
+#pin-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+#pin-table td, #pin-table th { text-align: left; padding: 2px 4px; border-bottom: 1px solid #eee; }
+#pin-table tr.selected { background: #e6f0ff; }
+#pin-table tr { cursor: pointer; }
+a.disabled { color: #999; pointer-events: none; }
+#main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 6px 8px; border-bottom: 1px solid #ccc; }
+#toolbar .group { display: inline-flex; gap: 6px; align-items: center; }
+#zoom-label { min-width: 4em; text-align: center; display: inline-block; }
+#viewport { position: relative; flex: 1; overflow: hidden; background: #d8d8d8; outline: none; touch-action: none; }
+#viewport:focus-visible { box-shadow: inset 0 0 0 2px #2a6df4; }
+#viewport.mode-pan { cursor: grab; }
+#viewport.mode-pan.dragging { cursor: grabbing; }
+#viewport.mode-template, #viewport.mode-add { cursor: crosshair; }
+#canvas { position: absolute; left: 0; top: 0; }
+.view-message { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); background: #fff; padding: 8px 12px; border: 1px solid #aaa; max-width: 80%; }
+.view-message:empty { display: none; }
+.view-message.error { color: #b00020; border-color: #b00020; }
