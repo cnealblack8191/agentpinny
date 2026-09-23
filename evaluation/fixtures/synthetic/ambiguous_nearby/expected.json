@@ -1,0 +1,23 @@
+{
+  "tolerance_px": 10,
+  "counts": {
+    "tp": 2,
+    "fp": 0,
+    "fn": 0
+  },
+  "precision": 1.0,
+  "recall": 1.0,
+  "matched": [
+    [
+      "d1",
+      "g2"
+    ],
+    [
+      "d2",
+      "g1"
+    ]
+  ],
+  "false_positives": [],
+  "false_negatives": [],
+  "notes": "greedy nearest-first would pair d1-g1 (3 px) and leave d2 and g2 unmatched; maximum cardinality requires d1-g2 (9 px), d2-g1 (8 px)"
+}

@@ -1,0 +1,31 @@
+{
+  "format": "pinny.ground_truth",
+  "format_version": 1,
+  "dataset": {
+    "dataset_id": "REPLACE-e.g.-site-a-sheet-E101-v1",
+    "labeled_by": "REPLACE-name of the person who placed the points",
+    "labeled_at": "REPLACE-YYYY-MM-DD",
+    "verification": {
+      "status": "unverified",
+      "independent_of_detector": true,
+      "method": "REPLACE-e.g. hand-placed on the canonical raster with detector overlay hidden; second reviewer: NAME",
+      "reviewed_by": null
+    },
+    "notes": "REPLACE-what counts as a receptacle on this sheet, anything excluded and why"
+  },
+  "document": {
+    "document_id": "REPLACE",
+    "document_version": "REPLACE-content hash of the exact uploaded file",
+    "page_index": 0
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "width": 0,
+    "height": 0,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "receptacles": [
+    { "id": "r001", "x": 0, "y": 0, "note": "optional" }
+  ]
+}

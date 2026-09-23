@@ -1,0 +1,16 @@
+{
+  "tolerance_px": 10,
+  "counts": {
+    "tp": 0,
+    "fp": 0,
+    "fn": 2
+  },
+  "precision": null,
+  "recall": 0.0,
+  "matched": [],
+  "false_positives": [],
+  "false_negatives": [
+    "g1",
+    "g2"
+  ]
+}

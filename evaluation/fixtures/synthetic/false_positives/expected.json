@@ -1,0 +1,26 @@
+{
+  "tolerance_px": 10,
+  "counts": {
+    "tp": 2,
+    "fp": 2,
+    "fn": 0
+  },
+  "precision": 0.5,
+  "recall": 1.0,
+  "matched": [
+    [
+      "d1",
+      "g1"
+    ],
+    [
+      "d2",
+      "g2"
+    ]
+  ],
+  "false_positives": [
+    "d3",
+    "d4"
+  ],
+  "false_negatives": [],
+  "notes": "d4 is 11 px from g1: just outside tolerance"
+}

@@ -1,0 +1,164 @@
+{
+  "format": "pinny.evaluation_report",
+  "format_version": 1,
+  "evaluator": {
+    "name": "pinny_eval",
+    "version": "0.1.0"
+  },
+  "status": {
+    "real_drawing_accuracy": "Not measured — verified reference pending",
+    "scope": "synthetic_fixture",
+    "note": "Synthetic fixture. These numbers validate the evaluator's behaviour; they say nothing about how the detector performs on real drawings."
+  },
+  "document": {
+    "document_id": "synthetic-doc-001",
+    "document_version": "sha256:synthetic-v1",
+    "page_index": 0
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "width": 1000,
+    "height": 800,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "detector_provenance": {
+    "scan_id": "synthetic-scan-mixed_sample",
+    "detector": {
+      "name": "synthetic-fixture",
+      "version": "n/a",
+      "settings": {
+        "note": "hand-placed points; no detector was run"
+      }
+    },
+    "results_file": "fixtures/synthetic/mixed_sample/detections.json",
+    "results_sha256": "1e375b29b96321cd6bd52ff6fac0d00fe38e2e04f35bcbafcc0c9b25f9cd068b",
+    "provenance": "original_detector_output"
+  },
+  "dataset": {
+    "dataset_id": "synthetic-mixed_sample",
+    "labeled_by": "evaluation agent (synthetic, hand-authored)",
+    "labeled_at": "2026-09-23",
+    "verification": {
+      "status": "synthetic",
+      "independent_of_detector": true,
+      "method": "points authored by hand to exercise the evaluator"
+    },
+    "reference_file": "fixtures/synthetic/mixed_sample/ground_truth.json",
+    "reference_sha256": "247186155dc97a3652b5e866d8af5341b82c680c067601e8ac4c4e67ffca93f3"
+  },
+  "matching": {
+    "tolerance_px": 10.0,
+    "tolerance_units": "canonical raster pixels",
+    "distance": "euclidean",
+    "inclusive": true,
+    "algorithm": "maximum-cardinality one-to-one matching; minimum total distance as tie-breaker"
+  },
+  "counts": {
+    "predictions": 6,
+    "references": 5,
+    "true_positives": 3,
+    "false_positives": 3,
+    "false_negatives": 2
+  },
+  "metrics": {
+    "precision": {
+      "value": 0.5,
+      "numerator": 3,
+      "denominator": 6,
+      "undefined_reason": null
+    },
+    "recall": {
+      "value": 0.6,
+      "numerator": 3,
+      "denominator": 5,
+      "undefined_reason": null
+    }
+  },
+  "matched": [
+    {
+      "prediction": {
+        "id": "d2",
+        "x": 118.0,
+        "y": 149.0
+      },
+      "reference": {
+        "id": "g1",
+        "x": 120.0,
+        "y": 150.0
+      },
+      "distance_px": 2.23606797749979
+    },
+    {
+      "prediction": {
+        "id": "d3",
+        "x": 344.0,
+        "y": 147.0
+      },
+      "reference": {
+        "id": "g2",
+        "x": 340.0,
+        "y": 150.0
+      },
+      "distance_px": 5.0
+    },
+    {
+      "prediction": {
+        "id": "d4",
+        "x": 566.0,
+        "y": 158.0
+      },
+      "reference": {
+        "id": "g3",
+        "x": 560.0,
+        "y": 150.0
+      },
+      "distance_px": 10.0
+    }
+  ],
+  "false_positives": [
+    {
+      "id": "d1",
+      "x": 123.0,
+      "y": 152.0,
+      "reason": "duplicate_or_crowded: every reference within tolerance is matched to another prediction",
+      "references_within_tolerance": [
+        {
+          "id": "g1",
+          "distance_px": 3.605551275463989,
+          "matched_to": "d2"
+        }
+      ]
+    },
+    {
+      "id": "d5",
+      "x": 700.0,
+      "y": 600.0,
+      "reason": "no_reference_within_tolerance",
+      "references_within_tolerance": []
+    },
+    {
+      "id": "d6",
+      "x": 340.0,
+      "y": 431.0,
+      "reason": "no_reference_within_tolerance",
+      "references_within_tolerance": []
+    }
+  ],
+  "false_negatives": [
+    {
+      "id": "g4",
+      "x": 120.0,
+      "y": 420.0,
+      "reason": "no_prediction_within_tolerance",
+      "predictions_within_tolerance": []
+    },
+    {
+      "id": "g5",
+      "x": 340.0,
+      "y": 420.0,
+      "reason": "no_prediction_within_tolerance",
+      "predictions_within_tolerance": []
+    }
+  ]
+}

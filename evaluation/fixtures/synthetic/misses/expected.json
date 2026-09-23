@@ -1,0 +1,26 @@
+{
+  "tolerance_px": 10,
+  "counts": {
+    "tp": 2,
+    "fp": 0,
+    "fn": 2
+  },
+  "precision": 1.0,
+  "recall": 0.5,
+  "matched": [
+    [
+      "d1",
+      "g1"
+    ],
+    [
+      "d2",
+      "g3"
+    ]
+  ],
+  "false_positives": [],
+  "false_negatives": [
+    "g2",
+    "g4"
+  ],
+  "notes": "d2-g3 is exactly 10.0 px (6-8-10): tolerance is inclusive"
+}

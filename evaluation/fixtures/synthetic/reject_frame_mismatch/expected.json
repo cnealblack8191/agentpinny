@@ -1,0 +1,4 @@
+{
+  "tolerance_px": 10,
+  "reject": "raster is 2000x1600"
+}
