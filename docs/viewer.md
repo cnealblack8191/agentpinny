@@ -11,12 +11,8 @@ python -m pinny.viewer [--data-dir DIR] [--port 8765]
 
 Data goes to `$PINNY_DATA_DIR` (default `~/.local/share/pinny`), never the repo.
 
-> **Stub render service.** Until the foundation pushes `pinny.render` /
-> `pinny.pdf`, the viewer uses `pinny/viewer/render_stub.py`. It reads page
-> sizes and `/Rotate` from the PDF but draws a **synthetic** raster (grid,
-> red alignment markers, fake receptacle symbols). The UI shows a yellow
-> banner and every frame carries `"render_service": "stub"`. See
-> "Integration" below for how to switch it.
+Pages are rendered from the uploaded PDF by the foundation's
+`pinny.render.RenderService` (contracts §9) at 200 DPI.
 
 ## Using it
 
@@ -132,17 +128,15 @@ responses. It fails as expected if the image is drawn 1.5 px off.
 
 ## Integration
 
-* **Render service.** `ViewerService(render=...)` takes any object with
-  `register_upload`, `list_documents`, `document_info`, `page_frame`,
-  `render_page`, `render_page_png` and `crop_renderer`. Replace the default
-  in `service.py` (`StubRenderService`) with the foundation's service when it
-  lands, then delete `render_stub.py`. Tests that rely on the stub's markers
-  and symbols will need a fixture page from the foundation's test factory.
-* **Learning store.** Imported from `pinny.learning`, falling back to
-  `pinny_learning` until the move. All store calls run on one worker thread,
+* **Render service.** `ViewerService(render=...)` defaults to
+  `pinny.render.RenderService(data_dir)`. It uses `ingest_pdf`, `get_version`,
+  `list_versions`, `page_frame`, `render_page`, `render_page_png` and
+  `crop_renderer`. Tests use real vector PDFs from `tests/factory.py`, with
+  receptacle glyphs at known positions (`tests/viewer/pdfgen.py`).
+* **Learning store.** Imported from `pinny.learning`. All store calls run on one worker thread,
   because the store's SQLite connection is thread-bound.
-* **Errors.** `ViewerError` subclasses `pinny.errors.PinnyError` once that
-  exists.
+* **Errors.** `ViewerError` subclasses `pinny.errors.PinnyError`. Other modules'
+  `PinnyError`s reach the client with their own `code` and `http_status`.
 
 ## Contract gaps (for the coordinator)
 

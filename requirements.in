@@ -1,5 +1,5 @@
-numpy==2.5.3
-opencv-python-headless==4.13.0.92
+numpy==2.4.6
+opencv-python-headless==5.0.0.93
 pypdfium2==5.13.0
 pytest==9.1.1
 pypdf==6.19.0

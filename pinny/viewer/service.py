@@ -3,10 +3,9 @@ report export. The HTTP layer (``server.py``) is a thin wrapper around it.
 
 Collaborators (contracts §§4, 5, 9):
 
-* a render service with ``register_upload``, ``list_documents``,
-  ``document_info``, ``page_frame``, ``render_page``, ``render_page_png`` and
-  ``crop_renderer``. Until the foundation pushes the real one, this is
-  :class:`~pinny.viewer.render_stub.StubRenderService`.
+* the render service, :class:`pinny.render.RenderService` (contracts §9):
+  ``ingest_pdf``, ``get_version``, ``list_versions``, ``page_frame``,
+  ``render_page``, ``render_page_png`` and ``crop_renderer``.
 * the detector (``pinny.detection``).
 * the learning store, which owns scans, pins and review events.
 """
@@ -23,10 +22,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-try:  # the learning store moves into pinny/ (contracts §8)
-    from pinny.learning import store as _store  # type: ignore
-except ImportError:  # pragma: no cover - until the move lands
-    from pinny_learning import store as _store  # type: ignore
+from pinny.learning import store as _store
+from pinny.render import RenderService
 
 from pinny.detection import (BoundingBox, DetectionError, OpenCVTemplateDetector,
                              ScanSettings, Template)
@@ -69,10 +66,7 @@ class ViewerService:
     def __init__(self, data_dir: Optional[os.PathLike] = None, *, render=None,
                  detector=None) -> None:
         self.data_dir = Path(data_dir) if data_dir is not None else _store.default_data_dir()
-        if render is None:
-            from .render_stub import StubRenderService
-            render = StubRenderService(self.data_dir)
-        self.render = render
+        self.render = render if render is not None else RenderService(self.data_dir)
         self.detector = detector or OpenCVTemplateDetector()
         self.detector_version = _git_version()
         # The learning store holds one SQLite connection, which must stay on
@@ -80,7 +74,7 @@ class ViewerService:
         # worker; detection runs on the caller's thread.
         self._exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pinny-store")
         self.store = self._db(_store.LearningStore, self.data_dir,
-                              crop_renderer=render.crop_renderer,
+                              crop_renderer=self.render.crop_renderer,
                               default_reviewer=_store.local_reviewer_identity())
 
     def _db(self, fn, *args, **kwargs):
@@ -92,10 +86,19 @@ class ViewerService:
 
     # -------------------------------------------------------------- documents
     def upload(self, data: bytes, filename: str, document_id: Optional[str] = None) -> dict:
-        return self.render.register_upload(data, filename, document_id=document_id)
+        return self._doc(self.render.ingest_pdf(data, original_filename=filename,
+                                                document_id=document_id))
 
     def documents(self) -> List[dict]:
-        return self.render.list_documents()
+        return [self._doc(v) for v in self.render.list_versions()]
+
+    def document_info(self, document_version: str) -> dict:
+        return self._doc(self.render.get_version(document_version))
+
+    def _doc(self, v) -> dict:
+        return {"document_id": v.document_id, "document_version": v.document_version,
+                "filename": v.original_filename, "page_count": v.page_count,
+                "render_service": getattr(self.render, "render_service", "foundation")}
 
     def frame(self, document_version: str, page_index: int) -> dict:
         frame = dict(self.render.page_frame(document_version, page_index))
@@ -109,10 +112,10 @@ class ViewerService:
         """Scans of one page, oldest first, with review counts."""
         page_id = f"{document_version}#p{page_index}"
         out = []
-        for s in self._db(self.store.list_scans, document_version_id=document_version,
-                          canonical_page_id=page_id):
+        for s in self._db(self.store.list_scans, document_version=document_version,
+                          page_index=page_index):
             st = self._db(self.store.load_scan, s.scan_id)
-            out.append({"scan_id": s.scan_id, "created_at": st.created_at,
+            out.append({"scan_id": s.scan_id, "created_at": s.created_at,
                         "template": s.metadata.get("scan_result", {}).get("template"),
                         "counts": _counts(st.pins)})
         return out
@@ -132,7 +135,7 @@ class ViewerService:
         except ViewerError:
             pass
 
-        info = self.render.document_info(document_version)
+        info = self.document_info(document_version)
         frame = self.render.page_frame(document_version, page_index)
         box = _template_box(template_box, frame)
         settings = ScanSettings() if threshold is None else ScanSettings(threshold=float(threshold))
@@ -168,20 +171,9 @@ class ViewerService:
             "warnings": list(result.warnings),
             "detections": detections,
         }
-        scan = _store.Scan(
-            scan_id=scan_id, document_version_id=document_version,
-            canonical_page_id=f"{document_version}#p{page_index}",
-            page_width=frame["width"], page_height=frame["height"],
-            detector_version=self.detector_version,
-            matching_settings=_settings_dict(settings),
-            template_id=scan_result["template"]["sha256"], page_index=page_index,
-            metadata={"scan_result": scan_result, "request_id": request_id})
-        dets = [_store.Detection(
-            detection_id=d["id"],
-            box=(d["box"]["x"], d["box"]["y"], d["box"]["x"] + d["box"]["width"],
-                 d["box"]["y"] + d["box"]["height"]),
-            score=d["score"], x=d["x"], y=d["y"],
-            raw={"rotation": d["rotation"], "box": d["box"]}) for d in detections]
+        scan, dets = _store.Scan.from_scan_result(scan_result)
+        scan = dataclasses.replace(scan, metadata={"scan_result": scan_result,
+                                                   "request_id": request_id})
         self._db(self.store.record_scan, scan, dets)
         return self.scan_state(scan_id)
 
@@ -192,7 +184,7 @@ class ViewerService:
             raise ViewerError("unknown_scan", "That scan does not exist.", 404) from None
         result = st.scan.metadata.get("scan_result", {})
         scores = {d.detection_id: d.score for d in st.detections}
-        rotations = {d.detection_id: d.raw.get("rotation") for d in st.detections}
+        rotations = {d.detection_id: d.rotation for d in st.detections}
         return {
             "scan_id": scan_id,
             "document": result.get("document"),
@@ -268,7 +260,7 @@ class ViewerService:
             "detections": [dict(d, confidence=d["score"]) for d in result["detections"]],
         }
         scores = {d.detection_id: d.score for d in st.detections}
-        rotations = {d.detection_id: d.raw.get("rotation") for d in st.detections}
+        rotations = {d.detection_id: d.rotation for d in st.detections}
         pins = [_pin_dict(p, scores, rotations) for p in st.pins]
         corrected = {
             "format": "pinny.corrected_pins",
@@ -337,10 +329,7 @@ def _point(body: dict, frame: dict):
 
 
 def _pin_dict(p, scores: dict, rotations: dict) -> dict:
-    box = None
-    if p.box is not None:
-        x0, y0, x1, y1 = p.box
-        box = {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}
+    box = p.box.to_dict() if p.box is not None else None
     return {"pin_id": p.pin_id, "origin": p.origin, "state": p.state, "x": p.x, "y": p.y,
             "box": box, "detection_id": p.detection_id,
             "score": scores.get(p.detection_id) if p.detection_id else None,

@@ -1,4 +1,4 @@
-"""Viewer service and HTTP API tests (stub render service).
+"""Viewer service and HTTP API tests (real render service, synthetic PDFs).
 
 Run: python -m pytest tests/viewer
 """
@@ -18,11 +18,11 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
-from pdfgen import make_pdf  # noqa: E402
+from pdfgen import make_pdf, receptacle_centres_px  # noqa: E402
+
+from pinny.errors import PinnyError  # noqa: E402
 
 from pinny.viewer import ViewerError, ViewerService  # noqa: E402
-from pinny.viewer.render_stub import (SYMBOL_SIZE, stub_alignment_points,  # noqa: E402
-                                      stub_symbol_centres)
 from pinny.viewer.server import make_server  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
@@ -41,10 +41,9 @@ def svc(tmp_path, monkeypatch):
 
 
 def _template_for(doc, frame, page=0):
-    x, y, _ = next(t for t in stub_symbol_centres(doc["document_version"], page, frame["width"],
-                                                  frame["height"]) if t[2] == 0)
-    h = SYMBOL_SIZE // 2 + 2
-    return {"x": x - h, "y": y - h, "width": 2 * h, "height": 2 * h}
+    x, y = receptacle_centres_px()[0]
+    h = 22  # glyph radius is 6 pt = ~16.7 px; leave a little margin
+    return {"x": round(x) - h, "y": round(y) - h, "width": 2 * h, "height": 2 * h}
 
 
 def _scan(svc, doc, page=0, **kw):
@@ -59,7 +58,7 @@ def test_upload_versions_and_frames(svc):
     pdf = make_pdf([(612, 792, 0), (612, 792, 90), (1728, 1152, 0)])
     doc = svc.upload(pdf, "plan.pdf")
     assert doc["document_version"] == "sha256:" + hashlib.sha256(pdf).hexdigest()
-    assert doc["page_count"] == 3 and doc["render_service"] == "stub"
+    assert doc["page_count"] == 3 and doc["render_service"] == "foundation"
     again = svc.upload(pdf, "plan.pdf")
     assert again["document_id"] == doc["document_id"]  # same bytes, same identity
     f0, f1, f2 = (svc.frame(doc["document_version"], i) for i in range(3))
@@ -71,28 +70,29 @@ def test_upload_versions_and_frames(svc):
     assert raster.shape == (1700, 2200, 3) and raster.dtype.name == "uint8"
 
 
-@pytest.mark.parametrize("data,code", [(b"", "empty_upload"), (b"hello", "not_a_pdf"),
-                                       (b"%PDF-1.4\n%%EOF", "no_pages")])
+@pytest.mark.parametrize("data,code", [(b"", "empty_upload"), (b"hello", "pdf_unreadable"),
+                                       (b"%PDF-1.4\n%%EOF", "pdf_unreadable")])
 def test_upload_errors(svc, data, code):
-    with pytest.raises(ViewerError) as e:
+    with pytest.raises(PinnyError) as e:
         svc.upload(data, "x.pdf")
     assert e.value.code == code
 
 
 def test_unknown_page(svc):
     doc = svc.upload(make_pdf(), "a.pdf")
-    with pytest.raises(ViewerError) as e:
+    with pytest.raises(PinnyError) as e:
         svc.frame(doc["document_version"], 5)
-    assert e.value.code == "unknown_page" and e.value.status == 404
+    assert e.value.code == "page_not_found" and e.value.http_status == 404
 
 
 # ------------------------------------------------------------------ scan
-def test_scan_finds_stub_symbols_at_exact_centres(svc):
+def test_scan_finds_every_receptacle_at_its_centre(svc):
     doc = svc.upload(make_pdf(), "a.pdf")
     st = _scan(svc, doc)
-    want = {(x, y) for x, y, _ in stub_symbol_centres(doc["document_version"], 0, 1700, 2200)}
-    got = {(p["x"], p["y"]) for p in st["pins"]}
-    assert got == want
+    want = receptacle_centres_px()
+    assert len(st["pins"]) == len(want)
+    for wx, wy in want:  # within 1.5 canonical px of where the PDF drew it
+        assert min(abs(p["x"] - wx) + abs(p["y"] - wy) for p in st["pins"]) <= 1.5
     assert all(p["state"] == "unreviewed" and p["origin"] == "machine" for p in st["pins"])
     assert all(0.8 <= p["score"] <= 1.0 for p in st["pins"])
     assert st["coordinate_frame"]["width"] == 1700
@@ -120,10 +120,10 @@ def test_scan_empty_result_and_bad_template(svc):
         svc.scan(document_version=v, page_index=0, request_id=rid(),
                  template_box={"x": 1690, "y": 10, "width": 30, "height": 30})
     assert e.value.code == "invalid_template_box"
-    # A template of the banner text matches nothing else at a high threshold.
+    # A high threshold keeps only near-exact matches.
     st = svc.scan(document_version=v, page_index=0, request_id=rid(), threshold=0.99,
-                  template_box={"x": 60, "y": 90, "width": 300, "height": 30})
-    assert all(p["box"]["x"] == 60 for p in st["pins"])  # at most itself
+                  template_box=_template_for(doc, svc.frame(v, 0)))
+    assert st["pins"] and all(p["score"] >= 0.99 for p in st["pins"])
 
 
 # ---------------------------------------------------------------- review
@@ -239,7 +239,7 @@ def test_report_keeps_original_and_corrected_apart_and_original_unchanged(svc, t
     final = {(p["x"], p["y"], p["state"]) for p in corr["final_pins"]}
     assert (100.5, 200.25, "added") in final
     assert len(corr["final_pins"]) == 2
-    assert [e["action"] for e in rep["review_events"]] == ["reject", "approve", "add"]
+    assert [e["action"] for e in rep["review_events"]] == ["reject", "approve", "add_manual"]
 
     # The original part is accepted by the evaluator's `pending` command.
     det_path = tmp_path / "detections.json"
@@ -297,15 +297,15 @@ def test_http_flow(server):
     v = urllib.request.quote(doc["document_version"], safe="")
     code, _, raw = _req("GET", f"{server}/api/documents/{v}/pages/0/frame")
     frame = json.loads(raw)
-    assert frame["width"] == 1700 and frame["render_service"] == "stub"
+    assert frame["width"] == 1700 and frame["render_service"] == "foundation"
     code, headers, png = _req("GET", f"{server}/api/documents/{v}/pages/0/raster.png")
     assert code == 200 and headers["Content-Type"] == "image/png"
     import cv2
     import numpy as np
     img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
     assert img.shape[:2] == (2200, 1700)
-    for x, y in stub_alignment_points(1700, 2200):  # red marker pixels around the point
-        assert tuple(img[y, x][::-1]) == (255, 0, 0)
+    x, y = receptacle_centres_px()[0]  # the glyph's circle is drawn in black
+    assert img[round(y) - 17:round(y) + 18, round(x) - 17:round(x) + 18].min() < 64
     code, _, raw = _req("POST", server + "/api/scans", {
         "document_version": doc["document_version"], "page_index": 0,
         "template_box": _template_for(doc, frame), "request_id": rid()})
@@ -327,7 +327,7 @@ def test_http_flow(server):
 
 def test_http_errors_and_static(server):
     code, _, raw = _req("POST", server + "/api/documents?filename=x.txt", b"not a pdf")
-    assert code == 400 and json.loads(raw)["error"]["code"] == "not_a_pdf"
+    assert code == 422 and json.loads(raw)["error"]["code"] == "pdf_unreadable"
     code, _, raw = _req("GET", server + "/api/scans/nope")
     assert code == 404 and json.loads(raw)["error"]["message"]
     code, _, raw = _req("POST", server + "/api/scans", b"{bad", {"Content-Type": "application/json"})

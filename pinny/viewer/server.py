@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from pinny.render.service import DEFAULT_MAX_UPLOAD_BYTES
+
 from .errors import ViewerError
 from .service import ViewerService
 
@@ -87,7 +89,8 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as exc:  # noqa: BLE001
                     code = getattr(exc, "code", None)
                     if isinstance(code, str):  # a PinnyError from another module
-                        return self._error(ViewerError(code, str(exc)))
+                        return self._error(ViewerError(code, str(exc),
+                                                       getattr(exc, "http_status", 400)))
                     traceback.print_exc()
                     return self._error(ViewerError("internal_error",
                                                    "Unexpected server error; see the server log.",
@@ -150,8 +153,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ViewerError("bad_request", "Invalid Content-Length.") from None
         if limit is not None and n > limit:
             raise ViewerError("body_too_large", "Request body is too large.", 413)
-        from .render_stub import MAX_UPLOAD_BYTES
-        if n > MAX_UPLOAD_BYTES:
+        if n > DEFAULT_MAX_UPLOAD_BYTES:
             raise ViewerError("upload_too_large", "The file is too large.", 413)
         return self.rfile.read(n) if n > 0 else b""
 

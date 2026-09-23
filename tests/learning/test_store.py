@@ -117,7 +117,7 @@ class ReviewActionTests(StoreTestBase):
         with self.assertRaises(InvalidArgument):
             self.store.approve("scan-1", "det-1", request_id="r4", source="browser")
         with self.assertRaises(InvalidArgument):
-            self.store.add_manual("scan-1", W, 10, request_id="r5", source="viewer")
+            self.store.add_manual("scan-1", W + 0.5, 10, request_id="r5", source="viewer")
         with self.assertRaises(NotFound):
             self.store.approve("scan-1", "nope", request_id="r6", source="viewer")
         with self.assertRaises(NotFound):
@@ -125,6 +125,9 @@ class ReviewActionTests(StoreTestBase):
         # Failed requests leave no trace and their ids stay usable.
         self.assertEqual(len(self.store.load_scan("scan-1").events), 1)
         self.store.approve("scan-1", "det-1", request_id="r4", source="viewer")
+
+        edge = self.store.add_manual("scan-1", W, 10, request_id="r5b", source="viewer")
+        self.assertEqual(edge.pin.x, W)  # the closed page edge is on the page (contracts §3)
 
     def test_errors_carry_stable_codes(self):
         with self.assertRaises(NotFound) as cm:

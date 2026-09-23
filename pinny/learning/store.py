@@ -673,7 +673,7 @@ class LearningStore:
 
                 if action == ADD_MANUAL:
                     x, y = point  # type: ignore[misc]
-                    if not (0 <= x < scan["frame_width"] and 0 <= y < scan["frame_height"]):
+                    if not (0 <= x <= scan["frame_width"] and 0 <= y <= scan["frame_height"]):
                         raise InvalidArgument(
                             f"point ({x}, {y}) is outside the {scan['frame_width']}x"
                             f"{scan['frame_height']} canonical raster")

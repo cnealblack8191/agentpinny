@@ -51,7 +51,9 @@ The frame descriptor used in files:
 
 ## 3. Geometry
 
-* **Point / pin**: `x`, `y` as floats in canonical px. Pins are points.
+* **Point / pin**: `x`, `y` as floats in canonical px. Pins are continuous
+  points and are valid anywhere in the closed range `[0, width] × [0, height]`,
+  edges included.
 * **Box**: `{x, y, width, height}`. These are integers for detector output
   and may be floats elsewhere. The right edge is exclusive (`x2 = x + width`).
   This matches `pinny.detection.BoundingBox`. Modules that need

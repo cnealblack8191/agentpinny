@@ -253,6 +253,11 @@ class RenderService:
                 self._cache.popitem(last=False)
         return rgb
 
+    def render_page_png(self, document_version: str, page_index: int) -> bytes:
+        """PNG bytes of the canonical raster (for the browser). Uses the on-disk cache."""
+        self.render_page(document_version, page_index)  # validates and writes the cache
+        return (self._version_dir(document_version) / "pages" / f"p{page_index}.png").read_bytes()
+
     def crop_renderer(self, spec: Any) -> bytes:
         """PNG (RGB) of a canonical-pixel crop (contracts v1 section 6).
 

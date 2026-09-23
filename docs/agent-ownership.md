@@ -7,12 +7,12 @@ coordinator-approved PR.
 
 | Area | Paths | Session / branch | Status (2026-09-23) |
 |---|---|---|---|
-| Coordination, contracts, integration | `docs/contracts.md`, `docs/agent-ownership.md`, merges | Chat response coordination / `claude/beautiful-johnson-qylpd0` | contracts v1 published |
-| Foundation: packaging, deps, errors, PDF upload/versioning, canonical render, crop renderer, test factory | `pyproject.toml`, `pinny/__init__.py`, `pinny/errors.py`, `pinny/pdf/` or `pinny/render/`, `tests/conftest.py`, `tests/factory*` | Pinny Phase 1 foundation / `claude/fervent-noether-8022eq` | in progress |
-| Detection | `pinny/detection/`, `tests/detection/`, `docs/detection.md` | Pinny detection module / `claude/epic-einstein-qtx4ui` | aligned to contracts v1 (55 tests) |
-| Learning store | `pinny/learning/` (was `pinny_learning/`), `tests/learning/`, `docs/learning-store.md` | Pinny local persistence / `claude/great-cerf-hbzlrf` | built; aligning to contracts |
-| Viewer and pin interface | `pinny/viewer/`, `web/` (if a front end), `tests/viewer/`, `docs/viewer.md` | Pinny viewer and pin interface / `claude/youthful-maxwell-gqfdiu` | unblocked by this doc |
-| Evaluation | `evaluation/` | Pinny evaluation CLI / `claude/blissful-clarke-l1k2ns` | done; `adapt-scan` adapter added |
+| Coordination, contracts, integration | `docs/contracts.md`, `docs/agent-ownership.md`, merges | Chat response coordination / `claude/beautiful-johnson-qylpd0` | all branches integrated; 125 tests pass |
+| Foundation: packaging, deps, errors, PDF upload/versioning, canonical render, crop renderer, test factory | `pyproject.toml`, `pinny/__init__.py`, `pinny/errors.py`, `pinny/pdf/` or `pinny/render/`, `tests/conftest.py`, `tests/factory*` | Pinny Phase 1 foundation / `claude/fervent-noether-8022eq` | done; merged |
+| Detection | `pinny/detection/`, `tests/detection/`, `docs/detection.md` | Pinny detection module / `claude/epic-einstein-qtx4ui` | done; merged |
+| Learning store | `pinny/learning/` (was `pinny_learning/`), `tests/learning/`, `docs/learning-store.md` | Pinny local persistence / `claude/great-cerf-hbzlrf` | done; merged |
+| Viewer and pin interface | `pinny/viewer/`, `web/` (if a front end), `tests/viewer/`, `docs/viewer.md` | Pinny viewer and pin interface / `claude/youthful-maxwell-gqfdiu` | done; on the real render service |
+| Evaluation | `evaluation/` | Pinny evaluation CLI / `claude/blissful-clarke-l1k2ns` | done; merged |
 
 ## Integration order
 
