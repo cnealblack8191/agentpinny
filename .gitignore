@@ -7,3 +7,17 @@ pinny-data/
 crops/
 exports/
 __pycache__/
+# Union of every module's entries (docs/agent-ownership.md). Never commit
+# drawings, databases, crops, rasters or exports.
+*.pdf
+data/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+build/
+dist/
+node_modules/
+.next/
+.env*
