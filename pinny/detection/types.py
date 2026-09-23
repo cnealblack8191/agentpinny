@@ -159,6 +159,24 @@ class ScanSettings:
     #: Checked between stages; a single OpenCV call is not interrupted.
     max_runtime_seconds: float = 60.0
 
+    def to_dict(self) -> dict:
+        """JSON-serialisable form, recorded as ``detector.settings`` in a scan
+        result (docs/contracts.md section 4)."""
+        return {
+            "threshold": float(self.threshold),
+            "rotations": [int(r) for r in self.rotations],
+            "search_region": None if self.search_region is None else self.search_region.to_dict(),
+            "nms_iou_threshold": float(self.nms_iou_threshold),
+            "duplicate_center_ratio": float(self.duplicate_center_ratio),
+            "max_candidates": self.max_candidates,
+            "max_candidates_per_rotation": self.max_candidates_per_rotation,
+            "max_page_pixels": self.max_page_pixels,
+            "min_template_side": self.min_template_side,
+            "max_template_side": self.max_template_side,
+            "min_template_stddev": float(self.min_template_stddev),
+            "max_runtime_seconds": float(self.max_runtime_seconds),
+        }
+
     def validate(self) -> None:
         def fail(message: str) -> None:
             raise DetectionError("invalid_settings", message)

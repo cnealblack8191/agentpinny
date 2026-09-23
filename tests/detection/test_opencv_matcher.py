@@ -276,7 +276,30 @@ def test_result_serialises(detector, glyph):
     assert d["candidates"][0]["box"] == {"x": 10, "y": 20, "width": GLYPH_W, "height": GLYPH_H}
     assert d["candidates"][0]["center"] == {"x": 22.0, "y": 38.0}
     assert d["rotations_searched"] == [0, 90, 180, 270]
-    assert d["detector"] == OpenCVTemplateDetector.name
+    assert d["detector"] == OpenCVTemplateDetector.name == "opencv-template"
+
+
+def test_settings_serialise_for_scan_record():
+    """docs/contracts.md section 4 stores ScanSettings as a dict."""
+    import json
+
+    settings = ScanSettings(threshold=0.9, rotations=(0, 180), search_region=BoundingBox(1, 2, 30, 40))
+    d = settings.to_dict()
+    assert json.loads(json.dumps(d)) == d
+    assert d["threshold"] == 0.9 and d["rotations"] == [0, 180]
+    assert d["search_region"] == {"x": 1, "y": 2, "width": 30, "height": 40}
+    assert ScanSettings().to_dict()["search_region"] is None
+
+
+def test_contract_rgb_raster(detector, glyph):
+    """The app passes uint8 RGB (H, W, 3) canonical rasters (contracts section 2)."""
+    page = np.full((300, 400, 3), 255, dtype=np.uint8)
+    rgb_glyph = cv2.cvtColor(rotate(glyph, 90), cv2.COLOR_GRAY2RGB)
+    rgb_glyph[rgb_glyph[:, :, 0] == 0] = (200, 0, 0)  # red line work
+    page[50 : 50 + GLYPH_W, 60 : 60 + GLYPH_H] = rgb_glyph
+    template = Template.from_page_crop(page, BoundingBox(60, 50, GLYPH_H, GLYPH_W))
+    result = detector.detect(page, template)
+    assert boxes_of(result) == [(60, 50, GLYPH_H, GLYPH_W, 0)]
 
 
 # --- invalid input -------------------------------------------------------

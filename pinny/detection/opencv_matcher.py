@@ -48,7 +48,7 @@ class OpenCVTemplateDetector:
     calibrated probabilities or comparable across templates.
     """
 
-    name = "opencv-template-ccoeff-normed"
+    name = "opencv-template"
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
