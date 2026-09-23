@@ -22,7 +22,7 @@ a coordinator-approved PR.
 | `page_index` | int | 0-based page index within that version. |
 | `canonical_page_id` | str | `f"{document_version}#p{page_index}"`. Derived, never assigned. |
 
-The learning store's `document_version_id` field **is** `document_version`.
+The learning store uses the field name `document_version` (renamed from its provisional `document_version_id`).
 
 ## 2. Canonical page raster (the coordinate frame)
 
@@ -98,7 +98,7 @@ A scan is immutable once written. Corrections never modify it.
   concurrent edits.
 * `reviewer` is `$PINNY_REVIEWER`, then the OS user, then `null`. This is a
   single-user local app for v1 with no auth. It uses
-  `pinny_learning.store.local_reviewer_identity()`.
+  `pinny.learning.store.local_reviewer_identity()`.
 * `source` records which surface issued the action (`"viewer"`, `"cli"`,
   `"test"`).
 * A corrected pin set is **never** a detections file. The evaluator
@@ -141,9 +141,13 @@ tests/<module>/        per-module tests
 docs/                  contracts.md, agent-ownership.md, per-module docs
 ```
 
+Tests: **pytest** is the single runner (`python -m pytest`). Every `tests/<module>/`
+directory has an `__init__.py`. unittest-style tests are fine; pytest runs them.
+`evaluation/` keeps its own stdlib `unittest` suite.
+
 Dependencies are declared once in the root `pyproject.toml`, which the
 foundation owns. Other sessions ask the coordinator for additions.
-Detection needs `numpy` and `opencv-python-headless`.
+Detection needs `numpy` and `opencv-python-headless`; dev deps include `pytest`.
 
 ## 9. Render service interface (*foundation* fills in)
 
