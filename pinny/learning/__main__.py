@@ -1,4 +1,4 @@
-"""Local maintenance: ``python -m pinny_learning {export,status} [--data-dir DIR]``.
+"""Local maintenance: ``python -m pinny.learning {export,status} [--data-dir DIR]``.
 
 Crop regeneration needs a renderer, so it is driven by the integrating app
 via ``LearningStore(crop_renderer=...).process_pending_crops()``.
@@ -13,11 +13,11 @@ from .store import LearningStore, default_data_dir
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="pinny_learning")
+    p = argparse.ArgumentParser(prog="pinny.learning")
     p.add_argument("--data-dir", default=None, help="default: $PINNY_DATA_DIR or ~/.local/share/pinny")
     sub = p.add_subparsers(dest="cmd", required=True)
     e = sub.add_parser("export", help="write versioned metadata export (JSON)")
-    e.add_argument("--document-version-id")
+    e.add_argument("--document-version")
     e.add_argument("--labeled-only", action="store_true")
     e.add_argument("--out", help="default: <data-dir>/exports/export-<utc>.json")
     sub.add_parser("status", help="print crop status counts")
@@ -25,8 +25,8 @@ def main(argv=None) -> int:
 
     with LearningStore(a.data_dir or default_data_dir()) as store:
         if a.cmd == "export":
-            out = a.out or store.exports_dir / f"export-{dt.datetime.utcnow():%Y%m%dT%H%M%SZ}.json"
-            doc = store.export(document_version_id=a.document_version_id,
+            out = a.out or store.exports_dir / f"export-{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}.json"
+            doc = store.export(document_version=a.document_version,
                                include_unlabeled=not a.labeled_only, out_path=out)
             print(f"{out}: {len(doc['examples'])} examples, {len(doc['events'])} events")
         else:
