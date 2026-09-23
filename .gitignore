@@ -1,0 +1,9 @@
+# Pinny learning store: never commit drawings, databases or captured examples.
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+pinny-data/
+crops/
+exports/
+__pycache__/
