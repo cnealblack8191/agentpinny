@@ -3,6 +3,9 @@
 Conventional OpenCV template matching: find every instance of one receptacle
 symbol type on one canonical page raster.
 
+Shared conventions (page raster, box format, rotation, errors, scan-result
+record) are defined in `docs/contracts.md` and take precedence over this file.
+
 ## Interface
 
 ```python
@@ -20,10 +23,16 @@ result.to_dict()                                  # JSON-serialisable
   `detect(page, template, settings) -> DetectionResult`. Callers should
   depend on it and the types in `types.py`, not on OpenCV, so another
   implementation can replace `OpenCVTemplateDetector` later.
-* `page`: `uint8` numpy array, `(H, W)` or `(H, W, 1|3|4)`, assumed RGB(A).
+* `page`: the canonical raster (contracts §2), in practice `uint8` RGB
+  `(H, W, 3)` at 200 DPI. `(H, W)` and `(H, W, 1|4)` are also accepted.
 * `template`: a `Template` or a bare array with the page's channel count.
-* Invalid input raises `DetectionError` with a stable `.code` and an
-  actionable message. `DetectionTimeout` is a subclass (`code="timeout"`).
+* Invalid input raises `DetectionError(code, message)` with a stable
+  snake_case `.code` and an actionable message. `DetectionTimeout` is a
+  subclass (`code="timeout"`). `DetectionError` will subclass
+  `pinny.errors.PinnyError` once the foundation adds it (contracts §7).
+* Scan records (contracts §4) take `detector.name` (`"opencv-template"`),
+  `ScanSettings.to_dict()` for `detector.settings`, and each candidate's
+  `score`, `rotation`, `box.to_dict()` and `center` (as the pin's `x`, `y`).
 
 ## Coordinates
 
