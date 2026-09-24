@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pinny"
+version = "0.0.1"
+description = "Find receptacle symbols on electrical drawings and review the pins."
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "opencv-python-headless",
+]
+
+[project.optional-dependencies]
+# Temporary PDF renderer for scripts/smoke_test.py until the foundation's
+# render service lands (docs/contracts.md section 9).
+smoke = ["pymupdf"]
+dev = ["pytest", "pymupdf"]
+
+[tool.setuptools.packages.find]
+include = ["pinny*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "evaluation/tests"]
