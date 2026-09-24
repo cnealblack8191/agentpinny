@@ -145,6 +145,13 @@ also records the SHA-256 of the results file. If the file carries the scan's
 records those too. Other fields, such as `box`, `score` and `rotation` on each
 detection, are kept in the file but not used for scoring.
 
+Phase 2 scan modes (`docs/phase2-contracts.md` P7) are accepted as they are.
+A top-level `mode` (`template`, `template+verifier`, `model`) is recorded in
+the report's `detector_provenance`. Per-detection extras such as
+`template_score` and `verifier_score` are ignored. Candidates listed under
+`suppressed` (the ones a verifier dropped) are **not** scored: they are not
+this scan's output. Only their count is recorded, as `suppressed_count`.
+
 ### From a scan result (contracts §4)
 
 ```sh
