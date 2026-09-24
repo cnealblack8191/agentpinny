@@ -273,3 +273,9 @@ def test_generous_deadline_never_fires(monkeypatch):
     slow = OpenCVTemplateDetector(clock=ticking_clock(0.001))
     result = slow.detect(glyph_page(), render_glyph(), ScanSettings(max_runtime_seconds=60))
     assert [(c.box.x, c.box.y, c.rotation) for c in result.candidates] == [(50, 60, 0)]
+
+
+def test_default_page_limit_covers_large_sheets():
+    # Arch E (48x36 in) and a 60x42 in oversize sheet at 200 DPI.
+    assert ScanSettings().max_page_pixels >= 9600 * 7200
+    assert ScanSettings().max_page_pixels >= 12000 * 8400

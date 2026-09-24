@@ -182,7 +182,7 @@ duplicates.
 | `coarse_slack` | 0.15 | Coarse pass keeps peaks ≥ `threshold − coarse_slack` |
 | `max_coarse_peaks` | 5000 | More coarse peaks than this → full-resolution fallback |
 | `num_threads` | 0 | Strip workers; 0 = `min(4, cpus)`, 1 = no threads |
-| `max_page_pixels` | 60,000,000 | Rejects oversized search areas before allocation |
+| `max_page_pixels` | 120,000,000 | Rejects oversized search areas before allocation. Covers Arch E (48×36 in = 9600×7200 px) and oversize sheets up to about 60×42 in at 200 DPI; a 60×42 in page measured ~650 MB peak RSS including the page itself |
 | `min_template_side` / `max_template_side` | 8 / 1024 px | Rejects tiny or oversized templates |
 | `min_template_stddev` | 4.0 (0–255 scale) | Rejects blank or near-uniform templates (measured before blur) |
 | `max_candidates_per_rotation` | 2000 | Bounds pre-suppression work, per orientation |

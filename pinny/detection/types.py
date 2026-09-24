@@ -152,7 +152,7 @@ class ScanSettings:
     # Resource bounds.
     max_candidates: int = 500
     max_candidates_per_rotation: int = 2000
-    max_page_pixels: int = 60_000_000
+    max_page_pixels: int = 120_000_000
     min_template_side: int = 8
     max_template_side: int = 1024
     #: Reject templates whose grayscale standard deviation (0-255 scale) is
