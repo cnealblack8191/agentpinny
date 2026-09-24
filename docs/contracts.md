@@ -60,7 +60,9 @@ The frame descriptor used in files:
   point is its detection center.
 * **Rotation** ∈ {0, 90, 180, 270}. It is the clockwise quarter-turn, in
   the y-down raster, applied to the template to produce the match. This is
-  the convention in `docs/detection.md`.
+  the convention in `docs/detection.md`. *v1.1 additive:* an optional
+  boolean `mirrored` (default `false`) means the template was flipped
+  horizontally (left-right) **before** that clockwise rotation.
 
 ## 4. Scan result (original detector output)
 
@@ -76,10 +78,13 @@ A scan is immutable once written. Corrections never modify it.
   "created_at": "RFC3339 UTC",
   "detections": [
     { "id": "det-<n>", "box": {"x":..,"y":..,"width":..,"height":..}, "x": 0.0, "y": 0.0,
-      "score": 0.93, "rotation": 0, "source": "detector" }
+      "score": 0.93, "rotation": 0, "mirrored": false, "source": "detector" }
   ]
 }
 ```
+
+* `mirrored` is *v1.1 additive* and optional. Readers treat a missing value
+  as `false`.
 
 * `score` is the raw matching score, **not** a probability. Evaluator
   exports copy it into `confidence`.
