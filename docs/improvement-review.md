@@ -139,3 +139,29 @@ are AGPL-3.0.** Avoid them unless a commercial licence is bought.
 The detection measurements come from synthetic pages. None of this has been
 validated on real drawings yet. Phase 1 items 5–6 plus a small real labelled
 set should come before any default setting changes.
+
+## Implementation status (2026-09-24)
+
+Implemented on `claude/intelligent-wozniak-3kf3wk`. The LLM/Claude layers are
+deliberately left out of the app for now.
+
+| Area | Done | Docs |
+|---|---|---|
+| Raster detection | Deadline bug fix; `blur_sigma`; sparse validity and variance gate; symmetry-aware rotations; opt-in mirrored search; coarse-to-fine pre-pass; threaded strips. Synthetic Arch D page: ~8–9 s / +664 MB → ~0.7 s / +100 MB with defaults. | `detection.md` |
+| Learning (detection side) | Template bank (k-medoids), `detect_multi` with negative veto, kNN verifier (HOG + intensity), optional ONNX embedding verifier, isotonic/Platt calibration, `suggest_threshold`. | `learning-loop.md` |
+| Learning store | All six integrity fixes; schema migrations (v3); page review status, templates, class labels, manual boxes, document splits; `review_stats`, `review_queue`, crop lists for the bank, COCO `export_dataset`. | `learning-store.md` |
+| Evaluator | F1, localization stats, relative tolerance, PR curve / AP / best-F1 threshold, `score-corpus`, dpi validation, runtime, `detector_assisted_reviewed` labels, `--baseline` gate, mini corpus, CSV converter. | `evaluation/README.md` |
+| Vector matcher | Page classification, exact PDF→canonical mapping for all `/Rotate`, Form XObject reuse matcher, flattened-path matcher tolerant of crossing wires. 500 symbols + 20k clutter segments: 2.2 s (paths), 0.6 s (XObject). | `vector-matching.md` |
+| CI | `.github/workflows/tests.yml`: all suites + mini-corpus regression gate. | — |
+
+Still open:
+
+* Connect the pieces in the app. The viewer or scan service should try
+  `pinny.vector` first, fall back to raster, and feed store crops into
+  `build_template_bank` and `KnnVerifier`.
+* A scan record that lists several templates.
+* The foundation's `pyproject.toml` and render service.
+* A `bench/` settings sweep.
+* A real, labelled drawing set to confirm the synthetic results and retune
+  the 0.80 threshold. Blur leaves only about 0.015 margin to near-identical
+  symbol variants.

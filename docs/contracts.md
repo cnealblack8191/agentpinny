@@ -85,6 +85,12 @@ A scan is immutable once written. Corrections never modify it.
 
 * `mirrored` is *v1.1 additive* and optional. Readers treat a missing value
   as `false`.
+* *v1.1 additive:* `template.template_id` (optional) names a template
+  registered in the learning store. `detector.name` may be
+  `"opencv-template"` (raster) or `"vector"` (`pinny/vector`, see
+  `docs/vector-matching.md`). Vector detections use `source`
+  `"vector-xobject"` or `"vector-path"` and may carry `angle` for a
+  non-quarter-turn placement.
 
 * `score` is the raw matching score, **not** a probability. Evaluator
   exports copy it into `confidence`.
@@ -104,6 +110,13 @@ A scan is immutable once written. Corrections never modify it.
 * `reviewer` is `$PINNY_REVIEWER`, then the OS user, then `null`. This is a
   single-user local app for v1 with no auth. It uses
   `pinny_learning.store.local_reviewer_identity()`.
+* `reviewer` is recorded but is **not** part of a request's identity: a
+  retry with the same `request_id` replays even if the reviewer changed.
+  Re-approving an approved pin, or re-rejecting a rejected one, is a no-op.
+* *v1.1 additive:* pins may carry `class_label` (for example `duplex`,
+  `gfci`), and manual pins may carry an optional `box` and `rotation`.
+* *v1.1 additive:* a page can be marked review-`complete`. Only complete
+  pages are safe for training or as background in dataset export.
 * `source` records which surface issued the action (`"viewer"`, `"cli"`,
   `"test"`).
 * A corrected pin set is **never** a detections file. The evaluator
@@ -122,6 +135,20 @@ store's provisional v1 in PDF points):
 * Crops are cut from the canonical raster at 200 DPI with no re-render.
   The foundation's render service supplies
   `crop_renderer(spec) -> PNG bytes`.
+* *v1.1 additive:* the crop spec carries `renderer_version` (default
+  `"unknown"`), and it is part of `crop_key`. The render service should
+  expose its version so a renderer change produces new crops.
+
+## 6a. Splits and dataset export (*v1.1 additive*)
+
+* Splits are per **document** (`train` | `val` | `test` | `eval`), never per
+  page, so near-identical sheets can't leak between training and
+  evaluation. `test` and `eval` documents are excluded from training
+  exports, review stats and template-bank crops unless explicitly
+  requested.
+* `export_dataset` writes COCO JSON plus a manifest for review-complete
+  pages only. Images are referenced by `canonical_page_id` and supplied by
+  the render service (section 9).
 
 ## 7. Errors
 
@@ -131,6 +158,8 @@ store's provisional v1 in PDF points):
   module's `DetectionError(code, message)` is the reference shape.
 * HTTP/API layers map a `PinnyError` to 4xx with
   `{"error": {"code", "message"}}`, and anything else to 500.
+* Learning store: a store instance used from a thread other than the one
+  that opened it raises `wrong_thread`. Open one store per thread.
 
 ## 8. Package layout
 
@@ -140,6 +169,7 @@ pinny/                 application package (one import root)
   pdf/ or render/      foundation: upload, versioning, page render, crop_renderer
   detection/           detection session
   learning/            learning store (moved from top-level pinny_learning/)
+  vector/              vector-first PDF symbol matcher (pikepdf)
   viewer/ (+ web/)     viewer session
 evaluation/            standalone, stdlib-only, must not import pinny
 tests/<module>/        per-module tests
@@ -148,7 +178,10 @@ docs/                  contracts.md, agent-ownership.md, per-module docs
 
 Dependencies are declared once in the root `pyproject.toml`, which the
 foundation owns. Other sessions ask the coordinator for additions.
-Detection needs `numpy` and `opencv-python-headless`.
+Detection needs `numpy` and `opencv-python-headless`. The vector matcher
+needs `pikepdf` (MPL-2.0); its tests also use `pypdfium2`. `onnxruntime` is
+optional (the ONNX embedding verifier). Until `pyproject.toml` lands, see
+`requirements.txt`. Avoid AGPL dependencies (PyMuPDF, Ultralytics).
 
 ## 9. Render service interface (*foundation* fills in)
 

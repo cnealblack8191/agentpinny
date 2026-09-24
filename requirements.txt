@@ -1,0 +1,9 @@
+# Interim dependency list until the foundation's pyproject.toml lands.
+numpy>=1.26
+opencv-python-headless>=4.9
+pikepdf>=9
+# Tests
+pytest>=8
+pypdfium2>=4
+# Optional: ONNX embedding verifier (pinny.detection.verifier.OnnxEmbeddingVerifier)
+# onnxruntime>=1.18
