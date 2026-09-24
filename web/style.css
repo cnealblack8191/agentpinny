@@ -33,3 +33,7 @@ a.disabled { color: #999; pointer-events: none; }
 .view-message { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); background: #fff; padding: 8px 12px; border: 1px solid #aaa; max-width: 80%; }
 .view-message:empty { display: none; }
 .view-message.error { color: #b00020; border-color: #b00020; }
+/* Fixed width, so the toolbar never re-wraps (and moves the canvas) when the
+   cursor readout appears mid-drag. */
+#cursor-pos { display: inline-block; width: 17em; min-height: 1.4em; white-space: nowrap; overflow: hidden; }
+#mode-info { margin: 4px 0; }

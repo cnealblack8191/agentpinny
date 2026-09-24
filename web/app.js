@@ -1,5 +1,9 @@
 // Pinny viewer: upload -> page -> template -> scan -> review -> report.
 //
+// Scan modes (docs/phase2-contracts.md P7): "template" (Phase 1),
+// "template+verifier" (template candidates rescored by the active verifier)
+// and "model" (the active point detector, with no template step).
+//
 // Coordinates: every stored position (template box, pins) is in canonical
 // raster pixels (contracts §2). The page image and all overlays are drawn
 // through the single view matrix from transform.js; pointer positions are
@@ -21,11 +25,16 @@ const el = {
   rotateBtn: $('rotate-btn'), hidePins: $('hide-pins'), cursorPos: $('cursor-pos'),
   viewport: $('viewport'), canvas: $('canvas'), viewMessage: $('view-message'),
   stubBanner: $('stub-banner'),
+  scanMode: $('scan-mode'), modeInfo: $('mode-info'), templateStep: $('template-step'),
+  templateModeLabel: $('template-mode-label'),
 };
 
 const HIDDEN_STATES = new Set(['rejected', 'removed']);
 const CLICK_SLOP = 4; // CSS px a pointer may move and still count as a click
 const MIN_TEMPLATE_SIDE = 8; // detector minimum (ScanSettings.min_template_side)
+const SCAN_MODE_KEY = 'pinny.scanMode';
+const MODE_NAMES = { template: 'Template match', 'template+verifier': 'Template + verifier',
+  model: 'Point detector (no template)' };
 
 const S = {
   docs: [],
@@ -36,6 +45,8 @@ const S = {
   view: { zoom: 1, rotation: 0, panX: 0, panY: 0 },
   css: { w: 0, h: 0 },
   mode: 'pan',
+  scanMode: 'template', // P7 scan mode
+  models: null, // GET /api/models: {modes: [...], active: {...}}
   template: null,
   dragBox: null,
   drag: null,
@@ -125,7 +136,7 @@ function draw() {
   ctx.setTransform(kx, 0, 0, ky, 0, 0);
   polygon(ctx, T.boxCorners(S.view, { x: 0, y: 0, width: S.frame.width, height: S.frame.height }),
     '#666', 1, []);
-  if (S.template) polygon(ctx, T.boxCorners(S.view, S.template), '#2a6df4', 2, [6, 4]);
+  if (S.template && needsTemplate()) polygon(ctx, T.boxCorners(S.view, S.template), '#2a6df4', 2, [6, 4]);
   if (S.dragBox) polygon(ctx, T.boxCorners(S.view, S.dragBox), '#2a6df4', 1.5, [3, 3]);
   if (el.hidePins.checked) return;
   const pins = visiblePins();
@@ -194,7 +205,7 @@ function drawPin(ctx, p, selected) {
   if (p.failed) ring(ctx, s.x, s.y, 11, '#b00020', 2);
   if (selected) ring(ctx, s.x, s.y, p.failed ? 14 : 11, '#2a6df4', 2);
   if (p.score != null && (selected || S.view.zoom >= 0.25)) {
-    const label = p.score.toFixed(2);
+    const label = scoreLabel(p, 2);
     ctx.font = '11px system-ui, sans-serif';
     const w = ctx.measureText(label).width;
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
@@ -220,6 +231,49 @@ function pinLabel(p) {
   return p.origin === 'machine' ? p.pin_id : 'manual ' + p.pin_id.slice(0, 6);
 }
 
+// "0.93" for one score; "v 0.93 · t 0.85" when a verifier rescored a template match.
+function scoreLabel(p, digits) {
+  if (p.verifier_score != null && p.template_score != null) {
+    return `v ${p.verifier_score.toFixed(digits)} · t ${p.template_score.toFixed(digits)}`;
+  }
+  return p.score != null ? p.score.toFixed(digits) : '-';
+}
+
+function modeInfo(mode) {
+  return S.models && S.models.modes.find((m) => m.mode === mode);
+}
+
+function needsTemplate(mode = S.scanMode) {
+  return mode !== 'model';
+}
+
+function renderModes() {
+  for (const opt of el.scanMode.options) {
+    const m = modeInfo(opt.value);
+    const name = MODE_NAMES[opt.value] || opt.value;
+    const label = m && m.model_id ? `${name}: ${m.model_id}`
+      : name + (m && !m.available ? ' (no active model)' : '');
+    opt.disabled = !!(S.models && m && !m.available);
+    if (opt.textContent !== label) opt.textContent = label; // don't disturb an open list
+  }
+  if (el.scanMode.value !== S.scanMode) el.scanMode.value = S.scanMode;
+  const m = modeInfo(S.scanMode);
+  let text = '';
+  if (!S.models) text = 'Checking which models are active...';
+  else if (S.scanMode === 'template') text = 'Template matching only (no learned model).';
+  else if (m && m.available) {
+    text = `Active ${m.kind}: ${m.model_id}`
+      + (m.threshold != null ? `, threshold ${Number(m.threshold).toFixed(2)}` : '')
+      + (m.synthetic_only ? ' (trained on synthetic data only)' : '') + '.';
+    if (S.scanMode === 'template+verifier') text += ' Matches below the threshold are suppressed.';
+    else text += ' No template box is needed.';
+  } else if (m) text = m.reason || 'This mode is not available.';
+  el.modeInfo.textContent = text;
+  el.modeInfo.className = m && !m.available ? 'error' : 'muted';
+  el.templateStep.hidden = !needsTemplate();
+  el.templateModeLabel.hidden = !needsTemplate();
+}
+
 function sortedPins(pins) {
   return [...pins].sort((a, b) => {
     if (a.origin !== b.origin) return a.origin === 'machine' ? -1 : 1;
@@ -238,9 +292,13 @@ function renderPanel() {
     ? `Template: x ${S.template.x}, y ${S.template.y}, ${S.template.width} x ${S.template.height} px`
     : 'No template selected.';
   const c = S.scanId ? queue.counts(S.scanId) : { pending: 0, failed: 0 };
-  const templateOk = S.template && S.template.width >= MIN_TEMPLATE_SIDE
-    && S.template.height >= MIN_TEMPLATE_SIDE;
-  el.scanBtn.disabled = !S.frame || !templateOk || S.scanning || c.pending > 0 || c.failed > 0;
+  const templateOk = !needsTemplate() || (S.template && S.template.width >= MIN_TEMPLATE_SIDE
+    && S.template.height >= MIN_TEMPLATE_SIDE);
+  const mode = modeInfo(S.scanMode);
+  const modeOk = S.scanMode === 'template' || !!(mode && mode.available);
+  el.scanBtn.disabled = !S.frame || !templateOk || !modeOk || S.scanning || c.pending > 0
+    || c.failed > 0;
+  renderModes();
   el.scanBtn.textContent = S.scanId ? 'Scan this page again' : 'Scan this page';
   el.scanBtn.title = c.pending ? 'Wait until your edits are saved.'
     : c.failed ? 'Retry or discard the failed edits first.' : '';
@@ -248,7 +306,8 @@ function renderPanel() {
   // Scan picker
   el.scanSelect.disabled = !S.scans.length;
   const opts = ['<option value="">- none -</option>'].concat(S.scans.map((s, i) =>
-    `<option value="${s.scan_id}">Scan ${i + 1} (${fmtTime(s.created_at)}, ${s.counts.total} pins)</option>`));
+    `<option value="${s.scan_id}">Scan ${i + 1} (${fmtTime(s.created_at)}, `
+    + `${s.mode && s.mode !== 'template' ? escapeHtml(s.mode) + ', ' : ''}${s.counts.total} pins)</option>`));
   const html = opts.join('');
   if (el.scanSelect.dataset.html !== html) {
     el.scanSelect.innerHTML = html;
@@ -265,6 +324,14 @@ function renderPanel() {
       + `${n('rejected')} rejected. ${n('added')} added manually.`;
     if (machine === 0 && n('added') === 0) {
       el.counts.textContent += ' No matches were found. Add missed pins manually or rescan with a lower threshold.';
+    }
+    const st = S.scan && S.scan.scan_id === S.scanId ? S.scan : null;
+    if (st && st.mode && st.mode !== 'template') {
+      el.counts.textContent += ` Mode: ${st.mode} (${st.detector ? st.detector.version : '?'}).`;
+      const sup = (st.suppressed || []).length;
+      if (st.mode === 'template+verifier') {
+        el.counts.textContent += ` ${sup} template match(es) suppressed by the verifier.`;
+      }
     }
   } else {
     el.counts.textContent = S.frame ? 'Not scanned yet.' : '';
@@ -305,7 +372,10 @@ function renderPanel() {
   const sel = pins.find((p) => p.pin_id === S.selected);
   if (sel) {
     el.pinInfo.textContent = `${pinLabel(sel)} | ${sel.state}${sel.pending ? ' (saving)' : ''}`
-      + `${sel.score != null ? ` | score ${sel.score.toFixed(3)}` : ''}`
+      + (sel.verifier_score != null
+        ? ` | verifier ${sel.verifier_score.toFixed(3)}`
+          + (sel.template_score != null ? ` | template ${sel.template_score.toFixed(3)}` : '')
+        : `${sel.score != null ? ` | score ${sel.score.toFixed(3)}` : ''}`)
       + `${sel.rotation != null ? ` | rot ${sel.rotation} deg` : ''}`
       + ` | (${sel.x.toFixed(1)}, ${sel.y.toFixed(1)}) px`;
     el.pinInfo.className = '';
@@ -339,7 +409,7 @@ function renderPanel() {
   // Pin table
   const rows = sortedPins(visiblePins()).map((p) =>
     `<tr data-pin="${escapeHtml(p.pin_id)}" class="${p.pin_id === S.selected ? 'selected' : ''}">`
-    + `<td>${escapeHtml(pinLabel(p))}</td><td>${p.score != null ? p.score.toFixed(3) : '-'}</td>`
+    + `<td>${escapeHtml(pinLabel(p))}</td><td>${scoreLabel(p, 3)}</td>`
     + `<td>${p.state}${p.pending ? ' (saving)' : ''}${p.failed ? ' (not saved)' : ''}</td></tr>`).join('');
   const tbody = el.pinTable.tBodies[0];
   if (tbody.dataset.html !== rows) {
@@ -565,14 +635,15 @@ async function runScan() {
   const reviewed = displayPins().filter((p) => p.state !== 'unreviewed').length;
   if (reviewed && !window.confirm(`Scanning again creates a new scan. The ${reviewed} reviewed pin(s) on the `
       + 'current scan stay saved and can be reopened from the Scan list.')) return;
+  const mode = S.scanMode;
   const threshold = Number(el.threshold.value);
-  if (!(threshold >= -1 && threshold <= 1)) {
+  if (needsTemplate(mode) && !(threshold >= -1 && threshold <= 1)) {
     setStatus(el.scanStatus, 'Threshold must be a number between -1 and 1.', 'error');
     return;
   }
   const ctx = { version: S.doc.document_version, page: S.page, pageToken: S.seq.page };
-  const body = { document_version: ctx.version, page_index: ctx.page, template_box: { ...S.template },
-    threshold };
+  const body = { document_version: ctx.version, page_index: ctx.page, mode };
+  if (needsTemplate(mode)) Object.assign(body, { template_box: { ...S.template }, threshold });
   // Retrying the same request after a failure reuses its id, so a scan the
   // server finished but we never heard about is not run twice.
   const key = JSON.stringify(body);
@@ -591,18 +662,23 @@ async function runScan() {
     S.seq.scan += 1; // any in-flight scan load is now stale
     if (!S.scans.some((s) => s.scan_id === st.scan_id)) {
       S.scans.push({ scan_id: st.scan_id, created_at: st.created_at, template: st.template,
-        counts: st.counts });
+        mode: st.mode, counts: st.counts });
     }
     S.scanId = st.scan_id;
     S.scan = st;
     S.serverPins = st.pins;
     S.selected = null;
     const n = st.pins.length;
-    setStatus(el.scanStatus, n ? `Found ${n} match(es).${st.truncated ? ' Result was capped; more may exist.' : ''}`
-      : `No matches at threshold ${threshold.toFixed(2)}. Try a tighter box or a lower threshold, or add pins manually.`,
-      n ? 'ok' : '');
+    const sup = (st.suppressed || []).length;
+    const none = mode === 'model' ? 'The point detector found nothing on this page. Add pins manually.'
+      : mode === 'template+verifier' && sup
+        ? `The verifier suppressed all ${sup} template match(es). Add pins manually, or try template mode.`
+        : `No matches at threshold ${threshold.toFixed(2)}. Try a tighter box or a lower threshold, or add pins manually.`;
+    setStatus(el.scanStatus, n ? `Found ${n} match(es).${sup ? ` ${sup} suppressed by the verifier.` : ''}`
+      + `${st.truncated ? ' Result was capped; more may exist.' : ''}` : none, n ? 'ok' : '');
   } catch (err) {
     if (S.lastScanRequest && S.lastScanRequest.request_id === requestId) S.lastScanRequest.failed = true;
+    if (err.code === 'model_not_active' || err.code === 'models_unavailable') loadModels();
     if (token !== S.seq.scanReq || ctx.pageToken !== S.seq.page) return;
     setStatus(el.scanStatus, `Scan failed: ${err.message}`, 'error');
   } finally {
@@ -685,6 +761,10 @@ function localPoint(e) {
 }
 
 function setMode(mode) {
+  if (mode === 'template' && !needsTemplate()) {
+    setStatus(el.scanStatus, 'The point detector needs no template box.', '');
+    mode = 'pan';
+  }
   S.mode = mode;
   S.drag = null;
   S.dragBox = null;
@@ -785,6 +865,8 @@ el.approveBtn.onclick = () => review('approve');
 el.rejectBtn.onclick = () => review('delete');
 el.nextBtn.onclick = selectNext;
 el.scanBtn.onclick = runScan;
+el.scanMode.onchange = () => setScanMode(el.scanMode.value);
+el.scanMode.onfocus = () => loadModels();
 el.file.onchange = () => upload(el.file.files[0]);
 el.docSelect.onchange = () => {
   const d = S.docs.find((x) => x.document_version === el.docSelect.value);
@@ -852,6 +934,8 @@ window.__pinny = {
   scanId: () => S.scanId,
   page: () => S.page,
   template: () => S.template && { ...S.template },
+  scanMode: () => S.scanMode,
+  models: () => S.models,
   queue: () => queue.entries.map((e) => ({ ...e })),
   idle: () => !!S.frame && !rafPending && !S.scanning && queue.counts().pending === 0,
   toScreen: (x, y) => T.toScreen(S.view, x, y),
@@ -859,10 +943,37 @@ window.__pinny = {
     rotation: T.normRotation(rotation) }, x, y, S.css.w, S.css.h)),
 };
 
+// ---------------------------------------------------------- scan modes
+async function loadModels() {
+  try {
+    S.models = await api.models();
+  } catch (err) {
+    S.models = { modes: [{ mode: 'template', available: true }], active: {} };
+  }
+  const m = modeInfo(S.scanMode);
+  if (S.scanMode !== 'template' && !(m && m.available)) S.scanMode = 'template';
+  render();
+}
+
+function setScanMode(mode) {
+  if (!MODE_NAMES[mode]) mode = 'template';
+  S.scanMode = mode;
+  try { localStorage.setItem(SCAN_MODE_KEY, mode); } catch (err) { /* per-viewer convenience only */ }
+  if (!needsTemplate() && S.mode === 'template') {
+    S.mode = 'pan';
+    S.drag = null;
+    S.dragBox = null;
+  }
+  setStatus(el.scanStatus, '');
+  render();
+}
+
 // --------------------------------------------------------------- start
 async function start() {
+  try { S.scanMode = MODE_NAMES[localStorage.getItem(SCAN_MODE_KEY)] ? localStorage.getItem(SCAN_MODE_KEY) : 'template'; } catch (err) { /* ignore */ }
   sizeCanvas();
   render();
+  loadModels();
   try {
     const h = await api.health();
     el.stubBanner.hidden = h.render_service !== 'stub';

@@ -48,6 +48,7 @@ export const api = {
   frame: (version, page) => request('GET', pagePath(version, page) + '/frame'),
   rasterUrl: (version, page) => pagePath(version, page) + '/raster.png',
   pageScans: (version, page) => request('GET', pagePath(version, page) + '/scans'),
+  models: () => request('GET', '/api/models'),
   scan: (body) => request('POST', '/api/scans', { json: body }),
   scanState: (scanId) => request('GET', `/api/scans/${enc(scanId)}`),
   act: (scanId, body) => request('POST', `/api/scans/${enc(scanId)}/actions`, { json: body }),

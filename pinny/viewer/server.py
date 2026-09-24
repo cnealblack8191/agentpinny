@@ -9,7 +9,9 @@ Routes (all JSON unless noted; errors are ``{"error": {"code", "message"}}``):
   GET  /api/documents/{version}/pages/{i}/frame
   GET  /api/documents/{version}/pages/{i}/raster.png  (image/png)
   GET  /api/documents/{version}/pages/{i}/scans
-  POST /api/scans            {document_version, page_index, template_box, request_id, threshold?}
+  GET  /api/models           scan modes, whether each can run, the active models
+  POST /api/scans            {document_version, page_index, request_id, mode?,
+                              template_box (not in mode "model"), threshold?, model_threshold?}
   GET  /api/scans/{scan_id}
   POST /api/scans/{scan_id}/actions  {action, request_id, pin_id?, x?, y?, expected_version?}
   GET  /api/scans/{scan_id}/report   (attachment)
@@ -46,6 +48,7 @@ _ROUTES = [
     ("GET", _PAGE + r"/frame", "frame"),
     ("GET", _PAGE + r"/raster\.png", "raster"),
     ("GET", _PAGE + r"/scans", "page_scans"),
+    ("GET", r"/api/models", "models"),
     ("POST", r"/api/scans", "scan"),
     ("GET", r"/api/scans/(?P<s>[^/]+)", "scan_state"),
     ("POST", r"/api/scans/(?P<s>[^/]+)/actions", "act"),
@@ -120,8 +123,14 @@ class Handler(BaseHTTPRequestHandler):
     def h_page_scans(self, p, q):
         self._json({"scans": self.service.page_scans(p["v"], int(p["i"]))})
 
+    def h_models(self, p, q):
+        self._json(self.service.models())
+
     def h_scan(self, p, q):
         b = self._json_body()
+        mode = b.get("mode")
+        if mode is not None and not isinstance(mode, str):
+            raise ViewerError("invalid_mode", "mode must be a string.")
         page_index = b.get("page_index")
         if isinstance(page_index, bool) or not isinstance(page_index, int):
             raise ViewerError("invalid_page", "page_index must be an integer.")
@@ -131,7 +140,9 @@ class Handler(BaseHTTPRequestHandler):
                                      page_index=page_index,
                                      template_box=b.get("template_box"),
                                      request_id=b.get("request_id"),
-                                     threshold=b.get("threshold")), 201)
+                                     threshold=b.get("threshold"),
+                                     mode=mode,
+                                     model_threshold=b.get("model_threshold")), 201)
 
     def h_scan_state(self, p, q):
         self._json(self.service.scan_state(p["s"]))
