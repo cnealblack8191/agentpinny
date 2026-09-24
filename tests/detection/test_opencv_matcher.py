@@ -275,6 +275,8 @@ def test_result_serialises(detector, glyph):
     d = detector.detect(page, glyph).to_dict()
     assert d["candidates"][0]["box"] == {"x": 10, "y": 20, "width": GLYPH_W, "height": GLYPH_H}
     assert d["candidates"][0]["center"] == {"x": 22.0, "y": 38.0}
+    assert d["candidates"][0]["mirrored"] is False
+    assert d["skipped_orientations"] == []
     assert d["rotations_searched"] == [0, 90, 180, 270]
     assert d["detector"] == OpenCVTemplateDetector.name
 
