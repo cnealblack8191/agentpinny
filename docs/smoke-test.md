@@ -1,5 +1,9 @@
 # Smoke test on a real drawing
 
+No install needed: `scripts/browser-scan/` is a web page that does the same
+thing in the browser (open a PDF, box a symbol, scan, tune the threshold).
+See its README. The script below is the Python route.
+
 `scripts/smoke_test.py` runs the detector on one page of a real PDF and
 shows what it found. It is the quickest way to see whether the default
 threshold (0.80) works on real drawings, which has never been measured.

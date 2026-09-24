@@ -1,0 +1,1268 @@
+<title>Pinny Receptacle Scan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #f3f4f1;
+  --panel: #ffffff;
+  --ink: #19201c;
+  --muted: #5a6560;
+  --faint: #8b948f;
+  --line: #d8dcd6;
+  --accent: #0b6e69;
+  --accent-ink: #ffffff;
+  --accent-soft: #e2efed;
+  --redline: #cf1430;
+  --redline-soft: rgba(207, 20, 48, 0.10);
+  --bar-off: #c9cec8;
+  --stage: #e3e6e1;
+  --warn: #8a5a00;
+  --warn-soft: #fbf1dc;
+  --sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111513;
+    --panel: #181d1a;
+    --ink: #e4e9e5;
+    --muted: #9ca69f;
+    --faint: #6f7a74;
+    --line: #2b332f;
+    --accent: #43b9ae;
+    --accent-ink: #06201d;
+    --accent-soft: #17302d;
+    --redline: #ff5266;
+    --redline-soft: rgba(255, 82, 102, 0.14);
+    --bar-off: #38413c;
+    --stage: #0b0e0d;
+    --warn: #f0c060;
+    --warn-soft: #2b2415;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111513;
+  --panel: #181d1a;
+  --ink: #e4e9e5;
+  --muted: #9ca69f;
+  --faint: #6f7a74;
+  --line: #2b332f;
+  --accent: #43b9ae;
+  --accent-ink: #06201d;
+  --accent-soft: #17302d;
+  --redline: #ff5266;
+  --redline-soft: rgba(255, 82, 102, 0.14);
+  --bar-off: #38413c;
+  --stage: #0b0e0d;
+  --warn: #f0c060;
+  --warn-soft: #2b2415;
+}
+
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.app {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 350px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+header h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+header .doc {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  flex: 1 1 200px;
+}
+.tag {
+  display: inline-block;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  margin-right: 6px;
+}
+aside {
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.step { display: flex; flex-direction: column; gap: 8px; }
+.step h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.step h2 .n {
+  display: inline-grid;
+  place-items: center;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  font-size: 11px;
+  letter-spacing: 0;
+}
+.step.done h2 .n { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.step p { margin: 0; color: var(--muted); font-size: 13px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+button, .filebtn {
+  font: inherit;
+  font-weight: 500;
+  font-size: 13px;
+  padding: 7px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+button:hover, .filebtn:hover { border-color: var(--muted); }
+button:focus-visible, .filebtn:focus-within, input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.seg[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+.filebtn input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+select, input[type="number"] {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 5px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--ink);
+}
+.boxfields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.boxfields label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.boxfields input { width: 100%; }
+.tpl { display: flex; gap: 12px; align-items: center; }
+.tpl canvas {
+  image-rendering: pixelated;
+  border: 1px solid var(--line);
+  background: #fff;
+  max-width: 120px;
+  max-height: 120px;
+}
+.tpl .meta { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.checks { display: flex; gap: 12px; flex-wrap: wrap; font-family: var(--mono); font-size: 13px; }
+.checks label { display: flex; align-items: center; gap: 4px; }
+.progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.progress > div { height: 100%; width: 0; background: var(--accent); transition: width 0.15s; }
+.status { font-size: 13px; color: var(--muted); min-height: 1.4em; }
+.status.error { color: var(--redline); }
+
+.summary { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.summary .big { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+.summary .of { color: var(--muted); font-size: 13px; }
+.thr { display: flex; align-items: center; gap: 10px; }
+.thr input[type="range"] { flex: 1; accent-color: var(--redline); }
+.thr output { font-family: var(--mono); font-size: 15px; font-weight: 500; min-width: 3.2em; text-align: right; }
+.hist { position: relative; }
+.hist svg { display: block; width: 100%; height: auto; overflow: visible; }
+.hist .tip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--ink);
+  color: var(--panel);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  transform: translate(-50%, -100%);
+}
+.note { font-size: 12px; color: var(--faint); margin: 0; }
+.list {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.list table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.list th {
+  position: sticky; top: 0;
+  background: var(--panel);
+  text-align: right;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.list td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.list tr:last-child td { border-bottom: 0; }
+.list tbody tr { cursor: pointer; }
+.list tbody tr:hover, .list tbody tr.sel { background: var(--redline-soft); }
+.list th:first-child, .list td:first-child { text-align: left; }
+.warnbox {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  height: 120px;
+  font-family: var(--mono);
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+main { position: relative; display: flex; flex-direction: column; min-height: 0; }
+.toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.toolbar .zoom { font-family: var(--mono); font-size: 12px; color: var(--muted); min-width: 4em; text-align: center; }
+.toolbar .hint { font-size: 12px; color: var(--muted); margin-left: auto; }
+.viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--stage);
+  position: relative;
+  touch-action: none;
+}
+.viewport.pan { cursor: grab; }
+.viewport.pan.dragging { cursor: grabbing; }
+.viewport.select { cursor: crosshair; }
+.stage { position: relative; margin: 24px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); background: #fff; }
+.stage canvas, .stage svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.stage canvas { image-rendering: auto; }
+#overlay .det { fill: none; stroke: var(--redline); stroke-width: 2; }
+#overlay .det.sel { stroke-width: 4; }
+#overlay .det-label { fill: var(--redline); font-family: var(--mono); font-weight: 500; }
+#overlay .tplbox { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; }
+#overlay .drag { fill: rgba(11, 110, 105, 0.08); stroke: var(--accent); stroke-width: 1.5; }
+.drop {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 3px dashed var(--accent);
+  font-size: 18px; font-weight: 600;
+  color: var(--ink);
+  pointer-events: none;
+}
+@media (max-width: 820px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: auto auto minmax(420px, 70vh); height: auto; }
+  html, body { height: auto; }
+  aside { border-right: 0; border-bottom: 1px solid var(--line); overflow: visible; }
+  main { order: 3; }
+  .toolbar .hint { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress > div { transition: none; }
+}
+</style>
+
+<div class="app" id="app">
+  <header>
+    <h1>Pinny Receptacle Scan</h1>
+    <div class="doc" id="docLine">Loading sample sheet…</div>
+  </header>
+
+  <aside>
+    <section class="step" id="step1">
+      <h2><span class="n">1</span>Open a drawing</h2>
+      <p>PDF only. The file stays in this browser; nothing is uploaded.</p>
+      <div class="row">
+        <label class="filebtn">Open PDF…<input type="file" id="fileInput" accept="application/pdf,.pdf"></label>
+        <select id="pageSelect" aria-label="Page" hidden></select>
+      </div>
+    </section>
+
+    <section class="step" id="step2">
+      <h2><span class="n">2</span>Box one receptacle</h2>
+      <p>Drag a box around one clean symbol on the sheet. White margin is trimmed automatically.</p>
+      <div class="tpl">
+        <canvas id="tplCanvas" width="1" height="1" aria-label="Template preview"></canvas>
+        <div class="meta" id="tplMeta">No symbol selected</div>
+      </div>
+      <div class="boxfields">
+        <label>x<input type="number" id="bx" min="0" step="1"></label>
+        <label>y<input type="number" id="by" min="0" step="1"></label>
+        <label>w<input type="number" id="bw" min="8" step="1"></label>
+        <label>h<input type="number" id="bh" min="8" step="1"></label>
+      </div>
+    </section>
+
+    <section class="step" id="step3">
+      <h2><span class="n">3</span>Scan the page</h2>
+      <div class="checks" role="group" aria-label="Rotations to search">
+        <label><input type="checkbox" id="rot0" checked>0°</label>
+        <label><input type="checkbox" id="rot90" checked>90°</label>
+        <label><input type="checkbox" id="rot180" checked>180°</label>
+        <label><input type="checkbox" id="rot270" checked>270°</label>
+      </div>
+      <div class="row"><button class="primary" id="scanBtn" disabled>Scan page</button></div>
+      <div class="progress" aria-hidden="true"><div id="progressBar"></div></div>
+      <div class="status" id="status" role="status"></div>
+    </section>
+
+    <section class="step" id="results" hidden>
+      <h2>Results</h2>
+      <div class="summary">
+        <span class="big" id="countBig">0</span>
+        <span class="of" id="countOf"></span>
+      </div>
+      <div class="thr">
+        <label for="thr" class="of">Threshold</label>
+        <input type="range" id="thr" min="0.50" max="1.00" step="0.01" value="0.80">
+        <output id="thrOut" for="thr">0.80</output>
+      </div>
+      <div class="hist" id="hist"></div>
+      <p class="note">Match scores run from 0 to 1 and are not probabilities. Aim the threshold at the gap between real symbols and look-alikes.</p>
+      <div id="warnings"></div>
+      <div class="list" id="list"></div>
+      <div class="row">
+        <button id="copyJson">Copy detections JSON</button>
+      </div>
+      <textarea id="jsonFallback" aria-label="Detections JSON" hidden readonly></textarea>
+    </section>
+  </aside>
+
+  <main>
+    <div class="toolbar">
+      <button class="seg" id="toolSelect" aria-pressed="true">Box symbol</button>
+      <button class="seg" id="toolPan" aria-pressed="false">Pan</button>
+      <button id="zoomOut" aria-label="Zoom out">−</button>
+      <span class="zoom" id="zoomLabel">100%</span>
+      <button id="zoomIn" aria-label="Zoom in">+</button>
+      <button id="zoomFit">Fit</button>
+      <button id="zoom100">1:1</button>
+      <span class="hint">Ctrl + scroll to zoom · drop a PDF anywhere</span>
+    </div>
+    <div class="viewport select" id="viewport">
+      <div class="stage" id="stage">
+        <canvas id="pageCanvas"></canvas>
+        <svg id="overlay" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"></svg>
+      </div>
+    </div>
+    <div class="drop" id="drop" hidden>Drop PDF to open</div>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+
+<script type="text/plain" id="matcherSrc">
+// Port of pinny/detection/opencv_matcher.py (TM_CCOEFF_NORMED template
+// matching) computed with tiled FFT correlation. Runs in a Web Worker.
+"use strict";
+const EXCLUDED = -2;
+const FLAT_RANGE = 2;
+const SCORE_TOL = 1e-3;
+
+function fftTables(n) {
+  const levels = Math.log2(n) | 0;
+  const rev = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    let r = 0;
+    for (let b = 0, x = i; b < levels; b++, x >>= 1) r = (r << 1) | (x & 1);
+    rev[i] = r;
+  }
+  const cos = new Float64Array(n / 2), sin = new Float64Array(n / 2);
+  for (let i = 0; i < n / 2; i++) {
+    cos[i] = Math.cos((2 * Math.PI * i) / n);
+    sin[i] = Math.sin((2 * Math.PI * i) / n);
+  }
+  return { n, rev, cos, sin };
+}
+
+// In-place radix-2 FFT on re/im starting at offset with the given stride.
+function fft1(t, re, im, inverse) {
+  const n = t.n, rev = t.rev;
+  for (let i = 0; i < n; i++) {
+    const j = rev[i];
+    if (j > i) {
+      let tmp = re[i]; re[i] = re[j]; re[j] = tmp;
+      tmp = im[i]; im[i] = im[j]; im[j] = tmp;
+    }
+  }
+  const sgn = inverse ? 1 : -1;
+  for (let size = 2; size <= n; size <<= 1) {
+    const half = size >> 1, step = n / size;
+    for (let start = 0; start < n; start += size) {
+      for (let k = 0, ti = 0; k < half; k++, ti += step) {
+        const wr = t.cos[ti], wi = sgn * t.sin[ti];
+        const a = start + k, b = a + half;
+        const xr = re[b] * wr - im[b] * wi;
+        const xi = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - xr; im[b] = im[a] - xi;
+        re[a] += xr; im[a] += xi;
+      }
+    }
+  }
+}
+
+function fft2(t, re, im, inverse, rowRe, rowIm) {
+  const n = t.n;
+  for (let y = 0; y < n; y++) {
+    const o = y * n;
+    fft1(t, re.subarray(o, o + n), im.subarray(o, o + n), inverse);
+  }
+  for (let x = 0; x < n; x++) {
+    for (let y = 0; y < n; y++) { rowRe[y] = re[y * n + x]; rowIm[y] = im[y * n + x]; }
+    fft1(t, rowRe, rowIm, inverse);
+    for (let y = 0; y < n; y++) { re[y * n + x] = rowRe[y]; im[y * n + x] = rowIm[y]; }
+  }
+}
+
+function rotate(img, w, h, rot) {
+  if (rot === 0) return { img: img.slice(), w, h };
+  const out = new Uint8Array(w * h);
+  if (rot === 180) {
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out[y * w + x] = img[(h - 1 - y) * w + (w - 1 - x)];
+    return { img: out, w, h };
+  }
+  // Output is h wide and w tall.
+  for (let y = 0; y < w; y++) {
+    for (let x = 0; x < h; x++) {
+      out[y * h + x] = rot === 90 ? img[(h - 1 - x) * w + y] : img[x * w + (w - 1 - y)];
+    }
+  }
+  return { img: out, w: h, h: w };
+}
+
+function fail(code, message) {
+  const e = new Error(message);
+  e.code = code;
+  throw e;
+}
+
+function suppressDuplicates(c, iouThr, centerRatio) {
+  const order = c.map((_, i) => i).sort((a, b) =>
+    c[b].score - c[a].score || c[a].y - c[b].y || c[a].x - c[b].x);
+  const suppressed = new Uint8Array(c.length);
+  const kept = [];
+  for (const i of order) {
+    if (suppressed[i]) continue;
+    kept.push(i);
+    const a = c[i];
+    const ax2 = a.x + a.w, ay2 = a.y + a.h, acx = a.x + a.w / 2, acy = a.y + a.h / 2;
+    const aArea = a.w * a.h, aShort = Math.min(a.w, a.h);
+    for (let j = 0; j < c.length; j++) {
+      if (suppressed[j]) continue;
+      const b = c[j];
+      const iw = Math.max(0, Math.min(ax2, b.x + b.w) - Math.max(a.x, b.x));
+      const ih = Math.max(0, Math.min(ay2, b.y + b.h) - Math.max(a.y, b.y));
+      const inter = iw * ih;
+      const iou = inter / (aArea + b.w * b.h - inter);
+      const dist = Math.hypot(b.x + b.w / 2 - acx, b.y + b.h / 2 - acy);
+      if (iou > iouThr || dist < centerRatio * Math.min(aShort, Math.min(b.w, b.h))) suppressed[j] = 1;
+    }
+  }
+  return kept.map((i) => c[i]);
+}
+
+function scan(p, progress) {
+  const { gray, W, H, box, rotations } = p;
+  const floor = p.floor, maxPerRot = p.maxPerRotation;
+  const tw0 = box.w, th0 = box.h;
+  if (Math.min(tw0, th0) < p.minTemplateSide) fail("template_too_small", `Template is ${tw0}x${th0} px; its shorter side must be at least ${p.minTemplateSide}. Draw a larger box around the symbol.`);
+  if (Math.max(tw0, th0) > p.maxTemplateSide) fail("template_too_large", `Template is ${tw0}x${th0} px; its longer side must be at most ${p.maxTemplateSide}. Box a single symbol.`);
+  const tpl = new Uint8Array(tw0 * th0);
+  for (let y = 0; y < th0; y++) for (let x = 0; x < tw0; x++) tpl[y * tw0 + x] = gray[(box.y + y) * W + box.x + x];
+  let mean = 0;
+  for (const v of tpl) mean += v;
+  mean /= tpl.length;
+  let varSum = 0;
+  for (const v of tpl) varSum += (v - mean) * (v - mean);
+  const std = Math.sqrt(varSum / tpl.length);
+  if (std < p.minTemplateStddev) fail("template_blank", `The box is blank or near-uniform (std ${std.toFixed(2)}). Box the symbol's line work.`);
+
+  const rots = rotations.map((r) => {
+    const t = rotate(tpl, tw0, th0, r);
+    if (t.w > W || t.h > H) fail("template_too_large", `Template rotated ${r}° does not fit on the page.`);
+    let m = 0;
+    for (const v of t.img) m += v;
+    m /= t.img.length;
+    let tsq = 0;
+    const zm = new Float64Array(t.img.length);
+    for (let i = 0; i < zm.length; i++) { zm[i] = t.img[i] - m; tsq += zm[i] * zm[i]; }
+    return { rot: r, w: t.w, h: t.h, zm, tsq, n: t.w * t.h, RW: W - t.w + 1, RH: H - t.h + 1,
+             hx: Math.floor(t.w / 4), hy: Math.floor(t.h / 4), peaks: [], bad: 0 };
+  });
+
+  const Tmax = Math.max(tw0, th0);
+  const hmax = Math.floor(Tmax / 4);
+  let N = 512;
+  while (N - Tmax + 1 - 2 * hmax < 128 || N < 2 * Tmax) N *= 2;
+  const V = N - Tmax + 1;           // valid correlation positions per tile side
+  const S = V - 2 * hmax;           // positions emitted per tile side
+  const t = fftTables(N);
+  const NN = N * N;
+  const rowRe = new Float64Array(N), rowIm = new Float64Array(N);
+
+  // Conjugate template spectra.
+  for (const r of rots) {
+    const re = new Float64Array(NN), im = new Float64Array(NN);
+    for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) re[y * N + x] = r.zm[y * r.w + x];
+    fft2(t, re, im, false, rowRe, rowIm);
+    for (let i = 0; i < NN; i++) im[i] = -im[i];
+    r.fre = re; r.fim = im;
+  }
+
+  const tRe = new Float64Array(NN), tIm = new Float64Array(NN);
+  const zRe = new Float64Array(NN), zIm = new Float64Array(NN);
+  const I1 = new Float64Array((N + 1) * (N + 1)), I2 = new Float64Array((N + 1) * (N + 1));
+  const scores = rots.map(() => new Float32Array(V * V));
+  const tilesX = Math.ceil(W / S), tilesY = Math.ceil(H / S);
+  const totalTiles = tilesX * tilesY;
+  const scale = 1 / NN;
+  let done = 0;
+
+  for (let ty = 0; ty < tilesY; ty++) {
+    for (let tx = 0; tx < tilesX; tx++) {
+      const ox = tx * S, oy = ty * S;           // first emitted position
+      const ix = ox - hmax, iy = oy - hmax;     // tile image origin
+      // Tile pixels (zero outside the page) and integral images.
+      for (let y = 0; y < N; y++) {
+        const gy = iy + y;
+        let s1 = 0, s2 = 0;
+        const rowOut = (y + 1) * (N + 1), rowPrev = y * (N + 1);
+        for (let x = 0; x < N; x++) {
+          const gx = ix + x;
+          const v = gy >= 0 && gy < H && gx >= 0 && gx < W ? gray[gy * W + gx] : 0;
+          tRe[y * N + x] = v; tIm[y * N + x] = 0;
+          s1 += v; s2 += v * v;
+          I1[rowOut + x + 1] = I1[rowPrev + x + 1] + s1;
+          I2[rowOut + x + 1] = I2[rowPrev + x + 1] + s2;
+        }
+      }
+      fft2(t, tRe, tIm, false, rowRe, rowIm);
+
+      for (let k = 0; k < rots.length; k += 2) {
+        const A = rots[k], B = rots[k + 1];
+        // Z = F*conj(TA) + i * F*conj(TB): real part -> A, imaginary -> B.
+        for (let i = 0; i < NN; i++) {
+          const fr = tRe[i], fi = tIm[i];
+          const pr = fr * A.fre[i] - fi * A.fim[i], pi = fr * A.fim[i] + fi * A.fre[i];
+          if (B) {
+            const qr = fr * B.fre[i] - fi * B.fim[i], qi = fr * B.fim[i] + fi * B.fre[i];
+            zRe[i] = pr - qi; zIm[i] = pi + qr;
+          } else {
+            zRe[i] = pr; zIm[i] = pi;
+          }
+        }
+        fft2(t, zRe, zIm, true, rowRe, rowIm);
+        for (const [r, src, idx] of [[A, zRe, k], [B, zIm, k + 1]]) {
+          if (!r) continue;
+          const out = scores[idx];
+          for (let qy = 0; qy < V; qy++) {
+            const py = iy + qy;
+            for (let qx = 0; qx < V; qx++) {
+              const px = ix + qx;
+              const o = qy * V + qx;
+              if (px < 0 || py < 0 || px >= r.RW || py >= r.RH) { out[o] = EXCLUDED; continue; }
+              const a = qy * (N + 1) + qx, b = a + r.w, c = (qy + r.h) * (N + 1) + qx, d = c + r.w;
+              const s1 = I1[d] - I1[b] - I1[c] + I1[a];
+              const s2 = I2[d] - I2[b] - I2[c] + I2[a];
+              const wvar = s2 - (s1 * s1) / r.n;   // n * window variance
+              if (wvar <= 1e-7 * r.n) { out[o] = EXCLUDED; continue; }   // flat window
+              let s = (src[qy * N + qx] * scale) / Math.sqrt(r.tsq * wvar);
+              if (!Number.isFinite(s) || Math.abs(s) > 1 + SCORE_TOL) { r.bad++; out[o] = EXCLUDED; continue; }
+              if (s > 1) s = 1;
+              // Windows whose values span < 2 grey levels have variance <= 0.25.
+              if (s >= floor && wvar <= 0.2501 * r.n) {
+                let lo = 255, hi = 0;
+                for (let yy = 0; yy < r.h && hi - lo < FLAT_RANGE; yy++) {
+                  const row = (py + yy) * W + px;
+                  for (let xx = 0; xx < r.w; xx++) { const v = gray[row + xx]; if (v < lo) lo = v; if (v > hi) hi = v; }
+                }
+                if (hi - lo < FLAT_RANGE) s = EXCLUDED;
+              }
+              out[o] = s;
+            }
+          }
+        }
+      }
+
+      // Local maxima in the emitted area. The neighbourhood (half the
+      // template) always lies inside the computed V x V area.
+      for (let ri = 0; ri < rots.length; ri++) {
+        const r = rots[ri], out = scores[ri];
+        for (let py = oy; py < Math.min(oy + S, r.RH); py++) {
+          for (let px = ox; px < Math.min(ox + S, r.RW); px++) {
+            const qx = px - ix, qy = py - iy;
+            const s = out[qy * V + qx];
+            if (s < floor || s <= EXCLUDED) continue;
+            let peak = true;
+            const y0 = Math.max(0, py - r.hy), y1 = Math.min(r.RH - 1, py + r.hy);
+            const x0 = Math.max(0, px - r.hx), x1 = Math.min(r.RW - 1, px + r.hx);
+            for (let yy = y0; yy <= y1 && peak; yy++) {
+              const rowo = (yy - iy) * V - ix;
+              for (let xx = x0; xx <= x1; xx++) if (out[rowo + xx] > s) { peak = false; break; }
+            }
+            if (peak) r.peaks.push({ x: px, y: py, w: r.w, h: r.h, score: s, rotation: r.rot });
+          }
+        }
+      }
+      done++;
+      progress(done / totalTiles);
+    }
+  }
+
+  let truncated = false;
+  const warnings = [];
+  let all = [];
+  for (const r of rots) {
+    let peaks = r.peaks;
+    if (peaks.length > maxPerRot) {
+      truncated = true;
+      peaks.sort((a, b) => b.score - a.score);
+      peaks = peaks.slice(0, maxPerRot);
+    }
+    if (r.bad) warnings.push(`rotation ${r.rot}: ignored ${r.bad} non-finite or out-of-range score(s).`);
+    all = all.concat(peaks);
+  }
+  const kept = suppressDuplicates(all, p.nmsIou, p.centerRatio);
+  return { candidates: kept, truncatedAtFloor: truncated, warnings, fftSize: N, tiles: totalTiles };
+}
+
+self.onmessage = (e) => {
+  const t0 = performance.now();
+  try {
+    let last = 0;
+    const res = scan(e.data, (f) => {
+      const now = performance.now();
+      if (now - last > 100 || f === 1) { last = now; self.postMessage({ type: "progress", fraction: f }); }
+    });
+    res.elapsed = (performance.now() - t0) / 1000;
+    self.postMessage({ type: "done", result: res });
+  } catch (err) {
+    self.postMessage({ type: "error", code: err.code || "internal", message: err.message || String(err) });
+  }
+};
+</script>
+
+<script>
+"use strict";
+const SAMPLE_PDF_B64 = "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NiAwMDAwMCBuIAowMDAwMDAxODU5IDAwMDAwIG4gCjAwMDAwMDIwNjEgMDAwMDAgbiAKMDAwMDAwMjI2OCAwMDAwMCBuIAowMDAwMDAyNDgwIDAwMDAwIG4gCjAwMDAwMDI2ODUgMDAwMDAgbiAKMDAwMDAwMjg5MCAwMDAwMCBuIAowMDAwMDAzMDk1IDAwMDAwIG4gCjAwMDAwMDMzMDEgMDAwMDAgbiAKMDAwMDAwMzUwOSAwMDAwMCBuIAowMDAwMDAzNzE4IDAwMDAwIG4gCjAwMDAwMDM5MjggMDAwMDAgbiAKMDAwMDAwNDAxOCAwMDAwMCBuIAowMDAwMDA0MTQzIDAwMDAwIG4gCjAwMDAwMDQyNjggMDAwMDAgbiAKMDAwMDAwNDM5MyAwMDAwMCBuIAowMDAwMDA0NTE3IDAwMDAwIG4gCjAwMDAwMDQ2NTcgMDAwMDAgbiAKMDAwMDAwNDc5OSAwMDAwMCBuIAowMDAwMDA0OTQ3IDAwMDAwIG4gCjAwMDAwMDUwODQgMDAwMDAgbiAKMDAwMDAwNTI0NiAwMDAwMCBuIAowMDAwMDA1NDA4IDAwMDAwIG4gCjAwMDAwMDU1ODggMDAwMDAgbiAKMDAwMDAwNTcyMiAwMDAwMCBuIAowMDAwMDA1OTI5IDAwMDAwIG4gCgp0cmFpbGVyCjw8L1NpemUgMzYvUm9vdCAxIDAgUi9JRFs8QzJCOUMyQUZDMzhEQzI5OEMzOEJDMzkxNUMyNTY1QzI+PDhFMzA0QkRDMEQ1OERDQjRBNTBDM0Q3QjdFQTg5RTM1Pl0+PgpzdGFydHhyZWYKNjA4MQolJUVPRgo=";
+const SAMPLE_BOX = { x: 1680, y: 274, w: 40, h: 50 };
+const CANONICAL_DPI = 200;
+const SETTINGS = {
+  floor: 0.5,
+  maxPerRotation: 2000,
+  maxCandidates: 500,
+  maxPagePixels: 60000000,
+  minTemplateSide: 8,
+  maxTemplateSide: 1024,
+  minTemplateStddev: 4.0,
+  nmsIou: 0.5,
+  centerRatio: 0.5,
+};
+const DETECTOR_NAME = "opencv-template-ccoeff-normed";
+const DETECTOR_VERSION = "browser-port-1";
+
+const $ = (id) => document.getElementById(id);
+const SVGNS = "http://www.w3.org/2000/svg";
+const state = {
+  pdf: null, fileName: "", isSample: false,
+  docId: "", docVersion: "", pageIndex: 0,
+  W: 0, H: 0, gray: null,
+  box: null, scan: null, scanBox: null, scanRotations: null,
+  zoom: 1, tool: "select", selected: -1,
+};
+
+function uuid4() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+async function sha256Hex(bytes) {
+  try {
+    const d = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("");
+  } catch (e) {
+    return null;
+  }
+}
+
+function setStatus(msg, isError) {
+  const el = $("status");
+  el.textContent = msg || "";
+  el.classList.toggle("error", !!isError);
+}
+
+function setProgress(f) { $("progressBar").style.width = `${Math.round(f * 100)}%`; }
+
+// ---------- Loading and rendering ----------
+
+async function openPdf(bytes, name, isSample) {
+  if (typeof pdfjsLib === "undefined") {
+    setStatus("The PDF library did not load. Check your connection and reload the page.", true);
+    return;
+  }
+  setStatus("Opening PDF…");
+  const copy = bytes.slice();
+  const hex = await sha256Hex(copy);
+  let pdf;
+  try {
+    pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+  } catch (e) {
+    setStatus(`Could not open ${name}: ${e.message}. Is it a valid PDF?`, true);
+    return;
+  }
+  state.pdf = pdf;
+  state.fileName = name;
+  state.isSample = isSample;
+  state.docId = uuid4();
+  state.docVersion = hex ? `sha256:${hex}` : "sha256:unavailable";
+  const sel = $("pageSelect");
+  sel.innerHTML = "";
+  for (let i = 0; i < pdf.numPages; i++) {
+    const o = document.createElement("option");
+    o.value = String(i);
+    o.textContent = `Page ${i + 1} of ${pdf.numPages}`;
+    sel.appendChild(o);
+  }
+  sel.hidden = pdf.numPages < 2;
+  await renderPage(0);
+}
+
+async function renderPage(index) {
+  state.pageIndex = index;
+  state.box = null; state.scan = null; state.selected = -1;
+  $("results").hidden = true;
+  updateTemplatePanel();
+  setStatus(`Rendering page ${index + 1} at ${CANONICAL_DPI} DPI…`);
+  setProgress(0);
+  const page = await state.pdf.getPage(index + 1);
+  const vp = page.getViewport({ scale: CANONICAL_DPI / 72 });
+  const W = Math.ceil(vp.width), H = Math.ceil(vp.height);
+  if (W * H > SETTINGS.maxPagePixels) {
+    setStatus(`Page is ${W}x${H} px at ${CANONICAL_DPI} DPI, above the ${SETTINGS.maxPagePixels / 1e6}M pixel limit.`, true);
+    return;
+  }
+  const canvas = $("pageCanvas");
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+  try {
+    await page.render({ canvasContext: ctx, viewport: vp, background: "rgb(255,255,255)" }).promise;
+  } catch (e) {
+    setStatus(`Rendering failed: ${e.message}`, true);
+    return;
+  }
+  let data;
+  try {
+    data = ctx.getImageData(0, 0, W, H).data;
+  } catch (e) {
+    setStatus("This browser could not hold the page image. Try a desktop browser (Chrome, Edge or Firefox).", true);
+    return;
+  }
+  // cv2.COLOR_RGB2GRAY fixed-point weights, so scores match the Python detector.
+  const gray = new Uint8Array(W * H);
+  for (let i = 0, j = 0; i < gray.length; i++, j += 4) {
+    gray[i] = (data[j] * 4899 + data[j + 1] * 9617 + data[j + 2] * 1868 + 8192) >> 14;
+  }
+  state.W = W; state.H = H; state.gray = gray;
+  $("overlay").setAttribute("viewBox", `0 0 ${W} ${H}`);
+  fitZoom();
+  const label = state.isSample ? '<span class="tag">Sample</span>' : "";
+  $("docLine").innerHTML = `${label}${escapeHtml(state.fileName)} · page ${index + 1} · ${W}×${H} px @ ${CANONICAL_DPI} DPI · ${state.docVersion.slice(0, 19)}…`;
+  $("step1").classList.add("done");
+  setStatus(state.isSample ? "" : "Now drag a box around one receptacle symbol.");
+  drawOverlay();
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ---------- Zoom and pan ----------
+
+function applyZoom(z, anchorClient) {
+  const vpEl = $("viewport");
+  const stage = $("stage");
+  const old = state.zoom;
+  z = Math.min(4, Math.max(0.05, z));
+  let ax, ay;
+  const rect = vpEl.getBoundingClientRect();
+  if (anchorClient) { ax = anchorClient.x - rect.left; ay = anchorClient.y - rect.top; }
+  else { ax = vpEl.clientWidth / 2; ay = vpEl.clientHeight / 2; }
+  const pageX = (vpEl.scrollLeft + ax - 24) / old;
+  const pageY = (vpEl.scrollTop + ay - 24) / old;
+  state.zoom = z;
+  stage.style.width = `${state.W * z}px`;
+  stage.style.height = `${state.H * z}px`;
+  vpEl.scrollLeft = pageX * z + 24 - ax;
+  vpEl.scrollTop = pageY * z + 24 - ay;
+  $("zoomLabel").textContent = `${Math.round(z * 100)}%`;
+  drawOverlay();
+}
+
+function fitZoom() {
+  const vpEl = $("viewport");
+  const z = Math.min((vpEl.clientWidth - 48) / state.W, (vpEl.clientHeight - 48) / state.H);
+  state.zoom = z > 0 ? z : 0.25;
+  applyZoom(state.zoom);
+  vpEl.scrollLeft = 0; vpEl.scrollTop = 0;
+}
+
+function centerOn(x, y, z) {
+  applyZoom(z);
+  const vpEl = $("viewport");
+  vpEl.scrollLeft = x * state.zoom + 24 - vpEl.clientWidth / 2;
+  vpEl.scrollTop = y * state.zoom + 24 - vpEl.clientHeight / 2;
+}
+
+function clientToPage(ev) {
+  const r = $("stage").getBoundingClientRect();
+  return { x: ((ev.clientX - r.left) / r.width) * state.W, y: ((ev.clientY - r.top) / r.height) * state.H };
+}
+
+function setTool(tool) {
+  state.tool = tool;
+  $("toolSelect").setAttribute("aria-pressed", String(tool === "select"));
+  $("toolPan").setAttribute("aria-pressed", String(tool === "pan"));
+  $("viewport").classList.toggle("select", tool === "select");
+  $("viewport").classList.toggle("pan", tool === "pan");
+}
+
+let drag = null;
+function onPointerDown(ev) {
+  if (!state.gray || ev.button > 0) return;
+  const vpEl = $("viewport");
+  vpEl.setPointerCapture(ev.pointerId);
+  if (state.tool === "pan" || ev.target === vpEl) {
+    drag = { kind: "pan", sx: ev.clientX, sy: ev.clientY, sl: vpEl.scrollLeft, st: vpEl.scrollTop };
+    vpEl.classList.add("dragging");
+  } else {
+    const p = clientToPage(ev);
+    drag = { kind: "box", x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+  }
+}
+function onPointerMove(ev) {
+  if (!drag) return;
+  const vpEl = $("viewport");
+  if (drag.kind === "pan") {
+    vpEl.scrollLeft = drag.sl - (ev.clientX - drag.sx);
+    vpEl.scrollTop = drag.st - (ev.clientY - drag.sy);
+  } else {
+    const p = clientToPage(ev);
+    drag.x1 = p.x; drag.y1 = p.y;
+    drawOverlay();
+  }
+}
+function onPointerUp() {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  $("viewport").classList.remove("dragging");
+  if (d.kind !== "box") return;
+  const x0 = Math.max(0, Math.floor(Math.min(d.x0, d.x1)));
+  const y0 = Math.max(0, Math.floor(Math.min(d.y0, d.y1)));
+  const x1 = Math.min(state.W, Math.ceil(Math.max(d.x0, d.x1)));
+  const y1 = Math.min(state.H, Math.ceil(Math.max(d.y0, d.y1)));
+  if (x1 - x0 < 4 || y1 - y0 < 4) { drawOverlay(); return; }
+  setBox(trimToInk({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 }));
+}
+
+// Shrink a box to its non-white content plus a 2 px margin.
+function trimToInk(b) {
+  const { gray, W, H } = state;
+  let minX = Infinity, minY = Infinity, maxX = -1, maxY = -1;
+  for (let y = b.y; y < b.y + b.h; y++) {
+    for (let x = b.x; x < b.x + b.w; x++) {
+      if (gray[y * W + x] < 200) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return b;
+  const pad = 2;
+  const x = Math.max(b.x, minX - pad), y = Math.max(b.y, minY - pad);
+  const x2 = Math.min(b.x + b.w, maxX + 1 + pad), y2 = Math.min(b.y + b.h, maxY + 1 + pad);
+  return { x: Math.max(0, x), y: Math.max(0, y), w: Math.min(W, x2) - x, h: Math.min(H, y2) - y };
+}
+
+function setBox(b) {
+  state.box = b;
+  updateTemplatePanel();
+  drawOverlay();
+  if (b) setStatus("Symbol selected. Press Scan page.");
+}
+
+function updateTemplatePanel() {
+  const b = state.box;
+  const c = $("tplCanvas");
+  $("scanBtn").disabled = !b;
+  $("step2").classList.toggle("done", !!b);
+  for (const [id, k] of [["bx", "x"], ["by", "y"], ["bw", "w"], ["bh", "h"]]) $(id).value = b ? b[k] : "";
+  if (!b) {
+    c.width = 1; c.height = 1;
+    $("tplMeta").textContent = "No symbol selected";
+    return;
+  }
+  c.width = b.w; c.height = b.h;
+  const scale = Math.max(1, Math.min(4, Math.floor(110 / Math.max(b.w, b.h))));
+  c.style.width = `${b.w * scale}px`; c.style.height = `${b.h * scale}px`;
+  c.getContext("2d").drawImage($("pageCanvas"), b.x, b.y, b.w, b.h, 0, 0, b.w, b.h);
+  $("tplMeta").innerHTML = `${b.w} × ${b.h} px<br>at (${b.x}, ${b.y})`;
+}
+
+function onBoxInput() {
+  if (!state.gray) return;
+  const v = ["bx", "by", "bw", "bh"].map((id) => parseInt($(id).value, 10));
+  if (v.some((n) => !Number.isFinite(n))) return;
+  let [x, y, w, h] = v;
+  x = Math.max(0, Math.min(state.W - 1, x)); y = Math.max(0, Math.min(state.H - 1, y));
+  w = Math.max(1, Math.min(state.W - x, w)); h = Math.max(1, Math.min(state.H - y, h));
+  setBox({ x, y, w, h });
+}
+
+// ---------- Overlay ----------
+
+function visibleCandidates() {
+  if (!state.scan) return [];
+  const thr = parseFloat($("thr").value);
+  return state.scan.candidates.filter((c) => c.score >= thr - 1e-9).slice(0, SETTINGS.maxCandidates);
+}
+
+function drawOverlay() {
+  const svg = $("overlay");
+  svg.innerHTML = "";
+  const z = state.zoom;
+  const px = (n) => n / z;   // screen px -> page px
+  if (state.scan) {
+    const g = document.createElementNS(SVGNS, "g");
+    visibleCandidates().forEach((c, i) => {
+      const r = document.createElementNS(SVGNS, "rect");
+      const pad = 3;
+      r.setAttribute("x", c.x - pad); r.setAttribute("y", c.y - pad);
+      r.setAttribute("width", c.w + 2 * pad); r.setAttribute("height", c.h + 2 * pad);
+      r.setAttribute("class", i === state.selected ? "det sel" : "det");
+      r.setAttribute("vector-effect", "non-scaling-stroke");
+      g.appendChild(r);
+      if (z >= 0.18) {
+        const t = document.createElementNS(SVGNS, "text");
+        t.setAttribute("x", c.x - pad);
+        t.setAttribute("y", c.y - pad - px(4));
+        t.setAttribute("font-size", px(11));
+        t.setAttribute("class", "det-label");
+        t.textContent = `${i + 1} · ${c.score.toFixed(2)}`;
+        g.appendChild(t);
+      }
+    });
+    svg.appendChild(g);
+  }
+  if (state.box) {
+    const b = state.box;
+    const r = document.createElementNS(SVGNS, "rect");
+    r.setAttribute("x", b.x - px(3)); r.setAttribute("y", b.y - px(3));
+    r.setAttribute("width", b.w + px(6)); r.setAttribute("height", b.h + px(6));
+    r.setAttribute("class", "tplbox");
+    r.setAttribute("vector-effect", "non-scaling-stroke");
+    svg.appendChild(r);
+  }
+  if (drag && drag.kind === "box") {
+    const r = document.createElementNS(SVGNS, "rect");
+    r.setAttribute("x", Math.min(drag.x0, drag.x1)); r.setAttribute("y", Math.min(drag.y0, drag.y1));
+    r.setAttribute("width", Math.abs(drag.x1 - drag.x0)); r.setAttribute("height", Math.abs(drag.y1 - drag.y0));
+    r.setAttribute("class", "drag");
+    r.setAttribute("vector-effect", "non-scaling-stroke");
+    svg.appendChild(r);
+  }
+}
+
+// ---------- Scanning ----------
+
+let worker = null;
+function getWorker() {
+  if (!worker) {
+    const blob = new Blob([$("matcherSrc").textContent], { type: "text/javascript" });
+    worker = new Worker(URL.createObjectURL(blob));
+  }
+  return worker;
+}
+
+function runScan() {
+  if (!state.box || !state.gray) return;
+  const rotations = [0, 90, 180, 270].filter((r) => $(`rot${r}`).checked);
+  if (!rotations.length) { setStatus("Tick at least one rotation.", true); return; }
+  $("scanBtn").disabled = true;
+  setStatus("Scanning…");
+  setProgress(0);
+  const w = getWorker();
+  const box = { ...state.box };
+  const t0 = performance.now();
+  w.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === "progress") {
+      setProgress(m.fraction);
+      setStatus(`Scanning… ${Math.round(m.fraction * 100)}%`);
+    } else if (m.type === "done") {
+      state.scan = m.result;
+      state.scanBox = box;
+      state.scanRotations = rotations;
+      state.selected = -1;
+      $("scanBtn").disabled = false;
+      $("step3").classList.add("done");
+      setStatus(`Scanned ${rotations.length} rotation(s) in ${((performance.now() - t0) / 1000).toFixed(1)} s.`);
+      $("results").hidden = false;
+      renderResults();
+    } else if (m.type === "error") {
+      $("scanBtn").disabled = false;
+      setProgress(0);
+      setStatus(m.message, true);
+    }
+  };
+  w.onerror = (e) => {
+    $("scanBtn").disabled = false;
+    setStatus(`Scan failed: ${e.message || "the worker stopped"}. The page may be too large for this browser.`, true);
+    worker = null;
+  };
+  // Copy, so the page keeps its raster for re-scans.
+  const gray = state.gray.slice();
+  w.postMessage({ gray, W: state.W, H: state.H, box, rotations, ...SETTINGS }, [gray.buffer]);
+}
+
+// ---------- Results ----------
+
+function renderResults() {
+  const thr = parseFloat($("thr").value);
+  $("thrOut").textContent = thr.toFixed(2);
+  const vis = visibleCandidates();
+  const all = state.scan.candidates;
+  $("countBig").textContent = String(vis.length);
+  $("countOf").textContent = `match${vis.length === 1 ? "" : "es"} at ≥ ${thr.toFixed(2)} · ${all.length} above 0.50`;
+  drawHistogram(all, thr);
+
+  const warns = [...state.scan.warnings];
+  if (all.filter((c) => c.score >= thr).length > SETTINGS.maxCandidates) warns.push(`Showing the best ${SETTINGS.maxCandidates}. Raise the threshold.`);
+  if (state.scan.truncatedAtFloor) warns.push("Over 2000 weak matches at one rotation; low-threshold counts may be incomplete.");
+  $("warnings").innerHTML = warns.map((w) => `<div class="warnbox">${escapeHtml(w)}</div>`).join("");
+
+  const rows = vis.map((c, i) => `<tr data-i="${i}" class="${i === state.selected ? "sel" : ""}"><td>${i + 1}</td><td>${c.score.toFixed(3)}</td><td>${c.rotation}°</td><td>${(c.x + c.w / 2).toFixed(0)}</td><td>${(c.y + c.h / 2).toFixed(0)}</td></tr>`).join("");
+  $("list").innerHTML = `<table><thead><tr><th>#</th><th>score</th><th>rot</th><th>x</th><th>y</th></tr></thead><tbody>${rows}</tbody></table>`;
+  $("jsonFallback").hidden = true;
+  drawOverlay();
+}
+
+function drawHistogram(all, thr) {
+  const lo = 0.5, hi = 1.0, bins = 25, bw = (hi - lo) / bins;
+  const counts = new Array(bins).fill(0);
+  for (const c of all) counts[Math.min(bins - 1, Math.max(0, Math.floor((c.score - lo) / bw)))]++;
+  const maxC = Math.max(1, ...counts);
+  const Wd = 300, Hd = 84, top = 6, base = 64;
+  const slot = Wd / bins;
+  let bars = "";
+  counts.forEach((n, i) => {
+    const h = n ? Math.max(2, (n / maxC) * (base - top)) : 0;
+    const x = i * slot + 1, w = slot - 2;
+    const on = lo + (i + 1) * bw > thr + 1e-9;
+    const r = Math.min(3, w / 2, h);
+    const y = base - h;
+    const path = h ? `M${x},${base} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${base} Z` : "";
+    bars += `<rect x="${i * slot}" y="${top}" width="${slot}" height="${base - top}" fill="transparent" data-i="${i}" data-n="${n}"></rect>`;
+    if (path) bars += `<path d="${path}" fill="${on ? "var(--redline)" : "var(--bar-off)"}" pointer-events="none"></path>`;
+  });
+  const tx = ((thr - lo) / (hi - lo)) * Wd;
+  const ticks = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0].map((v) => {
+    const x = ((v - lo) / (hi - lo)) * Wd;
+    const anchor = v === 0.5 ? "start" : v === 1.0 ? "end" : "middle";
+    return `<text x="${x}" y="${base + 14}" font-size="10" text-anchor="${anchor}" fill="var(--muted)" font-family="var(--mono)">${v.toFixed(1)}</text>`;
+  }).join("");
+  $("hist").innerHTML = `<svg viewBox="0 0 ${Wd} ${Hd}" role="img" aria-label="Distribution of match scores from 0.5 to 1.0">
+    <line x1="0" x2="${Wd}" y1="${base}" y2="${base}" stroke="var(--line)"></line>
+    ${bars}
+    <line x1="${tx}" x2="${tx}" y1="${top - 4}" y2="${base}" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="3 2"></line>
+    ${ticks}
+  </svg><div class="tip" hidden></div>`;
+  const svg = $("hist").querySelector("svg"), tip = $("hist").querySelector(".tip");
+  svg.addEventListener("pointermove", (e) => {
+    const t = e.target;
+    if (!t.dataset || t.dataset.i === undefined) { tip.hidden = true; return; }
+    const i = +t.dataset.i;
+    const a = (lo + i * bw).toFixed(2), b = (lo + (i + 1) * bw).toFixed(2);
+    tip.textContent = `${a}–${b}: ${t.dataset.n} match${t.dataset.n === "1" ? "" : "es"}`;
+    const box = $("hist").getBoundingClientRect();
+    tip.style.left = `${((i + 0.5) / bins) * box.width}px`;
+    tip.style.top = `${(top / Hd) * box.height}px`;
+    tip.hidden = false;
+  });
+  svg.addEventListener("pointerleave", () => { tip.hidden = true; });
+}
+
+function buildExport() {
+  const thr = parseFloat($("thr").value);
+  const b = state.scanBox;
+  const tpl = new Uint8Array(b.w * b.h);
+  for (let y = 0; y < b.h; y++) for (let x = 0; x < b.w; x++) tpl[y * b.w + x] = state.gray[(b.y + y) * state.W + b.x + x];
+  return {
+    format: "pinny.detections",
+    format_version: 1,
+    provenance: "original_detector_output",
+    scan_id: uuid4(),
+    document: { document_id: state.docId, document_version: state.docVersion, page_index: state.pageIndex },
+    coordinate_frame: { space: "canonical_raster_px", dpi: CANONICAL_DPI, width: state.W, height: state.H, origin: "top-left", y_axis: "down" },
+    template: { box: { x: b.x, y: b.y, width: b.w, height: b.h }, grayscale_bytes: tpl.length },
+    detector: {
+      name: DETECTOR_NAME,
+      version: DETECTOR_VERSION,
+      settings: { threshold: thr, rotations: state.scanRotations, nms_iou_threshold: SETTINGS.nmsIou,
+                  duplicate_center_ratio: SETTINGS.centerRatio, max_candidates: SETTINGS.maxCandidates,
+                  renderer: `pdf.js ${pdfjsLib.version}` },
+    },
+    created_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+    detections: visibleCandidates().map((c, i) => ({
+      id: `det-${i + 1}`,
+      box: { x: c.x, y: c.y, width: c.w, height: c.h },
+      x: c.x + c.w / 2,
+      y: c.y + c.h / 2,
+      score: +c.score.toFixed(6),
+      confidence: +c.score.toFixed(6),
+      rotation: c.rotation,
+      source: "detector",
+    })),
+  };
+}
+
+async function copyJson() {
+  const text = JSON.stringify(buildExport(), null, 2);
+  const btn = $("copyJson");
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = "Copied";
+    setTimeout(() => { btn.textContent = "Copy detections JSON"; }, 1600);
+  } catch (e) {
+    const ta = $("jsonFallback");
+    ta.value = text;
+    ta.hidden = false;
+    ta.focus();
+    ta.select();
+  }
+}
+
+// ---------- Wiring ----------
+
+async function openFile(file) {
+  if (!file) return;
+  if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
+    setStatus(`${file.name} is not a PDF.`, true);
+    return;
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  await openPdf(bytes, file.name, false);
+  setTool("select");
+}
+
+$("fileInput").addEventListener("change", (e) => { openFile(e.target.files[0]); e.target.value = ""; });
+$("pageSelect").addEventListener("change", (e) => renderPage(parseInt(e.target.value, 10)));
+for (const id of ["bx", "by", "bw", "bh"]) $(id).addEventListener("change", onBoxInput);
+$("scanBtn").addEventListener("click", runScan);
+$("thr").addEventListener("input", () => { state.selected = -1; renderResults(); });
+$("copyJson").addEventListener("click", copyJson);
+$("toolSelect").addEventListener("click", () => setTool("select"));
+$("toolPan").addEventListener("click", () => setTool("pan"));
+$("zoomIn").addEventListener("click", () => applyZoom(state.zoom * 1.25));
+$("zoomOut").addEventListener("click", () => applyZoom(state.zoom / 1.25));
+$("zoomFit").addEventListener("click", fitZoom);
+$("zoom100").addEventListener("click", () => applyZoom(1));
+$("list").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-i]");
+  if (!tr) return;
+  state.selected = +tr.dataset.i;
+  const c = visibleCandidates()[state.selected];
+  centerOn(c.x + c.w / 2, c.y + c.h / 2, Math.max(state.zoom, 1));
+  renderResults();
+});
+
+const vpEl = $("viewport");
+vpEl.addEventListener("pointerdown", onPointerDown);
+vpEl.addEventListener("pointermove", onPointerMove);
+vpEl.addEventListener("pointerup", onPointerUp);
+vpEl.addEventListener("pointercancel", onPointerUp);
+vpEl.addEventListener("wheel", (e) => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  applyZoom(state.zoom * Math.exp(-e.deltaY * 0.002), { x: e.clientX, y: e.clientY });
+}, { passive: false });
+
+let dragDepth = 0;
+window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; $("drop").hidden = false; });
+window.addEventListener("dragleave", () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $("drop").hidden = true; });
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  $("drop").hidden = true;
+  openFile(e.dataTransfer.files[0]);
+});
+window.addEventListener("resize", () => { if (state.gray) applyZoom(state.zoom); });
+
+// Open in a working state: the sample sheet, its legend symbol boxed, scanned.
+(async function start() {
+  const bin = atob(SAMPLE_PDF_B64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  await openPdf(bytes, "sample-floor-plan.pdf", true);
+  if (!state.gray) return;
+  setBox(trimToInk(SAMPLE_BOX));
+  runScan();
+})();
+</script>
