@@ -1,0 +1,1054 @@
+{
+  "format": "pinny.corpus_report",
+  "format_version": 1,
+  "evaluator": {
+    "name": "pinny_eval",
+    "version": "0.2.0"
+  },
+  "corpus_id": "corpus-mini-v1",
+  "manifest_file": "fixtures/corpus_mini/manifest.json",
+  "description": "Frozen synthetic mini-corpus for the CI regression gate. Validates the evaluator and the gate plumbing; says nothing about real-drawing accuracy.",
+  "status": {
+    "real_drawing_accuracy": "Not measured — verified reference pending",
+    "scope": "synthetic_fixture",
+    "caveats": [],
+    "note": "Synthetic fixture. These numbers validate the evaluator's behaviour; they say nothing about how the detector performs on real drawings."
+  },
+  "verification_status_counts": {
+    "synthetic": 4
+  },
+  "matching": {
+    "tolerance_px": 10,
+    "tolerance_rel": null,
+    "tolerance_mode": "px",
+    "tolerance_precedence": "fixed pixel radius",
+    "tolerance_units": "canonical raster pixels",
+    "distance": "euclidean",
+    "inclusive": true,
+    "algorithm": "maximum-cardinality one-to-one matching; minimum total distance as tie-breaker"
+  },
+  "detectors": [
+    "synthetic-fixture frozen-mini-v1"
+  ],
+  "counts": {
+    "pages": 4,
+    "documents": 2,
+    "predictions": 50,
+    "references": 48,
+    "true_positives": 39,
+    "false_positives": 11,
+    "false_negatives": 9
+  },
+  "micro": {
+    "precision": {
+      "value": 0.78,
+      "numerator": 39,
+      "denominator": 50,
+      "undefined_reason": null
+    },
+    "recall": {
+      "value": 0.8125,
+      "numerator": 39,
+      "denominator": 48,
+      "undefined_reason": null
+    },
+    "f1": {
+      "value": 0.7959183673469388,
+      "numerator": 78,
+      "denominator": 98,
+      "undefined_reason": null
+    }
+  },
+  "macro": {
+    "precision": {
+      "value": 0.6033549783549783,
+      "pages_included": 4,
+      "pages_excluded_undefined": 0,
+      "undefined_reason": null
+    },
+    "recall": {
+      "value": 0.8044733044733045,
+      "pages_included": 3,
+      "pages_excluded_undefined": 1,
+      "undefined_reason": null
+    },
+    "f1": {
+      "value": 0.6033549783549783,
+      "pages_included": 4,
+      "pages_excluded_undefined": 0,
+      "undefined_reason": null
+    }
+  },
+  "aggregation_note": "micro = pooled TP/FP/FN then divided (the headline); macro = unweighted mean of per-page values over pages where the value is defined",
+  "curve": {
+    "available": true,
+    "note": null,
+    "method": "incremental maximum-cardinality matching at every distinct confidence",
+    "ap_method": "all-point interpolated (PASCAL VOC 2010+), recall from 0; not COCO 101-point",
+    "references": 48,
+    "detections": 50,
+    "thresholds": 47,
+    "ap": 0.8056700244200244,
+    "best_f1": {
+      "threshold": 0.768,
+      "detections": 39,
+      "tp": 38,
+      "fp": 1,
+      "fn": 10,
+      "precision": 0.9743589743589743,
+      "recall": 0.7916666666666666,
+      "f1": 0.8735632183908046
+    },
+    "precision_at_recall_0_95": null,
+    "recall_at_precision_0_95": {
+      "threshold": 0.768,
+      "detections": 39,
+      "tp": 38,
+      "fp": 1,
+      "fn": 10,
+      "precision": 0.9743589743589743,
+      "recall": 0.7916666666666666,
+      "f1": 0.8735632183908046
+    },
+    "points": [
+      {
+        "threshold": 0.988,
+        "detections": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 47,
+        "precision": 1.0,
+        "recall": 0.020833333333333332,
+        "f1": 0.04081632653061224
+      },
+      {
+        "threshold": 0.984,
+        "detections": 2,
+        "tp": 2,
+        "fp": 0,
+        "fn": 46,
+        "precision": 1.0,
+        "recall": 0.041666666666666664,
+        "f1": 0.08
+      },
+      {
+        "threshold": 0.98,
+        "detections": 3,
+        "tp": 3,
+        "fp": 0,
+        "fn": 45,
+        "precision": 1.0,
+        "recall": 0.0625,
+        "f1": 0.11764705882352941
+      },
+      {
+        "threshold": 0.967,
+        "detections": 4,
+        "tp": 4,
+        "fp": 0,
+        "fn": 44,
+        "precision": 1.0,
+        "recall": 0.08333333333333333,
+        "f1": 0.15384615384615385
+      },
+      {
+        "threshold": 0.956,
+        "detections": 5,
+        "tp": 5,
+        "fp": 0,
+        "fn": 43,
+        "precision": 1.0,
+        "recall": 0.10416666666666667,
+        "f1": 0.18867924528301888
+      },
+      {
+        "threshold": 0.944,
+        "detections": 6,
+        "tp": 6,
+        "fp": 0,
+        "fn": 42,
+        "precision": 1.0,
+        "recall": 0.125,
+        "f1": 0.2222222222222222
+      },
+      {
+        "threshold": 0.938,
+        "detections": 7,
+        "tp": 7,
+        "fp": 0,
+        "fn": 41,
+        "precision": 1.0,
+        "recall": 0.14583333333333334,
+        "f1": 0.2545454545454545
+      },
+      {
+        "threshold": 0.932,
+        "detections": 8,
+        "tp": 8,
+        "fp": 0,
+        "fn": 40,
+        "precision": 1.0,
+        "recall": 0.16666666666666666,
+        "f1": 0.2857142857142857
+      },
+      {
+        "threshold": 0.923,
+        "detections": 9,
+        "tp": 9,
+        "fp": 0,
+        "fn": 39,
+        "precision": 1.0,
+        "recall": 0.1875,
+        "f1": 0.3157894736842105
+      },
+      {
+        "threshold": 0.912,
+        "detections": 10,
+        "tp": 10,
+        "fp": 0,
+        "fn": 38,
+        "precision": 1.0,
+        "recall": 0.20833333333333334,
+        "f1": 0.3448275862068966
+      },
+      {
+        "threshold": 0.911,
+        "detections": 11,
+        "tp": 11,
+        "fp": 0,
+        "fn": 37,
+        "precision": 1.0,
+        "recall": 0.22916666666666666,
+        "f1": 0.3728813559322034
+      },
+      {
+        "threshold": 0.908,
+        "detections": 12,
+        "tp": 12,
+        "fp": 0,
+        "fn": 36,
+        "precision": 1.0,
+        "recall": 0.25,
+        "f1": 0.4
+      },
+      {
+        "threshold": 0.89,
+        "detections": 13,
+        "tp": 13,
+        "fp": 0,
+        "fn": 35,
+        "precision": 1.0,
+        "recall": 0.2708333333333333,
+        "f1": 0.4262295081967213
+      },
+      {
+        "threshold": 0.878,
+        "detections": 14,
+        "tp": 14,
+        "fp": 0,
+        "fn": 34,
+        "precision": 1.0,
+        "recall": 0.2916666666666667,
+        "f1": 0.45161290322580644
+      },
+      {
+        "threshold": 0.874,
+        "detections": 15,
+        "tp": 15,
+        "fp": 0,
+        "fn": 33,
+        "precision": 1.0,
+        "recall": 0.3125,
+        "f1": 0.47619047619047616
+      },
+      {
+        "threshold": 0.868,
+        "detections": 16,
+        "tp": 16,
+        "fp": 0,
+        "fn": 32,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      },
+      {
+        "threshold": 0.862,
+        "detections": 17,
+        "tp": 17,
+        "fp": 0,
+        "fn": 31,
+        "precision": 1.0,
+        "recall": 0.3541666666666667,
+        "f1": 0.5230769230769231
+      },
+      {
+        "threshold": 0.858,
+        "detections": 18,
+        "tp": 18,
+        "fp": 0,
+        "fn": 30,
+        "precision": 1.0,
+        "recall": 0.375,
+        "f1": 0.5454545454545454
+      },
+      {
+        "threshold": 0.853,
+        "detections": 19,
+        "tp": 19,
+        "fp": 0,
+        "fn": 29,
+        "precision": 1.0,
+        "recall": 0.3958333333333333,
+        "f1": 0.5671641791044776
+      },
+      {
+        "threshold": 0.852,
+        "detections": 20,
+        "tp": 20,
+        "fp": 0,
+        "fn": 28,
+        "precision": 1.0,
+        "recall": 0.4166666666666667,
+        "f1": 0.5882352941176471
+      },
+      {
+        "threshold": 0.848,
+        "detections": 21,
+        "tp": 21,
+        "fp": 0,
+        "fn": 27,
+        "precision": 1.0,
+        "recall": 0.4375,
+        "f1": 0.6086956521739131
+      },
+      {
+        "threshold": 0.842,
+        "detections": 22,
+        "tp": 22,
+        "fp": 0,
+        "fn": 26,
+        "precision": 1.0,
+        "recall": 0.4583333333333333,
+        "f1": 0.6285714285714286
+      },
+      {
+        "threshold": 0.83,
+        "detections": 24,
+        "tp": 24,
+        "fp": 0,
+        "fn": 24,
+        "precision": 1.0,
+        "recall": 0.5,
+        "f1": 0.6666666666666666
+      },
+      {
+        "threshold": 0.824,
+        "detections": 25,
+        "tp": 25,
+        "fp": 0,
+        "fn": 23,
+        "precision": 1.0,
+        "recall": 0.5208333333333334,
+        "f1": 0.684931506849315
+      },
+      {
+        "threshold": 0.822,
+        "detections": 27,
+        "tp": 27,
+        "fp": 0,
+        "fn": 21,
+        "precision": 1.0,
+        "recall": 0.5625,
+        "f1": 0.72
+      },
+      {
+        "threshold": 0.817,
+        "detections": 28,
+        "tp": 28,
+        "fp": 0,
+        "fn": 20,
+        "precision": 1.0,
+        "recall": 0.5833333333333334,
+        "f1": 0.7368421052631579
+      },
+      {
+        "threshold": 0.81,
+        "detections": 29,
+        "tp": 28,
+        "fp": 1,
+        "fn": 20,
+        "precision": 0.9655172413793104,
+        "recall": 0.5833333333333334,
+        "f1": 0.7272727272727273
+      },
+      {
+        "threshold": 0.804,
+        "detections": 30,
+        "tp": 29,
+        "fp": 1,
+        "fn": 19,
+        "precision": 0.9666666666666667,
+        "recall": 0.6041666666666666,
+        "f1": 0.7435897435897436
+      },
+      {
+        "threshold": 0.799,
+        "detections": 31,
+        "tp": 30,
+        "fp": 1,
+        "fn": 18,
+        "precision": 0.967741935483871,
+        "recall": 0.625,
+        "f1": 0.759493670886076
+      },
+      {
+        "threshold": 0.798,
+        "detections": 33,
+        "tp": 32,
+        "fp": 1,
+        "fn": 16,
+        "precision": 0.9696969696969697,
+        "recall": 0.6666666666666666,
+        "f1": 0.7901234567901234
+      },
+      {
+        "threshold": 0.785,
+        "detections": 34,
+        "tp": 33,
+        "fp": 1,
+        "fn": 15,
+        "precision": 0.9705882352941176,
+        "recall": 0.6875,
+        "f1": 0.8048780487804879
+      },
+      {
+        "threshold": 0.779,
+        "detections": 35,
+        "tp": 34,
+        "fp": 1,
+        "fn": 14,
+        "precision": 0.9714285714285714,
+        "recall": 0.7083333333333334,
+        "f1": 0.8192771084337349
+      },
+      {
+        "threshold": 0.777,
+        "detections": 36,
+        "tp": 35,
+        "fp": 1,
+        "fn": 13,
+        "precision": 0.9722222222222222,
+        "recall": 0.7291666666666666,
+        "f1": 0.8333333333333334
+      },
+      {
+        "threshold": 0.776,
+        "detections": 37,
+        "tp": 36,
+        "fp": 1,
+        "fn": 12,
+        "precision": 0.972972972972973,
+        "recall": 0.75,
+        "f1": 0.8470588235294118
+      },
+      {
+        "threshold": 0.774,
+        "detections": 38,
+        "tp": 37,
+        "fp": 1,
+        "fn": 11,
+        "precision": 0.9736842105263158,
+        "recall": 0.7708333333333334,
+        "f1": 0.8604651162790697
+      },
+      {
+        "threshold": 0.768,
+        "detections": 39,
+        "tp": 38,
+        "fp": 1,
+        "fn": 10,
+        "precision": 0.9743589743589743,
+        "recall": 0.7916666666666666,
+        "f1": 0.8735632183908046
+      },
+      {
+        "threshold": 0.766,
+        "detections": 40,
+        "tp": 38,
+        "fp": 2,
+        "fn": 10,
+        "precision": 0.95,
+        "recall": 0.7916666666666666,
+        "f1": 0.8636363636363636
+      },
+      {
+        "threshold": 0.752,
+        "detections": 41,
+        "tp": 38,
+        "fp": 3,
+        "fn": 10,
+        "precision": 0.926829268292683,
+        "recall": 0.7916666666666666,
+        "f1": 0.8539325842696629
+      },
+      {
+        "threshold": 0.74,
+        "detections": 42,
+        "tp": 39,
+        "fp": 3,
+        "fn": 9,
+        "precision": 0.9285714285714286,
+        "recall": 0.8125,
+        "f1": 0.8666666666666667
+      },
+      {
+        "threshold": 0.726,
+        "detections": 43,
+        "tp": 39,
+        "fp": 4,
+        "fn": 9,
+        "precision": 0.9069767441860465,
+        "recall": 0.8125,
+        "f1": 0.8571428571428571
+      },
+      {
+        "threshold": 0.665,
+        "detections": 44,
+        "tp": 39,
+        "fp": 5,
+        "fn": 9,
+        "precision": 0.8863636363636364,
+        "recall": 0.8125,
+        "f1": 0.8478260869565217
+      },
+      {
+        "threshold": 0.66,
+        "detections": 45,
+        "tp": 39,
+        "fp": 6,
+        "fn": 9,
+        "precision": 0.8666666666666667,
+        "recall": 0.8125,
+        "f1": 0.8387096774193549
+      },
+      {
+        "threshold": 0.658,
+        "detections": 46,
+        "tp": 39,
+        "fp": 7,
+        "fn": 9,
+        "precision": 0.8478260869565217,
+        "recall": 0.8125,
+        "f1": 0.8297872340425532
+      },
+      {
+        "threshold": 0.644,
+        "detections": 47,
+        "tp": 39,
+        "fp": 8,
+        "fn": 9,
+        "precision": 0.8297872340425532,
+        "recall": 0.8125,
+        "f1": 0.8210526315789474
+      },
+      {
+        "threshold": 0.636,
+        "detections": 48,
+        "tp": 39,
+        "fp": 9,
+        "fn": 9,
+        "precision": 0.8125,
+        "recall": 0.8125,
+        "f1": 0.8125
+      },
+      {
+        "threshold": 0.622,
+        "detections": 49,
+        "tp": 39,
+        "fp": 10,
+        "fn": 9,
+        "precision": 0.7959183673469388,
+        "recall": 0.8125,
+        "f1": 0.8041237113402062
+      },
+      {
+        "threshold": 0.602,
+        "detections": 50,
+        "tp": 39,
+        "fp": 11,
+        "fn": 9,
+        "precision": 0.78,
+        "recall": 0.8125,
+        "f1": 0.7959183673469388
+      }
+    ]
+  },
+  "localization": {
+    "matched_pairs": 39,
+    "mean_distance_px": 3.7812252630295857,
+    "median_distance_px": 3.7336309405188928,
+    "p95_distance_px": 5.826477649699135,
+    "max_distance_px": 6.32534584034737,
+    "mean_dx_px": 0.3538461538461682,
+    "mean_dy_px": -0.30256410256411015,
+    "percentile_method": "linear interpolation"
+  },
+  "runtime": {
+    "pages_with_runtime": 4,
+    "pages_without_runtime": 0,
+    "p50_seconds": 1.7625000000000002,
+    "p95_seconds": 2.1474,
+    "mean_seconds": 1.7420000000000002,
+    "total_seconds": 6.968000000000001
+  },
+  "per_page": [
+    {
+      "page_label": "doc-alpha p0",
+      "document": "doc-alpha",
+      "tags": [
+        "vector"
+      ],
+      "identity": {
+        "document_id": "doc-alpha",
+        "document_version": "sha256:mini-doc-alpha",
+        "page_index": 0
+      },
+      "scan_id": "mini-scan-doc-alpha_p0",
+      "detector": {
+        "name": "synthetic-fixture",
+        "version": "frozen-mini-v1"
+      },
+      "dataset_id": "corpus-mini-doc-alpha_p0",
+      "verification_status": "synthetic",
+      "detections_file": "pages/doc-alpha_p0.detections.json",
+      "detections_sha256": "bebedf8d1a2ffb2dce002b0bb823237c218a8143cfd1829c2b2b06271511c42f",
+      "ground_truth_file": "pages/doc-alpha_p0.ground_truth.json",
+      "ground_truth_sha256": "88fd1fe21ffdbf100fa627410526382543ef269036bdc87c7cf48faa88036251",
+      "counts": {
+        "predictions": 14,
+        "references": 14,
+        "true_positives": 13,
+        "false_positives": 1,
+        "false_negatives": 1
+      },
+      "metrics": {
+        "precision": {
+          "value": 0.9285714285714286,
+          "numerator": 13,
+          "denominator": 14,
+          "undefined_reason": null
+        },
+        "recall": {
+          "value": 0.9285714285714286,
+          "numerator": 13,
+          "denominator": 14,
+          "undefined_reason": null
+        },
+        "f1": {
+          "value": 0.9285714285714286,
+          "numerator": 26,
+          "denominator": 28,
+          "undefined_reason": null
+        }
+      },
+      "ap": 0.9234693877551021,
+      "runtime_seconds": 1.721,
+      "localization": {
+        "matched_pairs": 13,
+        "mean_distance_px": 3.6082913616694743,
+        "median_distance_px": 3.7336309405188928,
+        "p95_distance_px": 5.544031013343196,
+        "max_distance_px": 6.080296045424032,
+        "mean_dx_px": -0.1846153846153446,
+        "mean_dy_px": -0.4461538461538667,
+        "percentile_method": "linear interpolation"
+      }
+    },
+    {
+      "page_label": "doc-alpha p1",
+      "document": "doc-alpha",
+      "tags": [
+        "vector",
+        "dense"
+      ],
+      "identity": {
+        "document_id": "doc-alpha",
+        "document_version": "sha256:mini-doc-alpha",
+        "page_index": 1
+      },
+      "scan_id": "mini-scan-doc-alpha_p1",
+      "detector": {
+        "name": "synthetic-fixture",
+        "version": "frozen-mini-v1"
+      },
+      "dataset_id": "corpus-mini-doc-alpha_p1",
+      "verification_status": "synthetic",
+      "detections_file": "pages/doc-alpha_p1.detections.json",
+      "detections_sha256": "3d7f789626b0edb3ea01ea30fa6ec310dad1fb67e010ae8f27be634d1f64063f",
+      "ground_truth_file": "pages/doc-alpha_p1.ground_truth.json",
+      "ground_truth_sha256": "f703b33802a998ca204bc6ecc0e833859e5ebae5462818ea5e1b12f0b9996bd8",
+      "counts": {
+        "predictions": 22,
+        "references": 22,
+        "true_positives": 18,
+        "false_positives": 4,
+        "false_negatives": 4
+      },
+      "metrics": {
+        "precision": {
+          "value": 0.8181818181818182,
+          "numerator": 18,
+          "denominator": 22,
+          "undefined_reason": null
+        },
+        "recall": {
+          "value": 0.8181818181818182,
+          "numerator": 18,
+          "denominator": 22,
+          "undefined_reason": null
+        },
+        "f1": {
+          "value": 0.8181818181818182,
+          "numerator": 36,
+          "denominator": 44,
+          "undefined_reason": null
+        }
+      },
+      "ap": 0.8181818181818182,
+      "runtime_seconds": 2.208,
+      "localization": {
+        "matched_pairs": 18,
+        "mean_distance_px": 4.093739382840048,
+        "median_distance_px": 4.373785545725754,
+        "p95_distance_px": 5.877336140922351,
+        "max_distance_px": 6.32534584034737,
+        "mean_dx_px": 0.2444444444444408,
+        "mean_dy_px": -0.09999999999999748,
+        "percentile_method": "linear interpolation"
+      }
+    },
+    {
+      "page_label": "doc-beta p0",
+      "document": "doc-beta",
+      "tags": [
+        "scanned"
+      ],
+      "identity": {
+        "document_id": "doc-beta",
+        "document_version": "sha256:mini-doc-beta",
+        "page_index": 0
+      },
+      "scan_id": "mini-scan-doc-beta_p0",
+      "detector": {
+        "name": "synthetic-fixture",
+        "version": "frozen-mini-v1"
+      },
+      "dataset_id": "corpus-mini-doc-beta_p0",
+      "verification_status": "synthetic",
+      "detections_file": "pages/doc-beta_p0.detections.json",
+      "detections_sha256": "05cc20c83a795b95e0353825edc0aa36f8cc6c4af22c5e424f2ea3a33294d747",
+      "ground_truth_file": "pages/doc-beta_p0.ground_truth.json",
+      "ground_truth_sha256": "60798ab6dc29f5b9811086db04ad37bf4ed33ea4c8e7adc15f613b261d4098b9",
+      "counts": {
+        "predictions": 12,
+        "references": 12,
+        "true_positives": 8,
+        "false_positives": 4,
+        "false_negatives": 4
+      },
+      "metrics": {
+        "precision": {
+          "value": 0.6666666666666666,
+          "numerator": 8,
+          "denominator": 12,
+          "undefined_reason": null
+        },
+        "recall": {
+          "value": 0.6666666666666666,
+          "numerator": 8,
+          "denominator": 12,
+          "undefined_reason": null
+        },
+        "f1": {
+          "value": 0.6666666666666666,
+          "numerator": 16,
+          "denominator": 24,
+          "undefined_reason": null
+        }
+      },
+      "ap": 0.6666666666666666,
+      "runtime_seconds": 1.235,
+      "localization": {
+        "matched_pairs": 8,
+        "mean_distance_px": 3.359086083166228,
+        "median_distance_px": 3.3325709570621367,
+        "p95_distance_px": 4.765919259117677,
+        "max_distance_px": 5.390732788777353,
+        "mean_dx_px": 1.475000000000013,
+        "mean_dy_px": -0.5250000000000092,
+        "percentile_method": "linear interpolation"
+      }
+    },
+    {
+      "page_label": "doc-beta p2",
+      "document": "doc-beta",
+      "tags": [
+        "scanned"
+      ],
+      "identity": {
+        "document_id": "doc-beta",
+        "document_version": "sha256:mini-doc-beta",
+        "page_index": 2
+      },
+      "scan_id": "mini-scan-doc-beta_p2",
+      "detector": {
+        "name": "synthetic-fixture",
+        "version": "frozen-mini-v1"
+      },
+      "dataset_id": "corpus-mini-doc-beta_p2",
+      "verification_status": "synthetic",
+      "detections_file": "pages/doc-beta_p2.detections.json",
+      "detections_sha256": "95d78de5021fae227fa45c1a146bd067a096f9fcc4aa1853b63066f52aafce54",
+      "ground_truth_file": "pages/doc-beta_p2.ground_truth.json",
+      "ground_truth_sha256": "91b08a5a0f4b77d97ac22322dd0bdd305d084bcbacc2ae063f0b7b89c7af0d0b",
+      "counts": {
+        "predictions": 2,
+        "references": 0,
+        "true_positives": 0,
+        "false_positives": 2,
+        "false_negatives": 0
+      },
+      "metrics": {
+        "precision": {
+          "value": 0.0,
+          "numerator": 0,
+          "denominator": 2,
+          "undefined_reason": null
+        },
+        "recall": {
+          "value": null,
+          "numerator": 0,
+          "denominator": 0,
+          "undefined_reason": "no reference receptacles (TP + FN = 0)"
+        },
+        "f1": {
+          "value": 0.0,
+          "numerator": 0,
+          "denominator": 2,
+          "undefined_reason": null
+        }
+      },
+      "ap": null,
+      "runtime_seconds": 1.804,
+      "localization": {
+        "matched_pairs": 0,
+        "note": "no matched pairs"
+      }
+    }
+  ],
+  "per_document": [
+    {
+      "key": "doc-alpha",
+      "pages": 2,
+      "true_positives": 31,
+      "false_positives": 5,
+      "false_negatives": 5,
+      "metrics": {
+        "precision": {
+          "value": 0.8611111111111112,
+          "numerator": 31,
+          "denominator": 36,
+          "undefined_reason": null
+        },
+        "recall": {
+          "value": 0.8611111111111112,
+          "numerator": 31,
+          "denominator": 36,
+          "undefined_reason": null
+        },
+        "f1": {
+          "value": 0.8611111111111112,
+          "numerator": 62,
+          "denominator": 72,
+          "undefined_reason": null
+        }
+      },
+      "runtime_total_seconds": 3.9290000000000003
+    },
+    {
+      "key": "doc-beta",
+      "pages": 2,
+      "true_positives": 8,
+      "false_positives": 6,
+      "false_negatives": 4,
+      "metrics": {
+        "precision": {
+          "value": 0.5714285714285714,
+          "numerator": 8,
+          "denominator": 14,
+          "undefined_reason": null
+        },
+        "recall": {
+          "value": 0.6666666666666666,
+          "numerator": 8,
+          "denominator": 12,
+          "undefined_reason": null
+        },
+        "f1": {
+          "value": 0.6153846153846154,
+          "numerator": 16,
+          "denominator": 26,
+          "undefined_reason": null
+        }
+      },
+      "runtime_total_seconds": 3.039
+    }
+  ],
+  "per_tag": [
+    {
+      "key": "dense",
+      "pages": 1,
+      "true_positives": 18,
+      "false_positives": 4,
+      "false_negatives": 4,
+      "metrics": {
+        "precision": {
+          "value": 0.8181818181818182,
+          "numerator": 18,
+          "denominator": 22,
+          "undefined_reason": null
+        },
+        "recall": {
+          "value": 0.8181818181818182,
+          "numerator": 18,
+          "denominator": 22,
+          "undefined_reason": null
+        },
+        "f1": {
+          "value": 0.8181818181818182,
+          "numerator": 36,
+          "denominator": 44,
+          "undefined_reason": null
+        }
+      },
+      "runtime_total_seconds": 2.208
+    },
+    {
+      "key": "scanned",
+      "pages": 2,
+      "true_positives": 8,
+      "false_positives": 6,
+      "false_negatives": 4,
+      "metrics": {
+        "precision": {
+          "value": 0.5714285714285714,
+          "numerator": 8,
+          "denominator": 14,
+          "undefined_reason": null
+        },
+        "recall": {
+          "value": 0.6666666666666666,
+          "numerator": 8,
+          "denominator": 12,
+          "undefined_reason": null
+        },
+        "f1": {
+          "value": 0.6153846153846154,
+          "numerator": 16,
+          "denominator": 26,
+          "undefined_reason": null
+        }
+      },
+      "runtime_total_seconds": 3.039
+    },
+    {
+      "key": "vector",
+      "pages": 2,
+      "true_positives": 31,
+      "false_positives": 5,
+      "false_negatives": 5,
+      "metrics": {
+        "precision": {
+          "value": 0.8611111111111112,
+          "numerator": 31,
+          "denominator": 36,
+          "undefined_reason": null
+        },
+        "recall": {
+          "value": 0.8611111111111112,
+          "numerator": 31,
+          "denominator": 36,
+          "undefined_reason": null
+        },
+        "f1": {
+          "value": 0.8611111111111112,
+          "numerator": 62,
+          "denominator": 72,
+          "undefined_reason": null
+        }
+      },
+      "runtime_total_seconds": 3.9290000000000003
+    }
+  ],
+  "worst_pages": [
+    {
+      "page_label": "doc-beta p2",
+      "f1": 0.0,
+      "false_positives": 2,
+      "false_negatives": 0,
+      "detections_file": "pages/doc-beta_p2.detections.json"
+    },
+    {
+      "page_label": "doc-beta p0",
+      "f1": 0.6666666666666666,
+      "false_positives": 4,
+      "false_negatives": 4,
+      "detections_file": "pages/doc-beta_p0.detections.json"
+    },
+    {
+      "page_label": "doc-alpha p1",
+      "f1": 0.8181818181818182,
+      "false_positives": 4,
+      "false_negatives": 4,
+      "detections_file": "pages/doc-alpha_p1.detections.json"
+    },
+    {
+      "page_label": "doc-alpha p0",
+      "f1": 0.9285714285714286,
+      "false_positives": 1,
+      "false_negatives": 1,
+      "detections_file": "pages/doc-alpha_p0.detections.json"
+    }
+  ],
+  "baseline_check": {
+    "baseline_file": "fixtures/corpus_mini/baseline.json",
+    "max_drop": 0.01,
+    "passed": true,
+    "checks": [
+      {
+        "metric": "ap",
+        "baseline": 0.8056700244200244,
+        "current": 0.8056700244200244,
+        "drop": 0.0,
+        "passed": true,
+        "result": "pass"
+      },
+      {
+        "metric": "recall",
+        "baseline": 0.8125,
+        "current": 0.8125,
+        "drop": 0.0,
+        "passed": true,
+        "result": "pass"
+      },
+      {
+        "metric": "f1",
+        "baseline": 0.7959183673469388,
+        "current": 0.7959183673469388,
+        "drop": 0.0,
+        "passed": true,
+        "result": "pass"
+      }
+    ]
+  }
+}

@@ -8,6 +8,8 @@
     "verification": {
       "status": "unverified",
       "independent_of_detector": true,
+      "exhaustive_miss_check": false,
+      "source_scan_id": null,
       "method": "REPLACE-e.g. hand-placed on the canonical raster with detector overlay hidden; second reviewer: NAME",
       "reviewed_by": null
     },
@@ -20,6 +22,7 @@
   },
   "coordinate_frame": {
     "space": "canonical_raster_px",
+    "dpi": 200,
     "width": 0,
     "height": 0,
     "origin": "top-left",

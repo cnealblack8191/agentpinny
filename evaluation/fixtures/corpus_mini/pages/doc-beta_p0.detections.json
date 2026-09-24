@@ -1,0 +1,199 @@
+{
+  "format": "pinny.detections",
+  "format_version": 1,
+  "provenance": "original_detector_output",
+  "scan_id": "mini-scan-doc-beta_p0",
+  "document": {
+    "document_id": "doc-beta",
+    "document_version": "sha256:mini-doc-beta",
+    "page_index": 0
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "dpi": 200,
+    "width": 2000,
+    "height": 1500,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "detector": {
+    "name": "synthetic-fixture",
+    "version": "frozen-mini-v1",
+    "settings": {
+      "note": "generated points with seeded jitter; no detector was run"
+    }
+  },
+  "runtime": {
+    "elapsed_seconds": 1.235
+  },
+  "detections": [
+    {
+      "id": "det-1",
+      "x": 865.8000000000001,
+      "y": 1202.9,
+      "box": {
+        "x": 847,
+        "y": 1190,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.848,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-2",
+      "x": 76.0,
+      "y": 1013.5999999999999,
+      "box": {
+        "x": 58,
+        "y": 1001,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.822,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-3",
+      "x": 504.6,
+      "y": 124.39999999999999,
+      "box": {
+        "x": 486,
+        "y": 112,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.774,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-4",
+      "x": 1306.1999999999998,
+      "y": 919.9,
+      "box": {
+        "x": 1288,
+        "y": 907,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.799,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-5",
+      "x": 1238.3000000000002,
+      "y": 1077.8,
+      "box": {
+        "x": 1220,
+        "y": 1065,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.842,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-6",
+      "x": 964.3000000000001,
+      "y": 1206.8,
+      "box": {
+        "x": 946,
+        "y": 1194,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.777,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-7",
+      "x": 59.2,
+      "y": 52.8,
+      "box": {
+        "x": 41,
+        "y": 40,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.798,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-8",
+      "x": 703.4,
+      "y": 353.5,
+      "box": {
+        "x": 685,
+        "y": 341,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.967,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-9",
+      "x": 1360.9,
+      "y": 483.7,
+      "box": {
+        "x": 1342,
+        "y": 471,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.602,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-10",
+      "x": 1583.7,
+      "y": 438.3,
+      "box": {
+        "x": 1565,
+        "y": 426,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.636,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-11",
+      "x": 269.6,
+      "y": 52.9,
+      "box": {
+        "x": 251,
+        "y": 40,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.622,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-12",
+      "x": 1180.2,
+      "y": 1088.6,
+      "box": {
+        "x": 1162,
+        "y": 1076,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.766,
+      "rotation": 0,
+      "source": "detector"
+    }
+  ]
+}

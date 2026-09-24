@@ -12,7 +12,7 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .matching import Point
 
@@ -26,7 +26,12 @@ FRAME_KEYS = ("space", "width", "height", "origin", "y_axis")
 # in a detections file: corrections are not detector output.
 CORRECTION_SOURCES = {"manual", "user", "user_added", "user_moved", "corrected", "edited"}
 
-VERIFICATION_STATUSES = {"verified", "unverified", "synthetic"}
+CANONICAL_DPI = 200  # docs/contracts.md section 2
+
+VERIFICATION_STATUSES = {"verified", "unverified", "synthetic", "detector_assisted_reviewed"}
+# Labelled by correcting a detector's output, then reviewed. Allowed only with an
+# exhaustive miss check; reports carry a recall-may-be-overstated caveat.
+DETECTOR_ASSISTED = "detector_assisted_reviewed"
 
 
 class InputError(Exception):
@@ -54,8 +59,10 @@ class Frame:
     height: int
     origin: str
     y_axis: str
+    dpi: Optional[float] = None  # optional in files; when present it must be CANONICAL_DPI
 
     def as_dict(self) -> Dict[str, Any]:
+        """The geometric frame (dpi excluded; see ``dpi``)."""
         return {k: getattr(self, k) for k in FRAME_KEYS}
 
 
@@ -69,6 +76,9 @@ class Detections:
     detector: Dict[str, Any]
     points: List[Point]
     confidences: Dict[str, Optional[float]] = field(default_factory=dict)
+    boxes: Dict[str, Tuple[float, float, float, float]] = field(default_factory=dict)
+    runtime_seconds: Optional[float] = None
+    runtime_source: Optional[str] = None
 
 
 @dataclass
@@ -83,6 +93,10 @@ class GroundTruth:
     @property
     def verification_status(self) -> str:
         return self.dataset["verification"]["status"]
+
+    @property
+    def source_scan_id(self) -> Optional[str]:
+        return self.dataset["verification"].get("source_scan_id")
 
 
 def _load_json(path: str) -> tuple:
@@ -156,13 +170,58 @@ def _parse_frame(data: Dict[str, Any], path: str) -> Frame:
     y_axis = _req(fr, "y_axis", where)
     if origin != "top-left" or y_axis != "down":
         raise InputError(f"{where}: only origin 'top-left' with y_axis 'down' is accepted")
+    dpi = None
+    if fr.get("dpi") is not None:
+        dpi = _finite(fr["dpi"], f"{where}.dpi")
+        if dpi != CANONICAL_DPI:
+            raise InputError(
+                f"{where}.dpi is {fr['dpi']!r}; docs/contracts.md fixes the canonical raster at "
+                f"{CANONICAL_DPI} DPI, so coordinates at another resolution cannot be compared"
+            )
     return Frame(
         space=space,
         width=_positive_int(_req(fr, "width", where), f"{where}.width"),
         height=_positive_int(_req(fr, "height", where), f"{where}.height"),
         origin=origin,
         y_axis=y_axis,
+        dpi=dpi,
     )
+
+
+def _parse_box(value: Any, where: str) -> Tuple[float, float, float, float]:
+    if not isinstance(value, dict):
+        raise InputError(f"{where}: must be an object {{x, y, width, height}}")
+    x = _finite(_req(value, "x", where), f"{where}.x")
+    y = _finite(_req(value, "y", where), f"{where}.y")
+    w = _finite(_req(value, "width", where), f"{where}.width")
+    h = _finite(_req(value, "height", where), f"{where}.height")
+    if w <= 0 or h <= 0:
+        raise InputError(f"{where}: width and height must be > 0")
+    return (x, y, w, h)
+
+
+def _parse_runtime(data: Dict[str, Any], path: str) -> Tuple[Optional[float], Optional[str]]:
+    """Optional detector runtime: top-level ``elapsed_seconds`` or ``runtime.elapsed_seconds``."""
+    candidates = []
+    if data.get("elapsed_seconds") is not None:
+        candidates.append((data["elapsed_seconds"], "elapsed_seconds"))
+    rt = data.get("runtime")
+    if isinstance(rt, dict):
+        if rt.get("elapsed_seconds") is not None:
+            candidates.append((rt["elapsed_seconds"], "runtime.elapsed_seconds"))
+    elif rt is not None:
+        raise InputError(f"{path}: runtime must be an object with elapsed_seconds")
+    if not candidates:
+        return None, None
+    values = []
+    for raw, key in candidates:
+        v = _finite(raw, f"{path}: {key}")
+        if v < 0:
+            raise InputError(f"{path}: {key} must be >= 0")
+        values.append((v, key))
+    if len({v for v, _ in values}) > 1:
+        raise InputError(f"{path}: elapsed_seconds and runtime.elapsed_seconds disagree")
+    return values[0]
 
 
 def _parse_points(items: Any, frame: Frame, where: str, *, reject_corrections: bool) -> tuple:
@@ -170,6 +229,7 @@ def _parse_points(items: Any, frame: Frame, where: str, *, reject_corrections: b
         raise InputError(f"{where}: must be a list")
     points: List[Point] = []
     confidences: Dict[str, Optional[float]] = {}
+    boxes: Dict[str, Tuple[float, float, float, float]] = {}
     seen = set()
     for i, item in enumerate(items):
         iw = f"{where}[{i}]"
@@ -194,10 +254,15 @@ def _parse_points(items: Any, frame: Frame, where: str, *, reject_corrections: b
                     if src in CORRECTION_SOURCES
                     else f"{iw} ('{pid}'): unknown source '{src}'; expected 'detector'"
                 )
-            conf = item.get("confidence")
-            confidences[pid] = None if conf is None else _finite(conf, f"{iw}.confidence")
+            # contracts.md section 4: the raw `score` is copied into `confidence`
+            # on export; accept `score` directly when `confidence` is absent.
+            key = "confidence" if item.get("confidence") is not None else "score"
+            conf = item.get(key)
+            confidences[pid] = None if conf is None else _finite(conf, f"{iw}.{key}")
+            if item.get("box") is not None:
+                boxes[pid] = _parse_box(item["box"], f"{iw}.box")
         points.append(Point(pid, x, y))
-    return points, confidences
+    return points, confidences, boxes
 
 
 def load_detections(path: str) -> Detections:
@@ -218,9 +283,10 @@ def load_detections(path: str) -> Detections:
     settings = _req(detector, "settings", f"{path}: detector")
     if not isinstance(settings, dict):
         raise InputError(f"{path}: detector.settings must be an object (use {{}} if none)")
-    points, confidences = _parse_points(
+    points, confidences, boxes = _parse_points(
         _req(data, "detections", path), frame, f"{path}: detections", reject_corrections=True
     )
+    runtime, runtime_source = _parse_runtime(data, path)
     return Detections(
         path=path,
         sha256=digest,
@@ -230,6 +296,9 @@ def load_detections(path: str) -> Detections:
         detector=detector,
         points=points,
         confidences=confidences,
+        boxes=boxes,
+        runtime_seconds=runtime,
+        runtime_source=runtime_source,
     )
 
 
@@ -245,13 +314,16 @@ def load_ground_truth(path: str) -> GroundTruth:
     if status not in VERIFICATION_STATUSES:
         raise InputError(f"{dw}.verification.status must be one of {sorted(VERIFICATION_STATUSES)}")
     independent = _req(verification, "independent_of_detector", f"{dw}.verification")
-    if independent is not True:
+    if status == DETECTOR_ASSISTED:
+        _check_detector_assisted(verification, f"{dw}.verification")
+    elif independent is not True:
         raise InputError(
             f"{dw}.verification.independent_of_detector must be true. Reference points derived from "
-            "detector output or from a corrected pin set cannot be used as ground truth"
+            "detector output or from a corrected pin set cannot be used as ground truth "
+            f"(the only exception is status '{DETECTOR_ASSISTED}' with an exhaustive miss check)"
         )
     frame = _parse_frame(data, path)
-    points, _ = _parse_points(
+    points, _, _ = _parse_points(
         _req(data, "receptacles", path), frame, f"{path}: receptacles", reject_corrections=False
     )
     return GroundTruth(
@@ -262,6 +334,55 @@ def load_ground_truth(path: str) -> GroundTruth:
         frame=frame,
         points=points,
     )
+
+
+def _check_detector_assisted(verification: Dict[str, Any], where: str) -> None:
+    """Rules for a reference bootstrapped from detector output and then reviewed.
+
+    Correcting detector output tends to miss the receptacles the detector also
+    missed, which overstates recall. So the page must have had an exhaustive
+    miss check (a deliberate sweep of the whole page for unmarked receptacles),
+    a named reviewer, and must say honestly that it is not independent.
+    """
+    if verification.get("independent_of_detector") is not False:
+        raise InputError(
+            f"{where}.independent_of_detector must be false for status '{DETECTOR_ASSISTED}' "
+            "(the labels started from detector output)"
+        )
+    if verification.get("exhaustive_miss_check") is not True:
+        raise InputError(
+            f"{where}.exhaustive_miss_check must be true for status '{DETECTOR_ASSISTED}': the whole "
+            "page must be swept for receptacles the detector missed. A corrected pin set without that "
+            "check cannot be used as ground truth"
+        )
+    reviewer = verification.get("reviewed_by")
+    if not isinstance(reviewer, str) or not reviewer.strip():
+        raise InputError(f"{where}.reviewed_by must name the reviewer for status '{DETECTOR_ASSISTED}'")
+    src = verification.get("source_scan_id")
+    if src is not None:
+        _nonempty_str(src, f"{where}.source_scan_id")
+
+
+def check_pair(detections: Detections, ground_truth: GroundTruth) -> None:
+    """Reject a detections/reference pair that doesn't describe the same page and frame."""
+    check_consistency(ground_truth.identity, ground_truth.frame.width, ground_truth.frame.height,
+                      detections, ground_truth)
+
+
+def dpi_check(detections: Detections, ground_truth: Optional[GroundTruth]) -> Dict[str, Any]:
+    """How the (optional) frame dpi was declared. Mismatches are rejected earlier."""
+    declared = {"detections": detections.frame.dpi}
+    if ground_truth is not None:
+        declared["ground_truth"] = ground_truth.frame.dpi
+    present = [v for v in declared.values() if v is not None]
+    if len(present) == len(declared):
+        note = f"all inputs declare {CANONICAL_DPI} DPI"
+    elif present:
+        missing = [k for k, v in declared.items() if v is None]
+        note = f"dpi not declared by {', '.join(missing)} (legacy file); the other input declares {CANONICAL_DPI}"
+    else:
+        note = f"dpi not declared (legacy file); contracts v1 assumes {CANONICAL_DPI}"
+    return {"declared": declared, "canonical_dpi": CANONICAL_DPI, "note": note}
 
 
 def check_consistency(
@@ -291,6 +412,15 @@ def check_consistency(
         problems.append(
             f"coordinate frames differ: detections {detections.frame.as_dict()} "
             f"vs ground truth {ground_truth.frame.as_dict()}"
+        )
+    if (
+        ground_truth is not None
+        and detections.frame.dpi is not None
+        and ground_truth.frame.dpi is not None
+        and detections.frame.dpi != ground_truth.frame.dpi
+    ):
+        problems.append(
+            f"dpi differs: detections {detections.frame.dpi:g} vs ground truth {ground_truth.frame.dpi:g}"
         )
     if problems:
         raise InputError("inputs do not describe the same page/frame:\n  - " + "\n  - ".join(problems))

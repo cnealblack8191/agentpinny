@@ -1,0 +1,227 @@
+{
+  "format": "pinny.detections",
+  "format_version": 1,
+  "provenance": "original_detector_output",
+  "scan_id": "mini-scan-doc-alpha_p0",
+  "document": {
+    "document_id": "doc-alpha",
+    "document_version": "sha256:mini-doc-alpha",
+    "page_index": 0
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "dpi": 200,
+    "width": 2000,
+    "height": 1500,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "detector": {
+    "name": "synthetic-fixture",
+    "version": "frozen-mini-v1",
+    "settings": {
+      "note": "generated points with seeded jitter; no detector was run"
+    }
+  },
+  "runtime": {
+    "elapsed_seconds": 1.721
+  },
+  "detections": [
+    {
+      "id": "det-1",
+      "x": 80.3,
+      "y": 1361.6,
+      "box": {
+        "x": 62,
+        "y": 1349,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.874,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-2",
+      "x": 1431.8,
+      "y": 131.5,
+      "box": {
+        "x": 1413,
+        "y": 119,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.923,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-3",
+      "x": 1817.9,
+      "y": 1360.8,
+      "box": {
+        "x": 1799,
+        "y": 1348,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.776,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-4",
+      "x": 1646.1000000000001,
+      "y": 173.7,
+      "box": {
+        "x": 1628,
+        "y": 161,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.74,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-5",
+      "x": 930.8000000000001,
+      "y": 752.6,
+      "box": {
+        "x": 912,
+        "y": 740,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.98,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-6",
+      "x": 901.1,
+      "y": 1440.1,
+      "box": {
+        "x": 883,
+        "y": 1428,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.868,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-7",
+      "x": 1293.5,
+      "y": 892.6,
+      "box": {
+        "x": 1275,
+        "y": 880,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.938,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-8",
+      "x": 1146.7,
+      "y": 760.5,
+      "box": {
+        "x": 1128,
+        "y": 748,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.932,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-9",
+      "x": 1830.5,
+      "y": 625.8000000000001,
+      "box": {
+        "x": 1812,
+        "y": 613,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.83,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-10",
+      "x": 772.1,
+      "y": 934.6,
+      "box": {
+        "x": 754,
+        "y": 922,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.944,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-11",
+      "x": 1580.8,
+      "y": 576.6,
+      "box": {
+        "x": 1562,
+        "y": 564,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.822,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-12",
+      "x": 86.5,
+      "y": 1164.8,
+      "box": {
+        "x": 68,
+        "y": 1152,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.908,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-13",
+      "x": 609.5,
+      "y": 188.70000000000002,
+      "box": {
+        "x": 591,
+        "y": 176,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.912,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-14",
+      "x": 1027.2,
+      "y": 236.0,
+      "box": {
+        "x": 1009,
+        "y": 224,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.752,
+      "rotation": 0,
+      "source": "detector"
+    }
+  ]
+}
