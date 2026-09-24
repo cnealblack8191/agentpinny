@@ -1,0 +1,40 @@
+{
+  "format": "pinny.detections",
+  "format_version": 1,
+  "provenance": "original_detector_output",
+  "scan_id": "synthetic-scan-detector_assisted",
+  "document": {
+    "document_id": "synthetic-doc-001",
+    "document_version": "sha256:synthetic-v1",
+    "page_index": 0
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "dpi": 200,
+    "width": 1000,
+    "height": 800,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "detector": {
+    "name": "synthetic-fixture",
+    "version": "n/a",
+    "settings": {
+      "note": "hand-placed points; no detector was run"
+    }
+  },
+  "detections": [
+    {
+      "id": "d1",
+      "x": 102,
+      "y": 100,
+      "confidence": 0.9
+    },
+    {
+      "id": "d2",
+      "x": 600,
+      "y": 600,
+      "confidence": 0.4
+    }
+  ]
+}

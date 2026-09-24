@@ -33,6 +33,17 @@ def run_cli(argv):
     return code, out.getvalue(), err.getvalue()
 
 
+def tolerance_args(expected, tol=None):
+    if tol is not None:
+        return ["--tolerance-px", str(tol)]
+    args = []
+    if expected.get("tolerance_px") is not None:
+        args += ["--tolerance-px", str(expected["tolerance_px"])]
+    if expected.get("tolerance_rel") is not None:
+        args += ["--tolerance-rel", str(expected["tolerance_rel"])]
+    return args
+
+
 def score_fixture(name, tol=None, extra=None):
     case = os.path.join(FIXTURES, name)
     with open(os.path.join(case, "expected.json")) as fh:
@@ -43,7 +54,7 @@ def score_fixture(name, tol=None, extra=None):
             "score",
             "--detections", os.path.join(case, "detections.json"),
             "--ground-truth", os.path.join(case, "ground_truth.json"),
-            "--tolerance-px", str(tol if tol is not None else expected["tolerance_px"]),
+            *tolerance_args(expected, tol),
             *IDENTITY_ARGS, *(extra or []),
             "--json-out", out_json,
         ]
@@ -79,7 +90,9 @@ class FixtureScoring(unittest.TestCase):
                     (c["true_positives"], c["false_positives"], c["false_negatives"]),
                     (exp["counts"]["tp"], exp["counts"]["fp"], exp["counts"]["fn"]),
                 )
-                for metric in ("precision", "recall"):
+                for metric in ("precision", "recall", "f1"):
+                    if metric not in exp:
+                        continue
                     got = rep["metrics"][metric]
                     if exp[metric] is None:
                         self.assertIsNone(got["value"])
@@ -94,8 +107,13 @@ class FixtureScoring(unittest.TestCase):
                 self.assertEqual([f["id"] for f in rep["false_positives"]], exp["false_positives"])
                 self.assertEqual([f["id"] for f in rep["false_negatives"]], exp["false_negatives"])
                 # Synthetic data must never be presented as real-drawing accuracy.
-                self.assertEqual(rep["status"]["real_drawing_accuracy"], "Not measured — verified reference pending")
-                self.assertEqual(rep["status"]["scope"], "synthetic_fixture")
+                scope = exp.get("scope", "synthetic_fixture")
+                self.assertEqual(rep["status"]["scope"], scope)
+                if scope == "synthetic_fixture":
+                    self.assertEqual(rep["status"]["real_drawing_accuracy"],
+                                     "Not measured — verified reference pending")
+                if "caveat" in exp:
+                    self.assertTrue(any(exp["caveat"] in c for c in rep["status"]["caveats"]))
                 self.assertEqual(rep["matching"]["tolerance_px"], exp["tolerance_px"])
                 self.assertEqual(rep["dataset"]["dataset_id"], f"synthetic-{name}")
                 self.assertEqual(rep["detector_provenance"]["scan_id"], f"synthetic-scan-{name}")

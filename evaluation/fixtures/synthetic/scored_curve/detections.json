@@ -1,0 +1,71 @@
+{
+  "format": "pinny.detections",
+  "format_version": 1,
+  "provenance": "original_detector_output",
+  "scan_id": "synthetic-scan-scored_curve",
+  "document": {
+    "document_id": "synthetic-doc-001",
+    "document_version": "sha256:synthetic-v1",
+    "page_index": 0
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "dpi": 200,
+    "width": 1000,
+    "height": 800,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "detector": {
+    "name": "synthetic-fixture",
+    "version": "n/a",
+    "settings": {
+      "note": "hand-placed points; no detector was run"
+    }
+  },
+  "elapsed_seconds": 1.25,
+  "detections": [
+    {
+      "id": "d1",
+      "x": 101,
+      "y": 100,
+      "confidence": 0.9,
+      "source": "detector"
+    },
+    {
+      "id": "d2",
+      "x": 500,
+      "y": 500,
+      "confidence": 0.8,
+      "source": "detector"
+    },
+    {
+      "id": "d3",
+      "x": 202,
+      "y": 100,
+      "confidence": 0.7,
+      "source": "detector"
+    },
+    {
+      "id": "d4",
+      "x": 100,
+      "y": 103,
+      "confidence": 0.6,
+      "source": "detector"
+    },
+    {
+      "id": "d5",
+      "x": 300,
+      "y": 104,
+      "confidence": 0.5,
+      "source": "detector"
+    },
+    {
+      "id": "d6",
+      "x": 700,
+      "y": 700,
+      "confidence": 0.5,
+      "source": "detector"
+    }
+  ]
+}

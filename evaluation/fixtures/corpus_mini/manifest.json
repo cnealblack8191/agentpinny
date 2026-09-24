@@ -1,0 +1,42 @@
+{
+  "format": "pinny.eval_manifest",
+  "format_version": 1,
+  "corpus_id": "corpus-mini-v1",
+  "description": "Frozen synthetic mini-corpus for the CI regression gate. Validates the evaluator and the gate plumbing; says nothing about real-drawing accuracy.",
+  "tolerance_px": 10,
+  "pages": [
+    {
+      "detections": "pages/doc-alpha_p0.detections.json",
+      "ground_truth": "pages/doc-alpha_p0.ground_truth.json",
+      "document": "doc-alpha",
+      "tags": [
+        "vector"
+      ]
+    },
+    {
+      "detections": "pages/doc-alpha_p1.detections.json",
+      "ground_truth": "pages/doc-alpha_p1.ground_truth.json",
+      "document": "doc-alpha",
+      "tags": [
+        "vector",
+        "dense"
+      ]
+    },
+    {
+      "detections": "pages/doc-beta_p0.detections.json",
+      "ground_truth": "pages/doc-beta_p0.ground_truth.json",
+      "document": "doc-beta",
+      "tags": [
+        "scanned"
+      ]
+    },
+    {
+      "detections": "pages/doc-beta_p2.detections.json",
+      "ground_truth": "pages/doc-beta_p2.ground_truth.json",
+      "document": "doc-beta",
+      "tags": [
+        "scanned"
+      ]
+    }
+  ]
+}

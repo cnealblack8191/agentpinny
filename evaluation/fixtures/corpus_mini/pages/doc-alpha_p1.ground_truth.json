@@ -1,0 +1,139 @@
+{
+  "format": "pinny.ground_truth",
+  "format_version": 1,
+  "dataset": {
+    "dataset_id": "corpus-mini-doc-alpha_p1",
+    "labeled_by": "evaluation agent (synthetic, hand-authored)",
+    "labeled_at": "2026-09-24",
+    "verification": {
+      "status": "synthetic",
+      "independent_of_detector": true,
+      "method": "points authored by hand to exercise the evaluator"
+    }
+  },
+  "document": {
+    "document_id": "doc-alpha",
+    "document_version": "sha256:mini-doc-alpha",
+    "page_index": 1
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "dpi": 200,
+    "width": 2000,
+    "height": 1500,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "receptacles": [
+    {
+      "id": "g001",
+      "x": 100.7,
+      "y": 978.4
+    },
+    {
+      "id": "g002",
+      "x": 1321.0,
+      "y": 835.9
+    },
+    {
+      "id": "g003",
+      "x": 158.1,
+      "y": 454.7
+    },
+    {
+      "id": "g004",
+      "x": 1490.1,
+      "y": 581.8
+    },
+    {
+      "id": "g005",
+      "x": 1241.4,
+      "y": 281.7
+    },
+    {
+      "id": "g006",
+      "x": 694.4,
+      "y": 223.6
+    },
+    {
+      "id": "g007",
+      "x": 1911.4,
+      "y": 882.8
+    },
+    {
+      "id": "g008",
+      "x": 826.1,
+      "y": 493.4
+    },
+    {
+      "id": "g009",
+      "x": 1142.9,
+      "y": 68.7
+    },
+    {
+      "id": "g010",
+      "x": 772.2,
+      "y": 1209.3
+    },
+    {
+      "id": "g011",
+      "x": 1866.2,
+      "y": 1313.3
+    },
+    {
+      "id": "g012",
+      "x": 657.3,
+      "y": 513.6
+    },
+    {
+      "id": "g013",
+      "x": 747.3,
+      "y": 1312.2
+    },
+    {
+      "id": "g014",
+      "x": 414.5,
+      "y": 383.7
+    },
+    {
+      "id": "g015",
+      "x": 1251.9,
+      "y": 1054.2
+    },
+    {
+      "id": "g016",
+      "x": 1738.9,
+      "y": 1260.8
+    },
+    {
+      "id": "g017",
+      "x": 363.6,
+      "y": 947.1
+    },
+    {
+      "id": "g018",
+      "x": 1345.8,
+      "y": 1221.2
+    },
+    {
+      "id": "g019",
+      "x": 246.7,
+      "y": 785.0
+    },
+    {
+      "id": "g020",
+      "x": 1439.7,
+      "y": 749.3
+    },
+    {
+      "id": "g021",
+      "x": 1377.5,
+      "y": 993.9
+    },
+    {
+      "id": "g022",
+      "x": 1612.9,
+      "y": 366.7
+    }
+  ]
+}

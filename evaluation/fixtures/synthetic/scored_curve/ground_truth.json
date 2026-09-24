@@ -1,0 +1,49 @@
+{
+  "format": "pinny.ground_truth",
+  "format_version": 1,
+  "dataset": {
+    "dataset_id": "synthetic-scored_curve",
+    "labeled_by": "evaluation agent (synthetic, hand-authored)",
+    "labeled_at": "2026-09-24",
+    "verification": {
+      "status": "synthetic",
+      "independent_of_detector": true,
+      "method": "points authored by hand to exercise the evaluator"
+    }
+  },
+  "document": {
+    "document_id": "synthetic-doc-001",
+    "document_version": "sha256:synthetic-v1",
+    "page_index": 0
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "dpi": 200,
+    "width": 1000,
+    "height": 800,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "receptacles": [
+    {
+      "id": "g1",
+      "x": 100,
+      "y": 100
+    },
+    {
+      "id": "g2",
+      "x": 200,
+      "y": 100
+    },
+    {
+      "id": "g3",
+      "x": 300,
+      "y": 100
+    },
+    {
+      "id": "g4",
+      "x": 400,
+      "y": 100
+    }
+  ]
+}

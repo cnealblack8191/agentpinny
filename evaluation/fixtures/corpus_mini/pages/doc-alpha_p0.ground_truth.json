@@ -1,0 +1,99 @@
+{
+  "format": "pinny.ground_truth",
+  "format_version": 1,
+  "dataset": {
+    "dataset_id": "corpus-mini-doc-alpha_p0",
+    "labeled_by": "evaluation agent (synthetic, hand-authored)",
+    "labeled_at": "2026-09-24",
+    "verification": {
+      "status": "synthetic",
+      "independent_of_detector": true,
+      "method": "points authored by hand to exercise the evaluator"
+    }
+  },
+  "document": {
+    "document_id": "doc-alpha",
+    "document_version": "sha256:mini-doc-alpha",
+    "page_index": 0
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "dpi": 200,
+    "width": 2000,
+    "height": 1500,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "receptacles": [
+    {
+      "id": "g001",
+      "x": 79.0,
+      "y": 1365.1
+    },
+    {
+      "id": "g002",
+      "x": 1433.1,
+      "y": 130.0
+    },
+    {
+      "id": "g003",
+      "x": 1820.5,
+      "y": 1365.2
+    },
+    {
+      "id": "g004",
+      "x": 1646.4,
+      "y": 171.1
+    },
+    {
+      "id": "g005",
+      "x": 931.2,
+      "y": 753.1
+    },
+    {
+      "id": "g006",
+      "x": 897.9,
+      "y": 1439.5
+    },
+    {
+      "id": "g007",
+      "x": 1295.8,
+      "y": 895.9
+    },
+    {
+      "id": "g008",
+      "x": 1144.3,
+      "y": 760.6
+    },
+    {
+      "id": "g009",
+      "x": 1834.1,
+      "y": 630.7
+    },
+    {
+      "id": "g010",
+      "x": 768.0,
+      "y": 934.7
+    },
+    {
+      "id": "g011",
+      "x": 1578.3,
+      "y": 572.7
+    },
+    {
+      "id": "g012",
+      "x": 89.0,
+      "y": 1166.7
+    },
+    {
+      "id": "g013",
+      "x": 1358.7,
+      "y": 569.8
+    },
+    {
+      "id": "g014",
+      "x": 612.4,
+      "y": 184.4
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "format": "pinny.ground_truth",
+  "format_version": 1,
+  "dataset": {
+    "dataset_id": "corpus-mini-doc-beta_p2",
+    "labeled_by": "evaluation agent (synthetic, hand-authored)",
+    "labeled_at": "2026-09-24",
+    "verification": {
+      "status": "synthetic",
+      "independent_of_detector": true,
+      "method": "points authored by hand to exercise the evaluator"
+    }
+  },
+  "document": {
+    "document_id": "doc-beta",
+    "document_version": "sha256:mini-doc-beta",
+    "page_index": 2
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "dpi": 200,
+    "width": 2000,
+    "height": 1500,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "receptacles": []
+}

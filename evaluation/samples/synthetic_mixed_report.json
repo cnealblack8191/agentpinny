@@ -3,11 +3,12 @@
   "format_version": 1,
   "evaluator": {
     "name": "pinny_eval",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "status": {
     "real_drawing_accuracy": "Not measured — verified reference pending",
     "scope": "synthetic_fixture",
+    "caveats": [],
     "note": "Synthetic fixture. These numbers validate the evaluator's behaviour; they say nothing about how the detector performs on real drawings."
   },
   "document": {
@@ -20,7 +21,16 @@
     "width": 1000,
     "height": 800,
     "origin": "top-left",
-    "y_axis": "down"
+    "y_axis": "down",
+    "dpi": null
+  },
+  "dpi_check": {
+    "declared": {
+      "detections": null,
+      "ground_truth": null
+    },
+    "canonical_dpi": 200,
+    "note": "dpi not declared (legacy file); contracts v1 assumes 200"
   },
   "detector_provenance": {
     "scan_id": "synthetic-scan-mixed_sample",
@@ -34,6 +44,10 @@
     "results_file": "fixtures/synthetic/mixed_sample/detections.json",
     "results_sha256": "1e375b29b96321cd6bd52ff6fac0d00fe38e2e04f35bcbafcc0c9b25f9cd068b",
     "provenance": "original_detector_output"
+  },
+  "runtime": {
+    "elapsed_seconds": null,
+    "source_field": null
   },
   "dataset": {
     "dataset_id": "synthetic-mixed_sample",
@@ -49,6 +63,9 @@
   },
   "matching": {
     "tolerance_px": 10.0,
+    "tolerance_rel": null,
+    "tolerance_mode": "px",
+    "tolerance_precedence": "fixed pixel radius",
     "tolerance_units": "canonical raster pixels",
     "distance": "euclidean",
     "inclusive": true,
@@ -73,7 +90,33 @@
       "numerator": 3,
       "denominator": 5,
       "undefined_reason": null
+    },
+    "f1": {
+      "value": 0.5454545454545454,
+      "numerator": 6,
+      "denominator": 11,
+      "undefined_reason": null
     }
+  },
+  "localization": {
+    "matched_pairs": 3,
+    "mean_distance_px": 5.74535599249993,
+    "median_distance_px": 5.0,
+    "p95_distance_px": 9.5,
+    "max_distance_px": 10.0,
+    "mean_dx_px": 2.6666666666666665,
+    "mean_dy_px": 1.3333333333333333,
+    "percentile_method": "linear interpolation"
+  },
+  "curve": {
+    "available": false,
+    "note": "curve omitted: 6 of 6 detections have no confidence/score, so detections cannot be ranked",
+    "points": [],
+    "ap": null,
+    "best_f1": null,
+    "precision_at_recall_0_95": null,
+    "recall_at_precision_0_95": null,
+    "detections_without_confidence": 6
   },
   "matched": [
     {
@@ -87,7 +130,10 @@
         "x": 120.0,
         "y": 150.0
       },
-      "distance_px": 2.23606797749979
+      "distance_px": 2.23606797749979,
+      "dx_px": -2.0,
+      "dy_px": -1.0,
+      "tolerance_px": 10.0
     },
     {
       "prediction": {
@@ -100,7 +146,10 @@
         "x": 340.0,
         "y": 150.0
       },
-      "distance_px": 5.0
+      "distance_px": 5.0,
+      "dx_px": 4.0,
+      "dy_px": -3.0,
+      "tolerance_px": 10.0
     },
     {
       "prediction": {
@@ -113,7 +162,10 @@
         "x": 560.0,
         "y": 150.0
       },
-      "distance_px": 10.0
+      "distance_px": 10.0,
+      "dx_px": 6.0,
+      "dy_px": 8.0,
+      "tolerance_px": 10.0
     }
   ],
   "false_positives": [
@@ -121,6 +173,7 @@
       "id": "d1",
       "x": 123.0,
       "y": 152.0,
+      "confidence": null,
       "reason": "duplicate_or_crowded: every reference within tolerance is matched to another prediction",
       "references_within_tolerance": [
         {
@@ -134,6 +187,7 @@
       "id": "d5",
       "x": 700.0,
       "y": 600.0,
+      "confidence": null,
       "reason": "no_reference_within_tolerance",
       "references_within_tolerance": []
     },
@@ -141,6 +195,7 @@
       "id": "d6",
       "x": 340.0,
       "y": 431.0,
+      "confidence": null,
       "reason": "no_reference_within_tolerance",
       "references_within_tolerance": []
     }
