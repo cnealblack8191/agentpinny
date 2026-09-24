@@ -214,6 +214,25 @@ def _parse_points(items: Any, frame: Frame, where: str, *, reject_corrections: b
     return points, confidences
 
 
+# Scan-level fields carried into the report when present. `mode` is the
+# Phase 2 scan mode (docs/phase2-contracts.md P7).
+SCAN_PROVENANCE_KEYS = ("template", "created_at", "mode")
+
+
+def _scan_provenance(data: Dict[str, Any], path: str) -> Dict[str, Any]:
+    out = {k: data[k] for k in SCAN_PROVENANCE_KEYS if k in data}
+    if "mode" in out:
+        _nonempty_str(out["mode"], f"{path}: mode")
+    # P7: candidates a verifier dropped are listed under "suppressed". They are
+    # not detector output for this scan and are never scored; only their count
+    # is recorded.
+    if "suppressed" in data:
+        if not isinstance(data["suppressed"], list):
+            raise InputError(f"{path}: suppressed must be a list")
+        out["suppressed_count"] = len(data["suppressed"])
+    return out
+
+
 def load_detections(path: str) -> Detections:
     data, digest = _load_json(path)
     _check_format(data, DETECTIONS_FORMAT, path)
@@ -244,7 +263,7 @@ def load_detections(path: str) -> Detections:
         detector=detector,
         points=points,
         confidences=confidences,
-        scan_provenance={k: data[k] for k in ("template", "created_at") if k in data},
+        scan_provenance=_scan_provenance(data, path),
     )
 
 
