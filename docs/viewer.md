@@ -14,6 +14,17 @@ Data goes to `$PINNY_DATA_DIR` (default `~/.local/share/pinny`), never the repo.
 Pages are rendered from the uploaded PDF by the foundation's
 `pinny.render.RenderService` (contracts §9) at 200 DPI.
 
+## Template threshold
+
+The viewer starts at a threshold of **0.65**, below the detector's library
+default of 0.80. This was tuned on one real electrical plan (E1-02C, 42 × 30 in).
+Every match at 0.64 or above was a real receptacle, including grey existing
+devices, variant symbols and symbols crossed by circuit wiring. The false
+matches (title-block text and room tags) all scored 0.63 or lower. At 0.80,
+16 real receptacles were missed. This is evidence from one page only.
+Re-check the threshold against labelled pages from other drawing sets, and
+raise it if a sheet shows text false matches.
+
 ## Using it
 
 | Mode (key) | Left-drag | Left-click |
