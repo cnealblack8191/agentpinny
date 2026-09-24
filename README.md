@@ -4,6 +4,7 @@ Local prototype for detecting receptacle pins on electrical drawing PDFs.
 
 * Contracts: `docs/contracts.md`
 * Viewer: `docs/viewer.md`
+* Phase 2 (learning models, branch `phase-2`): `docs/phase2-contracts.md`, `docs/phase2-ownership.md`
 * Ownership: `docs/agent-ownership.md`
 * Render service (foundation): `docs/render-service.md`
 

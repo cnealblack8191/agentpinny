@@ -16,6 +16,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Phase 2 learning models (docs/phase2-contracts.md P2). The base app runs without these.
+train = [
+    "torch==2.14.0",
+    "torchvision==0.29.0",
+]
 dev = [
     "pytest==9.1.1",
     "pypdf==6.19.0",
