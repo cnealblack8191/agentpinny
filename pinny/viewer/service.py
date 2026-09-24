@@ -156,6 +156,9 @@ class ViewerService:
             return cls
         module, name = _MODEL_CLASSES[kind]
         try:
+            # The model modules import torch lazily, so check for it here.
+            if importlib.util.find_spec("torch") is None:
+                raise ImportError("No module named 'torch'")
             return getattr(importlib.import_module(module), name)
         except ImportError as exc:
             raise ViewerError(
