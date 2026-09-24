@@ -48,6 +48,13 @@ class ModelArtifactError(PinnyError):
     """A model artifact is missing, malformed or fails its integrity check."""
 
 
+def default_models_dir() -> Path:
+    """``<data dir>/models``, beside the learning store (``$PINNY_DATA_DIR``)."""
+    from pinny.learning import default_data_dir
+
+    return Path(default_data_dir()) / "models"
+
+
 def git_code_version() -> str:
     """``git:<sha>`` of the working tree this code runs from, or ``git:unknown``."""
     try:
