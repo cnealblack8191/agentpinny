@@ -26,3 +26,19 @@ commit message.
 4. The coordinator runs the full suite and starts the app. It trains
    both models on synthetic data and runs all three scan modes in the
    browser.
+
+## Status (2026-09-24)
+
+All five chats are merged into `phase-2`: A `claude/gifted-lovelace-cpg82n`,
+B `claude/blissful-galileo-zudauu`, C `claude/optimistic-curie-e2oznb`,
+D `claude/clever-lamport-6yes3j` and E `claude/serene-pasteur-z4g821`.
+
+Changes made while combining them:
+* A's CLI dispatcher is kept, and its command table now includes
+  `train-verifier` and `train-detector`.
+* B's `pinny/models/artifact.py` is kept. C now uses `save_artifact` /
+  `load_artifact`, and `artifact.default_models_dir()` puts models under
+  `<data dir>/models`, beside the learning store.
+* The viewer checks for torch before loading a model class, so a base
+  install reports `models_unavailable` (the model modules import torch
+  lazily).
