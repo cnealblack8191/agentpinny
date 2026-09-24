@@ -21,6 +21,8 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "build-dataset": ("pinny.training.__main__:build_dataset_main", "build a dataset from the learning store"),
     "synthesize": ("pinny.training.__main__:synthesize_main", "generate a synthetic labelled dataset"),
     "dataset-info": ("pinny.training.__main__:dataset_info_main", "summarise and verify a dataset"),
+    "train-verifier": ("pinny.training.verifier_train:main", "train the candidate verifier (needs torch)"),
+    "train-detector": ("pinny.training.detector_train:main", "train the point detector (needs torch)"),
 }
 
 
