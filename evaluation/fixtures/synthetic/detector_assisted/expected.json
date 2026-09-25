@@ -1,0 +1,26 @@
+{
+  "tolerance_px": 10,
+  "counts": {
+    "tp": 1,
+    "fp": 1,
+    "fn": 1
+  },
+  "precision": 0.5,
+  "recall": 0.5,
+  "f1": 0.5,
+  "matched": [
+    [
+      "d1",
+      "g1"
+    ]
+  ],
+  "false_positives": [
+    "d2"
+  ],
+  "false_negatives": [
+    "g2"
+  ],
+  "scope": "detector_assisted_reference",
+  "caveat": "RECALL MAY BE OVERSTATED",
+  "notes": "detector-assisted reference seeded from this same scan: two caveats expected"
+}

@@ -30,5 +30,7 @@ class Detector(Protocol):
         Must return candidates in canonical page coordinates, sorted by
         descending score, with duplicates suppressed across rotations, and
         raise :class:`~.types.DetectionError` for invalid input.
+        Implementations that cannot match mirrored symbols ignore
+        ``settings.include_mirrored`` and leave ``Candidate.mirrored`` False.
         """
         ...

@@ -11,6 +11,8 @@ Coordinate convention (all public values):
 * A center is the continuous box center ``(x + width / 2, y + height / 2)``.
 * ``rotation`` is the clockwise quarter-turn (0, 90, 180 or 270 degrees, in
   the y-down raster) applied to the template to produce the match.
+* ``mirrored`` (v1.1, additive) means the template was flipped horizontally
+  (left-right) *before* that clockwise rotation was applied.
 """
 
 from __future__ import annotations
@@ -150,32 +152,37 @@ class ScanSettings:
     # Resource bounds.
     max_candidates: int = 500
     max_candidates_per_rotation: int = 2000
-    max_page_pixels: int = 60_000_000
+    max_page_pixels: int = 120_000_000
     min_template_side: int = 8
     max_template_side: int = 1024
     #: Reject templates whose grayscale standard deviation (0-255 scale) is
     #: below this: they are blank or near-uniform and match anything flat.
     min_template_stddev: float = 4.0
-    #: Checked between stages; a single OpenCV call is not interrupted.
+    #: Checked before each orientation after the first and between page
+    #: strips; a single OpenCV call is not interrupted.
     max_runtime_seconds: float = 60.0
 
-    def to_dict(self) -> dict:
-        """JSON-serialisable form, recorded as ``detector.settings`` in a scan
-        result (docs/contracts.md section 4)."""
-        return {
-            "threshold": float(self.threshold),
-            "rotations": [int(r) for r in self.rotations],
-            "search_region": None if self.search_region is None else self.search_region.to_dict(),
-            "nms_iou_threshold": float(self.nms_iou_threshold),
-            "duplicate_center_ratio": float(self.duplicate_center_ratio),
-            "max_candidates": self.max_candidates,
-            "max_candidates_per_rotation": self.max_candidates_per_rotation,
-            "max_page_pixels": self.max_page_pixels,
-            "min_template_side": self.min_template_side,
-            "max_template_side": self.max_template_side,
-            "min_template_stddev": float(self.min_template_stddev),
-            "max_runtime_seconds": float(self.max_runtime_seconds),
-        }
+    # Matching behaviour (v1.1).
+    #: Standard deviation, in pixels, of the Gaussian blur applied identically
+    #: to page and template before matching. Tolerates sub-pixel shifts, small
+    #: scale differences and anti-aliasing. 0 disables the blur.
+    blur_sigma: float = 1.0
+    #: Also search the horizontally flipped template (flip applied before the
+    #: clockwise rotation). Candidates found this way have ``mirrored=True``.
+    include_mirrored: bool = False
+    #: Use a half-resolution pre-pass and refine its peaks at full resolution.
+    #: Only applies to orientations whose shorter template side is at least
+    #: 24 px; results match the full-resolution search.
+    coarse_to_fine: bool = True
+    #: The coarse pre-pass keeps peaks scoring at least ``threshold -
+    #: coarse_slack`` (at half resolution scores are lower).
+    coarse_slack: float = 0.15
+    #: If the coarse pre-pass finds more peaks than this for one orientation,
+    #: that orientation falls back to the full-resolution search.
+    max_coarse_peaks: int = 5000
+    #: Worker threads for page strips (OpenCV releases the GIL). 0 = auto,
+    #: ``min(4, os.cpu_count())``; 1 = run in the calling thread.
+    num_threads: int = 0
 
     def validate(self) -> None:
         def fail(message: str) -> None:
@@ -220,6 +227,48 @@ class ScanSettings:
             fail(f"min_template_stddev must be >= 0, got {self.min_template_stddev!r}.")
         if not _finite_number(self.max_runtime_seconds) or self.max_runtime_seconds <= 0:
             fail(f"max_runtime_seconds must be > 0, got {self.max_runtime_seconds!r}.")
+        if not _finite_number(self.blur_sigma) or not (0.0 <= self.blur_sigma <= 10.0):
+            fail(f"blur_sigma must be a number in [0, 10] (0 disables), got {self.blur_sigma!r}.")
+        for name in ("include_mirrored", "coarse_to_fine"):
+            if not isinstance(getattr(self, name), bool):
+                fail(f"{name} must be True or False, got {getattr(self, name)!r}.")
+        if not _finite_number(self.coarse_slack) or not (0.0 <= self.coarse_slack <= 1.0):
+            fail(f"coarse_slack must be in [0, 1], got {self.coarse_slack!r}.")
+        if (
+            isinstance(self.max_coarse_peaks, bool)
+            or not isinstance(self.max_coarse_peaks, int)
+            or self.max_coarse_peaks <= 0
+        ):
+            fail(f"max_coarse_peaks must be a positive integer, got {self.max_coarse_peaks!r}.")
+        if (
+            isinstance(self.num_threads, bool)
+            or not isinstance(self.num_threads, int)
+            or not (0 <= self.num_threads <= 64)
+        ):
+            fail(f"num_threads must be an integer in [0, 64] (0 = auto), got {self.num_threads!r}.")
+
+    def to_dict(self) -> dict:
+        """JSON-serialisable form (recorded as ``detector.settings`` in scans)."""
+        return {
+            "threshold": float(self.threshold),
+            "rotations": [int(r) for r in self.rotations],
+            "search_region": None if self.search_region is None else self.search_region.to_dict(),
+            "nms_iou_threshold": float(self.nms_iou_threshold),
+            "duplicate_center_ratio": float(self.duplicate_center_ratio),
+            "max_candidates": self.max_candidates,
+            "max_candidates_per_rotation": self.max_candidates_per_rotation,
+            "max_page_pixels": self.max_page_pixels,
+            "min_template_side": self.min_template_side,
+            "max_template_side": self.max_template_side,
+            "min_template_stddev": float(self.min_template_stddev),
+            "max_runtime_seconds": float(self.max_runtime_seconds),
+            "blur_sigma": float(self.blur_sigma),
+            "include_mirrored": self.include_mirrored,
+            "coarse_to_fine": self.coarse_to_fine,
+            "coarse_slack": float(self.coarse_slack),
+            "max_coarse_peaks": self.max_coarse_peaks,
+            "num_threads": self.num_threads,
+        }
 
 
 @dataclass(frozen=True)
@@ -230,6 +279,8 @@ class Candidate:
     score: float
     box: BoundingBox
     rotation: int
+    #: v1.1: the template was flipped horizontally before ``rotation``.
+    mirrored: bool = False
 
     @property
     def center(self) -> Tuple[float, float]:
@@ -242,6 +293,29 @@ class Candidate:
             "box": self.box.to_dict(),
             "center": {"x": cx, "y": cy},
             "rotation": self.rotation,
+            "mirrored": self.mirrored,
+        }
+
+
+@dataclass(frozen=True)
+class SkippedOrientation:
+    """An orientation that was not searched because the template looks the
+    same under it as under ``reported_as`` (the canonical orientation, whose
+    label matches are reported with)."""
+
+    rotation: int
+    mirrored: bool
+    reported_rotation: int
+    reported_mirrored: bool
+    #: Normalized correlation between the two oriented templates.
+    similarity: float
+
+    def to_dict(self) -> dict:
+        return {
+            "rotation": self.rotation,
+            "mirrored": self.mirrored,
+            "reported_as": {"rotation": self.reported_rotation, "mirrored": self.reported_mirrored},
+            "similarity": self.similarity,
         }
 
 
@@ -256,6 +330,11 @@ class DetectionResult:
     truncated: bool = False
     elapsed_seconds: float = 0.0
     warnings: Tuple[str, ...] = field(default_factory=tuple)
+    #: v1.1: whether mirrored orientations were requested.
+    include_mirrored: bool = False
+    #: v1.1: requested orientations skipped because the template is
+    #: symmetric under them; their matches carry the canonical label.
+    skipped_orientations: Tuple[SkippedOrientation, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         return {
@@ -266,6 +345,8 @@ class DetectionResult:
             "truncated": self.truncated,
             "elapsed_seconds": self.elapsed_seconds,
             "warnings": list(self.warnings),
+            "include_mirrored": self.include_mirrored,
+            "skipped_orientations": [o.to_dict() for o in self.skipped_orientations],
         }
 
 

@@ -1,0 +1,29 @@
+{
+  "tolerance_px": null,
+  "tolerance_rel": 0.5,
+  "counts": {
+    "tp": 2,
+    "fp": 1,
+    "fn": 1
+  },
+  "precision": 0.6666666666666666,
+  "recall": 0.6666666666666666,
+  "f1": 0.6666666666666666,
+  "matched": [
+    [
+      "d1",
+      "g1"
+    ],
+    [
+      "d3",
+      "g3"
+    ]
+  ],
+  "false_positives": [
+    "d2"
+  ],
+  "false_negatives": [
+    "g2"
+  ],
+  "notes": "radius = 0.5 x short side. d1 box 20x10 -> 5 px, 4 px from g1: match. d2 box 20x10 -> 5 px, 7 px from g2: miss (a fixed 10 px radius would match it). d3 box 40x40 -> 20 px, 7 px from g3: match."
+}

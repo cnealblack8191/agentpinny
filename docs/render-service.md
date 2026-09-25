@@ -80,6 +80,6 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python -m pytest tests\render
 ```
 
-To update the pinned dependencies (foundation only): edit `pyproject.toml` and
-`requirements.in`, then run
-`uv pip compile --universal --python-version 3.12 --generate-hashes requirements.in -o requirements.lock.txt`.
+To update the pinned dependencies (foundation only): edit `pyproject.toml`
+(the single dependency list), then run
+`uv pip compile --universal --python-version 3.12 --generate-hashes pyproject.toml --extra dev -o requirements.lock.txt`.

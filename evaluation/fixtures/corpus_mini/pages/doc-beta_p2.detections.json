@@ -1,0 +1,59 @@
+{
+  "format": "pinny.detections",
+  "format_version": 1,
+  "provenance": "original_detector_output",
+  "scan_id": "mini-scan-doc-beta_p2",
+  "document": {
+    "document_id": "doc-beta",
+    "document_version": "sha256:mini-doc-beta",
+    "page_index": 2
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "dpi": 200,
+    "width": 2000,
+    "height": 1500,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "detector": {
+    "name": "synthetic-fixture",
+    "version": "frozen-mini-v1",
+    "settings": {
+      "note": "generated points with seeded jitter; no detector was run"
+    }
+  },
+  "runtime": {
+    "elapsed_seconds": 1.804
+  },
+  "detections": [
+    {
+      "id": "det-1",
+      "x": 1070.9,
+      "y": 1148.6,
+      "box": {
+        "x": 1052,
+        "y": 1136,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.81,
+      "rotation": 0,
+      "source": "detector"
+    },
+    {
+      "id": "det-2",
+      "x": 169.2,
+      "y": 961.8,
+      "box": {
+        "x": 151,
+        "y": 949,
+        "width": 36,
+        "height": 24
+      },
+      "score": 0.726,
+      "rotation": 0,
+      "source": "detector"
+    }
+  ]
+}

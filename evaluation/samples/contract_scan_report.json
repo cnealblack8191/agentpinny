@@ -3,11 +3,12 @@
   "format_version": 1,
   "evaluator": {
     "name": "pinny_eval",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "status": {
     "real_drawing_accuracy": "Not measured — verified reference pending",
     "scope": "synthetic_fixture",
+    "caveats": [],
     "note": "Synthetic fixture. These numbers validate the evaluator's behaviour; they say nothing about how the detector performs on real drawings."
   },
   "document": {
@@ -17,11 +18,19 @@
   },
   "coordinate_frame": {
     "space": "canonical_raster_px",
-    "dpi": 200,
     "width": 1000,
     "height": 800,
     "origin": "top-left",
-    "y_axis": "down"
+    "y_axis": "down",
+    "dpi": 200.0
+  },
+  "dpi_check": {
+    "declared": {
+      "detections": 200.0,
+      "ground_truth": null
+    },
+    "canonical_dpi": 200,
+    "note": "dpi not declared by ground_truth (legacy file); the other input declares 200"
   },
   "detector_provenance": {
     "scan_id": "7c1d0e2a-4b5f-4a9e-8d13-6f2b9c0a1e47",
@@ -52,6 +61,10 @@
     },
     "created_at": "2026-09-23T12:00:00Z"
   },
+  "runtime": {
+    "elapsed_seconds": null,
+    "source_field": null
+  },
   "dataset": {
     "dataset_id": "synthetic-contract-scan",
     "labeled_by": "evaluation agent (synthetic, hand-authored)",
@@ -66,6 +79,9 @@
   },
   "matching": {
     "tolerance_px": 10.0,
+    "tolerance_rel": null,
+    "tolerance_mode": "px",
+    "tolerance_precedence": "fixed pixel radius",
     "tolerance_units": "canonical raster pixels",
     "distance": "euclidean",
     "inclusive": true,
@@ -90,7 +106,86 @@
       "numerator": 2,
       "denominator": 3,
       "undefined_reason": null
+    },
+    "f1": {
+      "value": 0.6666666666666666,
+      "numerator": 4,
+      "denominator": 6,
+      "undefined_reason": null
     }
+  },
+  "localization": {
+    "matched_pairs": 2,
+    "mean_distance_px": 5.368033988749895,
+    "median_distance_px": 5.368033988749895,
+    "p95_distance_px": 8.18680339887499,
+    "max_distance_px": 8.5,
+    "mean_dx_px": -0.5,
+    "mean_dy_px": 3.25,
+    "percentile_method": "linear interpolation"
+  },
+  "curve": {
+    "available": true,
+    "note": null,
+    "method": "incremental maximum-cardinality matching at every distinct confidence",
+    "ap_method": "all-point interpolated (PASCAL VOC 2010+), recall from 0; not COCO 101-point",
+    "references": 3,
+    "detections": 3,
+    "thresholds": 3,
+    "ap": 0.6666666666666666,
+    "best_f1": {
+      "threshold": 0.81,
+      "detections": 2,
+      "tp": 2,
+      "fp": 0,
+      "fn": 1,
+      "precision": 1.0,
+      "recall": 0.6666666666666666,
+      "f1": 0.8
+    },
+    "precision_at_recall_0_95": null,
+    "recall_at_precision_0_95": {
+      "threshold": 0.81,
+      "detections": 2,
+      "tp": 2,
+      "fp": 0,
+      "fn": 1,
+      "precision": 1.0,
+      "recall": 0.6666666666666666,
+      "f1": 0.8
+    },
+    "points": [
+      {
+        "threshold": 0.93,
+        "detections": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 2,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      },
+      {
+        "threshold": 0.81,
+        "detections": 2,
+        "tp": 2,
+        "fp": 0,
+        "fn": 1,
+        "precision": 1.0,
+        "recall": 0.6666666666666666,
+        "f1": 0.8
+      },
+      {
+        "threshold": 0.62,
+        "detections": 3,
+        "tp": 2,
+        "fp": 1,
+        "fn": 1,
+        "precision": 0.6666666666666666,
+        "recall": 0.6666666666666666,
+        "f1": 0.6666666666666666
+      }
+    ]
   },
   "matched": [
     {
@@ -104,7 +199,10 @@
         "x": 121.0,
         "y": 222.0
       },
-      "distance_px": 2.23606797749979
+      "distance_px": 2.23606797749979,
+      "dx_px": -1.0,
+      "dy_px": -2.0,
+      "tolerance_px": 10.0
     },
     {
       "prediction": {
@@ -117,7 +215,10 @@
         "x": 321.5,
         "y": 160.0
       },
-      "distance_px": 8.5
+      "distance_px": 8.5,
+      "dx_px": 0.0,
+      "dy_px": 8.5,
+      "tolerance_px": 10.0
     }
   ],
   "false_positives": [
@@ -125,6 +226,7 @@
       "id": "det-3",
       "x": 620.0,
       "y": 520.0,
+      "confidence": 0.62,
       "reason": "no_reference_within_tolerance",
       "references_within_tolerance": []
     }

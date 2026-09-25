@@ -10,13 +10,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Tuple
 
 Edges = Tuple[float, float, float, float]
 
-STORE_SCHEMA_VERSION = 2
+STORE_SCHEMA_VERSION = 3
 EXPORT_SCHEMA = "pinny.learning.export"
 EXPORT_SCHEMA_VERSION = 2
 
@@ -31,6 +33,11 @@ DETECTION_CROP_MARGIN_PX = 24
 # Float geometry is rounded to this many decimals before storing/hashing so
 # float noise cannot produce distinct pins or crops.
 GEOMETRY_DECIMALS = 3
+# Renderer/rasterizer version recorded in a crop spec when the render service
+# does not report one. Specs with this value hash exactly like pre-field specs,
+# so crop keys written before the field existed stay valid.
+UNKNOWN_RENDERER = "unknown"
+ROTATIONS = (0, 90, 180, 270)
 
 
 def _r(v: float) -> float:
@@ -145,6 +152,10 @@ class CropSpec:
     clipped_right: bool
     clipped_bottom: bool
     method: str  # "manual_point_square" | "detection_box_margin"
+    # Version of the render service / rasterizer that cuts the crop. Part of
+    # the crop key: a new renderer gives new keys instead of silently
+    # overwriting crops with different pixels.
+    renderer_version: str = UNKNOWN_RENDERER
 
     @property
     def clipped(self) -> bool:
@@ -159,15 +170,28 @@ class CropSpec:
     def from_dict(cls, d: Mapping[str, Any]) -> "CropSpec":
         d = dict(d)
         d.pop("clipped", None)
+        d.setdefault("renderer_version", UNKNOWN_RENDERER)
         if d.get("spec_version") != CROP_SPEC_VERSION:
             raise ValueError(f"unsupported crop spec_version {d.get('spec_version')!r}")
         d["unclipped_box"] = Box(**d["unclipped_box"])
         d["box"] = Box(**d["box"])
         return cls(**d)
 
+    def key(self) -> str:
+        """Deterministic crop key: sha256 of the canonical spec JSON.
+
+        ``renderer_version == "unknown"`` is left out of the hash so keys from
+        stores written before the field existed are unchanged."""
+        d = self.to_dict()
+        if d["renderer_version"] == UNKNOWN_RENDERER:
+            del d["renderer_version"]
+        data = json.dumps(d, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
 
 def _build(document_version: str, page_index: int, frame_w: int, frame_h: int,
-           ux0: int, uy0: int, ux1: int, uy1: int, method: str) -> CropSpec:
+           ux0: int, uy0: int, ux1: int, uy1: int, method: str,
+           renderer_version: str = UNKNOWN_RENDERER) -> CropSpec:
     if frame_w <= 0 or frame_h <= 0:
         raise ValueError("frame dimensions must be positive")
     x0, y0, x1, y1 = max(ux0, 0), max(uy0, 0), min(ux1, frame_w), min(uy1, frame_h)
@@ -186,11 +210,13 @@ def _build(document_version: str, page_index: int, frame_w: int, frame_h: int,
         clipped_left=ux0 < 0, clipped_top=uy0 < 0,
         clipped_right=ux1 > frame_w, clipped_bottom=uy1 > frame_h,
         method=method,
+        renderer_version=str(renderer_version or UNKNOWN_RENDERER),
     )
 
 
 def manual_pin_crop(document_version: str, page_index: int, frame_w: int, frame_h: int,
-                    x: float, y: float, size: int = MANUAL_CROP_SIZE_PX) -> CropSpec:
+                    x: float, y: float, size: int = MANUAL_CROP_SIZE_PX,
+                    renderer_version: str = UNKNOWN_RENDERER) -> CropSpec:
     """``size``×``size`` px window whose centre is nearest the pin.
 
     ``x0 = floor(x - size/2 + 0.5)`` (round half up), ``x1 = x0 + size``;
@@ -200,21 +226,29 @@ def manual_pin_crop(document_version: str, page_index: int, frame_w: int, frame_
     x0 = math.floor(x - size / 2.0 + 0.5)
     y0 = math.floor(y - size / 2.0 + 0.5)
     return _build(document_version, page_index, frame_w, frame_h,
-                  x0, y0, x0 + size, y0 + size, "manual_point_square")
+                  x0, y0, x0 + size, y0 + size, "manual_point_square", renderer_version)
 
 
 def detection_crop(document_version: str, page_index: int, frame_w: int, frame_h: int,
-                   box: Any, margin: int = DETECTION_CROP_MARGIN_PX) -> CropSpec:
+                   box: Any, margin: int = DETECTION_CROP_MARGIN_PX,
+                   renderer_version: str = UNKNOWN_RENDERER) -> CropSpec:
     """Detection box expanded to whole pixels, plus ``margin`` on every side,
     then clipped to the raster."""
     b = Box.coerce(box)
     return _build(document_version, page_index, frame_w, frame_h,
                   math.floor(b.x) - margin, math.floor(b.y) - margin,
-                  math.ceil(b.x2) + margin, math.ceil(b.y2) + margin, "detection_box_margin")
+                  math.ceil(b.x2) + margin, math.ceil(b.y2) + margin, "detection_box_margin",
+                  renderer_version)
 
 
 def pin_crop(document_version: str, page_index: int, frame_w: int, frame_h: int,
-             x: float, y: float, box: Any) -> CropSpec:
-    if box is not None:
-        return detection_crop(document_version, page_index, frame_w, frame_h, box)
-    return manual_pin_crop(document_version, page_index, frame_w, frame_h, x, y)
+             x: float, y: float, box: Any, *, origin: str = "machine",
+             renderer_version: str = UNKNOWN_RENDERER) -> CropSpec:
+    """Section 6: machine pins crop their detection box plus margin; manual
+    pins always crop the 128 px square around the point, even when the
+    reviewer also drew a box (the box is kept as annotation, not crop)."""
+    if origin == "machine" and box is not None:
+        return detection_crop(document_version, page_index, frame_w, frame_h, box,
+                              renderer_version=renderer_version)
+    return manual_pin_crop(document_version, page_index, frame_w, frame_h, x, y,
+                           renderer_version=renderer_version)

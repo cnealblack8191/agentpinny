@@ -339,6 +339,10 @@ class PersistenceTests(StoreTestBase):
             self.store.record_scan_result(bad)
 
     def test_old_schema_is_refused(self):
+        # Updated for schema migrations: the old version of this test restored
+        # schema_version to '2' and expected a plain reopen, which encoded the
+        # "refuse any version bump" behaviour. Schema 1 (pre-contract) is still
+        # refused; the store is restored to the current version afterwards.
         self.store.close()
         db = sqlite3.connect(self.dir / "pinny.sqlite3")
         db.execute("UPDATE store_meta SET value='1' WHERE key='schema_version'")
@@ -348,7 +352,8 @@ class PersistenceTests(StoreTestBase):
             self.open()
         self.assertEqual(cm.exception.code, "schema_mismatch")
         db = sqlite3.connect(self.dir / "pinny.sqlite3")
-        db.execute("UPDATE store_meta SET value='2' WHERE key='schema_version'")
+        db.execute("UPDATE store_meta SET value=? WHERE key='schema_version'",
+                   (str(contract.STORE_SCHEMA_VERSION),))
         db.commit()
         db.close()
         self.store = self.open()

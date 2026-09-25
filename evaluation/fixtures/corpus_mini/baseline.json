@@ -1,0 +1,15 @@
+{
+  "format": "pinny.eval_baseline",
+  "format_version": 1,
+  "source_format": "pinny.corpus_report",
+  "corpus_id": "corpus-mini-v1",
+  "matching": {
+    "tolerance_px": 10,
+    "tolerance_rel": null
+  },
+  "metrics": {
+    "ap": 0.8056700244200244,
+    "recall": 0.8125,
+    "f1": 0.7959183673469388
+  }
+}

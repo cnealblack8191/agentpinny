@@ -3,11 +3,12 @@
   "format_version": 1,
   "evaluator": {
     "name": "pinny_eval",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "status": {
     "real_drawing_accuracy": "Not measured — verified reference pending",
     "scope": "no_reference",
+    "caveats": [],
     "note": "No reference file was supplied. Detector output is recorded with its provenance only."
   },
   "document": {
@@ -17,11 +18,18 @@
   },
   "coordinate_frame": {
     "space": "canonical_raster_px",
-    "dpi": 200,
     "width": 1000,
     "height": 800,
     "origin": "top-left",
-    "y_axis": "down"
+    "y_axis": "down",
+    "dpi": null
+  },
+  "dpi_check": {
+    "declared": {
+      "detections": null
+    },
+    "canonical_dpi": 200,
+    "note": "dpi not declared (legacy file); contracts v1 assumes 200"
   },
   "detector_provenance": {
     "scan_id": "synthetic-scan-mixed_sample",
@@ -36,12 +44,18 @@
     "results_sha256": "1e375b29b96321cd6bd52ff6fac0d00fe38e2e04f35bcbafcc0c9b25f9cd068b",
     "provenance": "original_detector_output"
   },
+  "runtime": {
+    "elapsed_seconds": null,
+    "source_field": null
+  },
   "dataset": null,
   "matching": null,
   "counts": {
     "predictions": 6
   },
   "metrics": null,
+  "localization": null,
+  "curve": null,
   "matched": [],
   "false_positives": [],
   "false_negatives": []

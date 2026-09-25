@@ -14,7 +14,12 @@ Implementation: the eligibility graph is split into connected components
 exactly with the Hungarian algorithm. Ineligible pairs (and padding) cost
 BIG, where BIG exceeds any possible sum of eligible distances in the
 component, so minimising total cost maximises cardinality first and total
-distance second.
+distance second. Eligible pairs are found with a uniform grid, so building
+the graph is close to linear in the number of points.
+
+Tolerance may be one radius for all predictions, or a per-prediction radius
+(used by the relative tolerance, see tolerance.py). A pair is eligible when
+its distance is <= the *prediction's* radius.
 
 Determinism: inputs are processed in sorted-ID order. When two matchings
 have exactly equal cardinality and total distance, the result is the one
@@ -25,7 +30,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 
 @dataclass(frozen=True)
@@ -130,33 +135,89 @@ def _components(
     return [groups[k] for k in sorted(groups)]
 
 
+def _cell(v: float, size: float) -> int:
+    return int(math.floor(v / size))
+
+
+def eligible_pairs(
+    predictions: Sequence[Point],
+    references: Sequence[Point],
+    tolerance: Union[float, Mapping[str, float]],
+) -> Dict[Tuple[str, str], float]:
+    """All (prediction_id, reference_id) pairs with distance <= tolerance.
+
+    ``tolerance`` is either one radius for every prediction or a mapping from
+    prediction ID to that prediction's own radius. A uniform grid (cell size
+    = the largest radius) keeps this close to linear on a real page instead of
+    comparing every prediction with every reference.
+    """
+    if isinstance(tolerance, Mapping):
+        tol_of = dict(tolerance)
+        for p in predictions:
+            if p.id not in tol_of:
+                raise ValueError(f"no tolerance for prediction '{p.id}'")
+    else:
+        tol_of = {p.id: tolerance for p in predictions}
+    for t in tol_of.values():
+        if not (isinstance(t, (int, float)) and not isinstance(t, bool) and math.isfinite(t) and t >= 0):
+            raise ValueError("tolerance must be a finite number >= 0")
+    edges: Dict[Tuple[str, str], float] = {}
+    if not predictions or not references:
+        return edges
+    size = max(tol_of.values()) or 1.0
+    grid: Dict[Tuple[int, int], List[Point]] = {}
+    for r in references:
+        grid.setdefault((_cell(r.x, size), _cell(r.y, size)), []).append(r)
+    for p in predictions:
+        tol = tol_of[p.id]
+        reach = int(math.ceil(tol / size))
+        cx, cy = _cell(p.x, size), _cell(p.y, size)
+        for gx in range(cx - reach, cx + reach + 1):
+            for gy in range(cy - reach, cy + reach + 1):
+                for r in grid.get((gx, gy), ()):
+                    d = distance(p, r)
+                    if d <= tol:
+                        edges[(p.id, r.id)] = d
+    return edges
+
+
 def match(
-    predictions: Sequence[Point], references: Sequence[Point], tolerance: float
+    predictions: Sequence[Point],
+    references: Sequence[Point],
+    tolerance: Union[float, Mapping[str, float]],
+    edges_by_id: Optional[Mapping[Tuple[str, str], float]] = None,
 ) -> List[Pair]:
-    """Return the matched pairs, sorted by reference ID then prediction ID."""
-    if not (isinstance(tolerance, (int, float)) and math.isfinite(tolerance) and tolerance >= 0):
-        raise ValueError("tolerance must be a finite number >= 0")
+    """Return the matched pairs, sorted by reference ID then prediction ID.
+
+    ``tolerance`` is one radius, or a mapping prediction ID -> radius (used for
+    relative tolerances). ``edges_by_id`` may pass in a precomputed
+    :func:`eligible_pairs` result for the same inputs.
+    """
+    if edges_by_id is None:
+        edges_by_id = eligible_pairs(predictions, references, tolerance)
 
     preds = sorted(predictions, key=lambda p: p.id)
     refs = sorted(references, key=lambda r: r.id)
-
-    edges: Dict[Tuple[int, int], float] = {}
-    for pi, p in enumerate(preds):
-        for ri, r in enumerate(refs):
-            d = distance(p, r)
-            if d <= tolerance:
-                edges[(pi, ri)] = d
+    pidx = {p.id: i for i, p in enumerate(preds)}
+    ridx = {r.id: i for i, r in enumerate(refs)}
+    edges: Dict[Tuple[int, int], float] = {
+        (pidx[pid], ridx[rid]): d for (pid, rid), d in edges_by_id.items()
+    }
 
     pairs: List[Pair] = []
     for comp_preds, comp_refs in _components(preds, refs, edges):
         n = max(len(comp_preds), len(comp_refs))
-        big = (n + 1) * (tolerance + 1.0) + 1.0
+        comp_edges = [
+            (a, b, edges[(pi, ri)])
+            for a, pi in enumerate(comp_preds)
+            for b, ri in enumerate(comp_refs)
+            if (pi, ri) in edges
+        ]
+        max_d = max(d for _, _, d in comp_edges)
+        big = (n + 1) * (max_d + 1.0) + 1.0
         cost = [[big] * n for _ in range(n)]
-        for a, pi in enumerate(comp_preds):
-            for b, ri in enumerate(comp_refs):
-                d = edges.get((pi, ri))
-                if d is not None:
-                    cost[a][b] = d
+        for a, b, d in comp_edges:
+            cost[a][b] = d
         assignment = _hungarian(cost)
         for a, b in enumerate(assignment):
             if a < len(comp_preds) and b < len(comp_refs):

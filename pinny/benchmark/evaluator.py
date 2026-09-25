@@ -60,12 +60,13 @@ def score_files(detections_path: Path, ground_truth_path: Path, *, document_id: 
                 tolerance_px: float) -> Dict[str, Any]:
     """Score one page exactly as ``pinny_eval score`` does and return the report."""
     ev = load_evaluator()
+    tolerance = importlib.import_module("pinny_eval.tolerance").Tolerance(px=float(tolerance_px))
     try:
         det = ev.inputs.load_detections(str(detections_path))
         gt = ev.inputs.load_ground_truth(str(ground_truth_path))
         identity = ev.inputs.Identity(document_id, document_version, page_index)
         ev.inputs.check_consistency(identity, width, height, det, gt)
-        return ev.report.build_report(det, gt, tolerance_px)
+        return ev.report.build_report(det, gt, tolerance)
     except ev.inputs.InputError as exc:
         raise BenchmarkError("evaluator_rejected", str(exc)) from exc
 

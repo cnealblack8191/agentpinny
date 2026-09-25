@@ -1,0 +1,4 @@
+{
+  "tolerance_px": 10,
+  "reject": "exhaustive_miss_check must be true"
+}

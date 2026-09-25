@@ -1,20 +1,30 @@
 # Integration checks
 
-Status as of 2026-09-23. `docs/contracts.md` v1 is published, and the adapter
-from a §4 scan result into `pinny.detections` v1 exists. The app itself (upload,
-render, viewer, persistence, export) has not been integrated yet. So none of
-the app-level checks could be run. Each check below is marked as either **Ran** or **Awaiting
+Status as of 2026-09-23 (evaluator checks updated 2026-09-24). `docs/contracts.md`
+v1 is published, and the adapter from a §4 scan result into `pinny.detections`
+v1 exists. The app-level checks below have not been run against the integrated
+app yet. Each check below is marked as either **Ran** or **Awaiting
 integration**. A check that has not been run is not recorded as passing.
 
 ## Checks actually run
 
+Standard test command, from the repository root (either form):
+
+```sh
+python3 -m unittest discover -s evaluation/tests -v
+python3 -m pytest evaluation/tests
+```
+
 | # | Check | Command | Result |
 |---|---|---|---|
-| E1 | Evaluator self-tests (fixtures, brute-force matcher cross-check with 400 random cases, input rejection, CLI guards) | `cd evaluation && python3 -m unittest discover -s tests -v` | Ran: 24 tests passed (15 evaluator + 9 adapter/dpi/standalone) |
+| E1 | Evaluator self-tests (fixtures, brute-force matcher cross-check with 400 random cases, grid edge cross-check, score-curve re-match cross-check, tolerance modes, dpi/runtime, detector-assisted rules, corpus, baseline gate, converter, scan adapter, Phase 2 scan modes, CLI guards) | standard test command above | Ran 2026-09-25 on `training-site`: 68 tests passed (unittest and pytest) |
 | E2 | `score` on a synthetic mixed fixture | see `samples/synthetic_mixed_report.md` | Ran: TP 3 / FP 3 / FN 2, matches the hand-authored `expected.json` |
 | E3 | `pending` on a page without a reference | see `samples/pending_report.md` | Ran: reports "Not measured — verified reference pending" |
 | E4 | Rejection of a mismatched document version | `score` on `fixtures/synthetic/reject_version_mismatch` | Ran: exit 2 with the mismatch named |
-| E5 | `adapt-scan` on a hand-authored §4 scan result (with `dpi: 200`), then `score` against a reference whose frame omits `dpi` | see `samples/contract_scan_report.md` | Ran: box centers and `confidence` as hand-computed; TP 2 / FP 1 / FN 1 |
+| E5 | Score curve on a scored fixture | see `samples/synthetic_curve_report.md` | Ran: PR points and AP 0.5417 match the hand-computed `fixtures/synthetic/scored_curve/expected.json` |
+| E6 | Mini-corpus regression gate | `PYTHONPATH=evaluation python3 -m pinny_eval score-corpus --manifest evaluation/fixtures/corpus_mini/manifest.json --baseline evaluation/fixtures/corpus_mini/baseline.json --max-drop 0.01` | Ran: exit 0, gate PASSED (synthetic corpus; see `samples/corpus_mini_report.md`) |
+| E7 | Gate fails on a regression | test `Corpus.test_regression_exit_code` (baseline recall raised by 0.05) | Ran: exit 3, reports still written |
+| E8 | `adapt-scan` on a hand-authored §4 scan result (with `dpi: 200`), then `score` against a reference whose frame omits `dpi` | see `samples/contract_scan_report.md` | Ran: box centers and `confidence` as hand-computed; TP 2 / FP 1 / FN 1 |
 
 ## Awaiting integration
 
@@ -26,7 +36,7 @@ produce accuracy numbers also need a **verified** reference; see README,
 |---|---|---|---|---|
 | I1 | Upload | Uploading a PDF records a stable `document_id` and a content-hash `document_version`. Re-uploading the same bytes gives the same version; a changed file gives a new one. | Hashes are reproducible; a changed file gets a different version | Awaiting integration |
 | I2 | Page selection | The selected page's `page_index` (0-based) is carried into the scan result and its export. | The index in the export equals the page shown to the user | Awaiting integration |
-| I3 | Scan | A scan writes an immutable original-results record (scan ID, detector name/version/settings, canonical raster size, points) that later corrections do not overwrite. | The real scan-result JSON passes `adapt-scan` (confirms that the scan writer's `x`/`y` equal the box center), and the output passes `pending` | Awaiting integration |
+| I3 | Scan | A scan writes an immutable original-results record (scan ID, detector name/version/settings, canonical raster size, points) that later corrections do not overwrite. | The real scan-result JSON passes `adapt-scan` (confirms that the scan writer's `x`/`y` equal the box center), keeps `dpi: 200`, per-detection `score`/`box` and `elapsed_seconds`, and the output passes `pending` | Awaiting integration |
 | I4 | Overlay alignment | Pins drawn on screen line up with canonical raster coordinates at several zoom levels and page rotations. | Placing test pins at known raster points (for example the 4 corners and the centre) and reading them back shows an error ≤ 1 canonical px | Awaiting integration |
 | I5 | Corrections | Adding, moving or deleting a pin changes only the corrected set. The original detector record is unchanged, and edited items are marked with a non-`detector` source. | The original-results hash is the same before and after editing; the evaluator rejects a corrected set passed as detections | Awaiting integration |
 | I6 | Persistence | After a reload or restart, the original results and the corrected set both reload unchanged, with the same IDs and coordinates. | Byte-identical (or canonical-JSON identical) exports before and after the reload | Awaiting integration |

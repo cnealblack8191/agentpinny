@@ -15,6 +15,7 @@ from .types import (
     DetectionResult,
     DetectionTimeout,
     ScanSettings,
+    SkippedOrientation,
     Template,
 )
 
@@ -29,5 +30,6 @@ __all__ = [
     "Detector",
     "OpenCVTemplateDetector",
     "ScanSettings",
+    "SkippedOrientation",
     "Template",
 ]

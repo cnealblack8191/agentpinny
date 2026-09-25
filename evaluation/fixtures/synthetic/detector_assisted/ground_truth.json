@@ -1,0 +1,42 @@
+{
+  "format": "pinny.ground_truth",
+  "format_version": 1,
+  "dataset": {
+    "dataset_id": "synthetic-detector_assisted",
+    "labeled_by": "evaluation agent (synthetic, hand-authored)",
+    "labeled_at": "2026-09-24",
+    "verification": {
+      "status": "detector_assisted_reviewed",
+      "independent_of_detector": false,
+      "exhaustive_miss_check": true,
+      "reviewed_by": "second reviewer (synthetic)",
+      "source_scan_id": "synthetic-scan-detector_assisted",
+      "method": "detector pins reviewed, then the whole page swept for misses (synthetic example)"
+    }
+  },
+  "document": {
+    "document_id": "synthetic-doc-001",
+    "document_version": "sha256:synthetic-v1",
+    "page_index": 0
+  },
+  "coordinate_frame": {
+    "space": "canonical_raster_px",
+    "dpi": 200,
+    "width": 1000,
+    "height": 800,
+    "origin": "top-left",
+    "y_axis": "down"
+  },
+  "receptacles": [
+    {
+      "id": "g1",
+      "x": 100,
+      "y": 100
+    },
+    {
+      "id": "g2",
+      "x": 200,
+      "y": 100
+    }
+  ]
+}
