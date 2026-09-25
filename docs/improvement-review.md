@@ -152,6 +152,7 @@ deliberately left out of the app for now.
 | Learning store | All six integrity fixes; schema migrations (v3); page review status, templates, class labels, manual boxes, document splits; `review_stats`, `review_queue`, crop lists for the bank, COCO `export_dataset`. | `learning-store.md` |
 | Evaluator | F1, localization stats, relative tolerance, PR curve / AP / best-F1 threshold, `score-corpus`, dpi validation, runtime, `detector_assisted_reviewed` labels, `--baseline` gate, mini corpus, CSV converter. | `evaluation/README.md` |
 | Vector matcher | Page classification, exact PDF→canonical mapping for all `/Rotate`, Form XObject reuse matcher, flattened-path matcher tolerant of crossing wires. 500 symbols + 20k clutter segments: 2.2 s (paths), 0.6 s (XObject). | `vector-matching.md` |
+| Model packages | `pinny/model`: `.pinny` file format (template bank, negative veto, kNN or ONNX verifier, calibration, decision rule), integrity hashes, optional HMAC signing, `train_model`, `promotion_check`, CLI. | `model-package.md` |
 | CI | `.github/workflows/tests.yml`: all suites + mini-corpus regression gate. | — |
 
 Still open:

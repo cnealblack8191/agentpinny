@@ -170,6 +170,7 @@ pinny/                 application package (one import root)
   detection/           detection session
   learning/            learning store (moved from top-level pinny_learning/)
   vector/              vector-first PDF symbol matcher (pikepdf)
+  model/               .pinny model packages: train on the website, run in the QC app
   viewer/ (+ web/)     viewer session
 evaluation/            standalone, stdlib-only, must not import pinny
 tests/<module>/        per-module tests

@@ -159,6 +159,8 @@ def test_onnx_verifier_with_tiny_model(tmp_path):
         [helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 192])],
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    # Newer onnx releases write an IR version older onnxruntime can't load.
+    model.ir_version = 8
     path = tmp_path / "tiny.onnx"
     onnx.save(model, str(path))
     v = OnnxEmbeddingVerifier(path, input_size=32, k=1, laplace=1.0, augment_rotations=False)
