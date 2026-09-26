@@ -18,7 +18,7 @@ from typing import Any, Mapping, Tuple
 
 Edges = Tuple[float, float, float, float]
 
-STORE_SCHEMA_VERSION = 3
+STORE_SCHEMA_VERSION = 4
 EXPORT_SCHEMA = "pinny.learning.export"
 EXPORT_SCHEMA_VERSION = 2
 

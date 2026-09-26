@@ -94,6 +94,15 @@ HELD_OUT_SPLITS = ("test", "eval")
 # Detector settings keys read as the scan's score threshold.
 _THRESHOLD_KEYS = ("threshold", "score_threshold", "min_score")
 
+# Batch page states (contracts section 5a).
+BATCH_PENDING = "pending"
+BATCH_RUNNING = "running"
+BATCH_DONE = "done"
+BATCH_FAILED = "failed"
+BATCH_SKIPPED = "skipped"
+BATCH_PAGE_STATES = (BATCH_PENDING, BATCH_RUNNING, BATCH_DONE, BATCH_FAILED, BATCH_SKIPPED)
+PIN_STATES = ("unreviewed", "approved", "rejected", "added", "removed")
+
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -383,6 +392,84 @@ class PageReview:
     completed_at: Optional[str]
     reviewer: Optional[str]
     updated_at: str
+
+
+@dataclass(frozen=True)
+class BatchPage:
+    """One page of a batch scan (contracts section 5a)."""
+
+    page_index: int
+    status: str  # pending | running | done | failed | skipped
+    scan_id: Optional[str]
+    error_code: Optional[str]
+    error_message: Optional[str]
+    attempts: int
+    started_at: Optional[str]
+    finished_at: Optional[str]
+    counts: Dict[str, int]  # pin states of scan_id, plus "total"; empty without a scan
+    review_complete: bool  # the page is marked review-complete (contracts section 5)
+
+
+@dataclass(frozen=True)
+class Batch:
+    """A "scan every page" request: one template, many per-page scans."""
+
+    batch_id: str
+    document_id: str
+    document_version: str
+    mode: str
+    template_page_index: Optional[int]
+    template_box: Optional[Dict[str, Any]]
+    template_sha256: Optional[str]
+    settings: Dict[str, Any]
+    metadata: Dict[str, Any]
+    cancelled_at: Optional[str]
+    created_at: str
+    updated_at: str
+    pages: List[BatchPage]
+
+    @property
+    def status(self) -> str:
+        """``queued`` (nothing started), ``running``, ``cancelled`` or ``complete``."""
+        states = [p.status for p in self.pages]
+        if BATCH_RUNNING in states or (BATCH_PENDING in states and any(
+                s != BATCH_PENDING for s in states)):
+            return "running"
+        if BATCH_PENDING in states:
+            return "queued"
+        return "cancelled" if self.cancelled_at else "complete"
+
+    @property
+    def page_counts(self) -> Dict[str, int]:
+        c = {k: 0 for k in BATCH_PAGE_STATES}
+        for p in self.pages:
+            c[p.status] += 1
+        c["total"] = len(self.pages)
+        return c
+
+    @property
+    def pin_counts(self) -> Dict[str, int]:
+        c: Dict[str, int] = {k: 0 for k in PIN_STATES}
+        c["total"] = 0
+        for p in self.pages:
+            for k, v in p.counts.items():
+                c[k] = c.get(k, 0) + v
+        return c
+
+
+@dataclass(frozen=True)
+class QueueItem:
+    """An unreviewed machine pin in a batch review queue."""
+
+    scan_id: str
+    page_index: int
+    pin_id: str
+    score: float
+    x: float
+    y: float
+    box: Optional[Box]
+    rotation: Optional[int]
+    version: int
 
 
 # Label implied by an event at capture time. Removal of a manual pin carries
@@ -848,6 +935,274 @@ class LearningStore:
                 raise InvalidTransition("remove_manual applies to manual pins; use reject")
             if prior.state == REMOVED:
                 raise InvalidTransition(f"manual pin {pin_id} is already removed")
+
+    # --------------------------------------------------------------- batches
+
+    def create_batch(self, batch_id: str, *, document_id: str, document_version: str,
+                     page_indexes: Sequence[int], mode: str, settings: Mapping[str, Any],
+                     template_page_index: Optional[int] = None, template_box: Any = None,
+                     template_sha256: Optional[str] = None,
+                     metadata: Optional[Mapping[str, Any]] = None) -> Batch:
+        """Record a batch scan and its pages, all ``pending`` (contracts section 5a).
+
+        Idempotent on ``batch_id``: the same request returns the stored batch
+        unchanged (whatever its progress); different content under the same id
+        raises ``IdempotencyConflict``. The scans themselves are recorded with
+        ``record_scan`` and attached with ``finish_batch_page``.
+        """
+        if not batch_id or not isinstance(batch_id, str):
+            raise InvalidArgument("batch_id is required")
+        if not document_id or not document_version or not mode:
+            raise InvalidArgument("document_id, document_version and mode are required")
+        pages = list(page_indexes)
+        if not pages:
+            raise InvalidArgument("a batch needs at least one page")
+        if any(isinstance(i, bool) or not isinstance(i, int) or i < 0 for i in pages):
+            raise InvalidArgument(f"page indexes must be non-negative integers, got {pages!r}")
+        if len(set(pages)) != len(pages):
+            raise InvalidArgument("page indexes must not repeat")
+        if template_page_index is not None and (isinstance(template_page_index, bool)
+                                                or not isinstance(template_page_index, int)
+                                                or template_page_index < 0):
+            raise InvalidArgument("template_page_index must be a non-negative integer")
+        try:
+            tpl_box = Box.coerce(template_box).to_dict() if template_box is not None else None
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            raise InvalidArgument(f"invalid template_box: {e}") from e
+        settings, metadata = dict(settings), dict(metadata or {})
+        request_sha = _sha({"document": [document_id, document_version], "pages": pages,
+                            "mode": mode, "settings": settings,
+                            "template": [template_page_index, tpl_box, template_sha256],
+                            "metadata": metadata})
+        with self._tx() as db:
+            cur = db.execute("SELECT request_sha FROM batches WHERE batch_id=?", (batch_id,)).fetchone()
+            if cur is not None:
+                if cur["request_sha"] != request_sha:
+                    raise IdempotencyConflict(f"batch {batch_id} already recorded with different content")
+            else:
+                now = self._clock()
+                db.execute(
+                    "INSERT INTO batches(batch_id, request_sha, document_id, document_version, mode,"
+                    " template_page_index, template_box, template_sha256, settings, metadata,"
+                    " cancelled_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (batch_id, request_sha, document_id, document_version, mode, template_page_index,
+                     _canon(tpl_box) if tpl_box else None, template_sha256, _canon(settings),
+                     _canon(metadata), None, now, now))
+                for pos, i in enumerate(pages):
+                    db.execute("INSERT INTO batch_pages(batch_id, page_index, position, status)"
+                               " VALUES (?,?,?,?)", (batch_id, i, pos, BATCH_PENDING))
+        return self.get_batch(batch_id)
+
+    def get_batch(self, batch_id: str) -> Batch:
+        with self._read() as db:
+            row = db.execute("SELECT * FROM batches WHERE batch_id=?", (batch_id,)).fetchone()
+            if row is None:
+                raise NotFound(f"batch {batch_id} not found")
+            return self._batch(db, row)
+
+    def list_batches(self, document_version: Optional[str] = None, *,
+                     document_id: Optional[str] = None) -> List[Batch]:
+        """Batches, oldest first."""
+        q, args = "SELECT * FROM batches WHERE 1=1", []
+        for col, val in (("document_version", document_version), ("document_id", document_id)):
+            if val is not None:
+                q += f" AND {col}=?"
+                args.append(val)
+        with self._read() as db:
+            return [self._batch(db, r) for r in db.execute(q + " ORDER BY created_at, rowid", args).fetchall()]
+
+    def next_batch_page(self, batch_id: str) -> Optional[int]:
+        """Claim the next ``pending`` page (in request order) and mark it
+        ``running``. ``None`` when nothing is left or the batch is cancelled."""
+        with self._tx() as db:
+            b = db.execute("SELECT cancelled_at FROM batches WHERE batch_id=?", (batch_id,)).fetchone()
+            if b is None:
+                raise NotFound(f"batch {batch_id} not found")
+            if b["cancelled_at"] is not None:
+                return None
+            r = db.execute("SELECT page_index FROM batch_pages WHERE batch_id=? AND status=?"
+                           " ORDER BY position LIMIT 1", (batch_id, BATCH_PENDING)).fetchone()
+            if r is None:
+                return None
+            now = self._clock()
+            db.execute("UPDATE batch_pages SET status=?, attempts=attempts+1, started_at=?, finished_at=NULL,"
+                       " error_code=NULL, error_message=NULL WHERE batch_id=? AND page_index=?",
+                       (BATCH_RUNNING, now, batch_id, r["page_index"]))
+            db.execute("UPDATE batches SET updated_at=? WHERE batch_id=?", (now, batch_id))
+            return int(r["page_index"])
+
+    def finish_batch_page(self, batch_id: str, page_index: int, scan_id: str) -> BatchPage:
+        """Attach the recorded scan of a ``running`` page and mark it ``done``.
+        Repeating it with the same scan is a no-op."""
+        with self._tx() as db:
+            page = self._batch_page_row(db, batch_id, page_index)
+            if page["status"] == BATCH_DONE and page["scan_id"] == scan_id:
+                return self._batch_pages(db, batch_id, page_index)[0]
+            if page["status"] != BATCH_RUNNING:
+                raise InvalidTransition(f"batch {batch_id} page {page_index} is {page['status']}, not running")
+            b = db.execute("SELECT document_version FROM batches WHERE batch_id=?", (batch_id,)).fetchone()
+            scan = db.execute("SELECT document_version, page_index FROM scans WHERE scan_id=?",
+                              (scan_id,)).fetchone()
+            if scan is None:
+                raise NotFound(f"scan {scan_id} not found; record it before finishing the page")
+            if (scan["document_version"], scan["page_index"]) != (b["document_version"], page_index):
+                raise InvalidArgument(f"scan {scan_id} is of {scan['document_version']} page "
+                                      f"{scan['page_index']}, not batch page {page_index}")
+            now = self._clock()
+            db.execute("UPDATE batch_pages SET status=?, scan_id=?, finished_at=? WHERE batch_id=? AND page_index=?",
+                       (BATCH_DONE, scan_id, now, batch_id, page_index))
+            db.execute("UPDATE batches SET updated_at=? WHERE batch_id=?", (now, batch_id))
+            return self._batch_pages(db, batch_id, page_index)[0]
+
+    def fail_batch_page(self, batch_id: str, page_index: int, code: str, message: str) -> BatchPage:
+        """Mark a ``running`` page ``failed``. The rest of the batch carries on."""
+        with self._tx() as db:
+            page = self._batch_page_row(db, batch_id, page_index)
+            if page["status"] != BATCH_RUNNING:
+                raise InvalidTransition(f"batch {batch_id} page {page_index} is {page['status']}, not running")
+            now = self._clock()
+            db.execute("UPDATE batch_pages SET status=?, error_code=?, error_message=?, finished_at=?"
+                       " WHERE batch_id=? AND page_index=?",
+                       (BATCH_FAILED, str(code)[:200], str(message)[:2000], now, batch_id, page_index))
+            db.execute("UPDATE batches SET updated_at=? WHERE batch_id=?", (now, batch_id))
+            return self._batch_pages(db, batch_id, page_index)[0]
+
+    def cancel_batch(self, batch_id: str) -> Batch:
+        """Stop a batch: ``pending`` pages become ``skipped``. A page already
+        ``running`` still finishes. Idempotent, and a no-op once no page is
+        pending, so a finished batch stays ``complete``."""
+        with self._tx() as db:
+            b = db.execute("SELECT cancelled_at FROM batches WHERE batch_id=?", (batch_id,)).fetchone()
+            if b is None:
+                raise NotFound(f"batch {batch_id} not found")
+            now = self._clock()
+            pending = db.execute("SELECT 1 FROM batch_pages WHERE batch_id=? AND status=? LIMIT 1",
+                                 (batch_id, BATCH_PENDING)).fetchone()
+            if b["cancelled_at"] is None and pending is not None:  # a finished batch stays complete
+                db.execute("UPDATE batches SET cancelled_at=?, updated_at=? WHERE batch_id=?",
+                           (now, now, batch_id))
+            db.execute("UPDATE batch_pages SET status=?, finished_at=? WHERE batch_id=? AND status=?",
+                       (BATCH_SKIPPED, now, batch_id, BATCH_PENDING))
+        return self.get_batch(batch_id)
+
+    def requeue_batch(self, batch_id: str, *, retry_failed: bool = False,
+                      interrupted: bool = True) -> Batch:
+        """Put interrupted pages (left ``running`` by a crash or shutdown) back
+        to ``pending``, and ``failed`` ones too when ``retry_failed``. Pass
+        ``interrupted=False`` while a job is still scanning the batch, so its
+        running page is left alone. A cancelled batch is not resumed; start a
+        new one."""
+        with self._tx() as db:
+            b = db.execute("SELECT cancelled_at FROM batches WHERE batch_id=?", (batch_id,)).fetchone()
+            if b is None:
+                raise NotFound(f"batch {batch_id} not found")
+            if b["cancelled_at"] is None:
+                states = ([BATCH_RUNNING] if interrupted else []) + ([BATCH_FAILED] if retry_failed else [])
+                if not states:
+                    return self.get_batch(batch_id)
+                db.execute(f"UPDATE batch_pages SET status=?, started_at=NULL, finished_at=NULL"
+                           f" WHERE batch_id=? AND status IN ({','.join('?' * len(states))})",
+                           (BATCH_PENDING, batch_id, *states))
+                db.execute("UPDATE batches SET updated_at=? WHERE batch_id=?", (self._clock(), batch_id))
+        return self.get_batch(batch_id)
+
+    def batch_review_queue(self, batch_id: str, strategy: str = "margin", threshold: Optional[float] = None,
+                           limit: Optional[int] = None) -> List[QueueItem]:
+        """Unreviewed machine pins on every finished page of a batch, most
+        uncertain first, so a reviewer can work through the whole set in one
+        pass. ``strategy`` and ``threshold`` mean what they do in
+        ``review_queue``; with no ``threshold`` each scan uses its own
+        detector setting. Ties keep page order, then detection order."""
+        if strategy not in ("margin", "lowest_score"):
+            raise InvalidArgument(f"unknown review_queue strategy {strategy!r}")
+        with self._read() as db:
+            if db.execute("SELECT 1 FROM batches WHERE batch_id=?", (batch_id,)).fetchone() is None:
+                raise NotFound(f"batch {batch_id} not found")
+            rows = db.execute(
+                "SELECT bp.page_index AS page_index, s.detector_settings AS settings, p.*, d.score AS score"
+                " FROM batch_pages bp JOIN scans s ON s.scan_id = bp.scan_id"
+                " JOIN pins p ON p.scan_id = s.scan_id"
+                " JOIN detections d ON d.scan_id = p.scan_id AND d.detection_id = p.detection_id"
+                " WHERE bp.batch_id=? AND bp.status=? AND p.origin='machine' AND p.state='unreviewed'"
+                " ORDER BY bp.position, d.rowid", (batch_id, BATCH_DONE)).fetchall()
+        if not rows:
+            return []
+        if strategy == "margin":
+            fallback = min(r["score"] for r in rows)
+            per_scan: Dict[str, float] = {}
+            for r in rows:
+                if r["scan_id"] not in per_scan:
+                    settings = json.loads(r["settings"])
+                    t = next((float(settings[k]) for k in _THRESHOLD_KEYS
+                              if isinstance(settings.get(k), (int, float))), None)
+                    per_scan[r["scan_id"]] = fallback if t is None else t
+
+            def key(ir):
+                i, r = ir
+                t = float(threshold) if threshold is not None else per_scan[r["scan_id"]]
+                return (abs(r["score"] - t), i)
+        else:
+            def key(ir):
+                return (ir[1]["score"], ir[0])
+        ordered = [r for _, r in sorted(enumerate(rows), key=key)]
+        if limit is not None:
+            ordered = ordered[:max(0, int(limit))]
+        out = []
+        for r in ordered:
+            pin = self._pin(r)
+            out.append(QueueItem(scan_id=pin.scan_id, page_index=int(r["page_index"]), pin_id=pin.pin_id,
+                                 score=float(r["score"]), x=pin.x, y=pin.y, box=pin.box,
+                                 rotation=pin.rotation, version=pin.version))
+        return out
+
+    @staticmethod
+    def _batch_page_row(db: sqlite3.Connection, batch_id: str, page_index: int) -> sqlite3.Row:
+        r = db.execute("SELECT * FROM batch_pages WHERE batch_id=? AND page_index=?",
+                       (batch_id, page_index)).fetchone()
+        if r is None:
+            raise NotFound(f"page {page_index} is not part of batch {batch_id}")
+        return r
+
+    def _batch_pages(self, db: sqlite3.Connection, batch_id: str,
+                     page_index: Optional[int] = None) -> List[BatchPage]:
+        q, args = "SELECT * FROM batch_pages WHERE batch_id=?", [batch_id]
+        if page_index is not None:
+            q += " AND page_index=?"
+            args.append(page_index)
+        rows = db.execute(q + " ORDER BY position", args).fetchall()
+        scan_ids = [r["scan_id"] for r in rows if r["scan_id"]]
+        counts: Dict[str, Dict[str, int]] = {}
+        complete = set()
+        if scan_ids:
+            marks = ",".join("?" * len(scan_ids))
+            for c in db.execute(f"SELECT scan_id, state, COUNT(*) AS n FROM pins WHERE scan_id IN ({marks})"
+                                f" GROUP BY scan_id, state", scan_ids):
+                counts.setdefault(c["scan_id"], {})[c["state"]] = c["n"]
+            complete = {r[0] for r in db.execute(
+                f"SELECT s.scan_id FROM scans s JOIN page_reviews pr ON pr.canonical_page_id = s.canonical_page_id"
+                f" WHERE s.scan_id IN ({marks}) AND pr.status=?", (*scan_ids, PAGE_COMPLETE))}
+        out = []
+        for r in rows:
+            c: Dict[str, int] = {}
+            if r["scan_id"]:
+                c = {k: counts.get(r["scan_id"], {}).get(k, 0) for k in PIN_STATES}
+                c["total"] = sum(c.values())
+            out.append(BatchPage(page_index=int(r["page_index"]), status=r["status"], scan_id=r["scan_id"],
+                                 error_code=r["error_code"], error_message=r["error_message"],
+                                 attempts=int(r["attempts"]), started_at=r["started_at"],
+                                 finished_at=r["finished_at"], counts=c,
+                                 review_complete=r["scan_id"] in complete))
+        return out
+
+    def _batch(self, db: sqlite3.Connection, r: sqlite3.Row) -> Batch:
+        return Batch(batch_id=r["batch_id"], document_id=r["document_id"],
+                     document_version=r["document_version"], mode=r["mode"],
+                     template_page_index=r["template_page_index"],
+                     template_box=json.loads(r["template_box"]) if r["template_box"] else None,
+                     template_sha256=r["template_sha256"], settings=json.loads(r["settings"]),
+                     metadata=json.loads(r["metadata"]), cancelled_at=r["cancelled_at"],
+                     created_at=r["created_at"], updated_at=r["updated_at"],
+                     pages=self._batch_pages(db, r["batch_id"]))
 
     # ------------------------------------------------------------ page review
 

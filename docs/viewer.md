@@ -97,6 +97,31 @@ store unchanged and can be reopened from the Scan list; the UI asks for
 confirmation when the current scan has reviewed pins. Reviews are **not**
 copied onto the new scan (see "Contract gaps").
 
+## Batch scans (contracts §5a)
+
+`ViewerService.start_batch(...)` scans many pages with one template: the
+estimator boxes the symbol once on `template_page_index` (default: the
+first page scanned) and every page in `page_indexes` (default: all) is
+scanned in the background. All three scan modes work.
+
+* Batches run one at a time, one page at a time, on a single worker thread,
+  so memory stays at one page's worth. Detection is about 11 s per Arch D
+  sheet with four rotations, so a 60-sheet set takes roughly ten minutes.
+* Each page's scan is recorded as soon as it finishes; review can start on
+  the first pages while later ones are still scanning.
+* A page that fails (for example, smaller than the template) is recorded as
+  `failed` with its error and the batch moves on. `resume_batch(id,
+  retry_failed=True)` retries it.
+* Shutting the viewer down lets the current page finish and leaves the rest
+  `pending`. Repeating the `POST /api/batches` request (same `request_id`)
+  or calling resume picks up where it stopped. Pages are not resumed
+  automatically at startup.
+* `batch_queue(id)` is the estimator's review list across every finished
+  page. Each item carries `scan_id`, `pin_id` and `version`; review it with
+  the normal `POST /api/scans/{scan_id}/actions`, so the learning data is
+  the same as for single-page review.
+* The front end does not have batch controls yet; the API is ready for them.
+
 ## HTTP API (local, viewer-internal)
 
 | Route | Purpose |
@@ -110,6 +135,12 @@ copied onto the new scan (see "Contract gaps").
 | `GET /api/scans/{id}` | scan plus current pins |
 | `POST /api/scans/{id}/actions` `{action, request_id, pin_id?, x?, y?, expected_version?}` | review action |
 | `GET /api/scans/{id}/report` | report download |
+| `POST /api/batches` `{document_version, request_id, template_box, template_page_index?, page_indexes?, mode?, threshold?, model_threshold?}` | start a batch scan (202); see "Batch scans" |
+| `GET /api/batches/{id}` | batch status, per-page status and pin counts |
+| `GET /api/batches/{id}/queue?strategy=margin\|lowest_score&limit=N` | unreviewed pins across the batch, most uncertain first |
+| `POST /api/batches/{id}/cancel` | skip pages not yet started |
+| `POST /api/batches/{id}/resume` `{retry_failed?}` | resume interrupted pages, optionally retry failed ones |
+| `GET /api/documents/{version}/batches` | batches of a document version |
 
 Errors are `{"error": {"code", "message"}}` (§7).
 

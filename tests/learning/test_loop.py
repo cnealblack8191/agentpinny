@@ -12,7 +12,7 @@ from pinny.learning import (
     Box, Detection, IdempotencyConflict, InvalidArgument, InvalidTransition, NotFound,
     ThresholdSuggestion, detector_settings_sha, suggest_threshold,
 )
-from pinny.learning import loop
+from pinny.learning import contract, loop
 from pinny.learning.__main__ import main as cli_main
 
 from .test_store import DETS, DOCV1, DOCV2, H, W, StoreTestBase, make_scan
@@ -356,7 +356,7 @@ class CliTests(StoreTestBase):
         return buf.getvalue().strip()
 
     def test_commands(self):
-        self.assertIn("store schema 3", self.run_cli("migrate"))
+        self.assertIn(f"store schema {contract.STORE_SCHEMA_VERSION}", self.run_cli("migrate"))
         self.assertEqual(self.run_cli("split", "doc-1", "val"), "val")
         self.assertEqual(self.run_cli("split", "doc-1"), "val")
         self.assertEqual(json.loads(self.run_cli("suggest-threshold"))["reason"], "insufficient_labels")

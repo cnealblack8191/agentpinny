@@ -202,6 +202,53 @@ BEFORE UPDATE ON dataset_exports BEGIN
 END;
 """
 
+# Schema 3 -> 4: batch scans (contracts section 5a). A batch groups the
+# per-page scans of one "scan every page" request. Scans stay immutable; the
+# batch only points at them from batch_pages.scan_id.
+_V3_TO_V4 = """
+CREATE TABLE batches (
+    batch_id            TEXT PRIMARY KEY,
+    request_sha         TEXT NOT NULL,
+    document_id         TEXT NOT NULL,
+    document_version    TEXT NOT NULL,
+    mode                TEXT NOT NULL,
+    template_page_index INTEGER CHECK (template_page_index IS NULL OR template_page_index >= 0),
+    template_box        TEXT,
+    template_sha256     TEXT,
+    settings            TEXT NOT NULL,
+    metadata            TEXT NOT NULL DEFAULT '{}',
+    cancelled_at        TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+CREATE INDEX batches_by_version ON batches(document_version);
+CREATE INDEX batches_by_document ON batches(document_id);
+
+CREATE TABLE batch_pages (
+    batch_id      TEXT NOT NULL REFERENCES batches(batch_id),
+    page_index    INTEGER NOT NULL CHECK (page_index >= 0),
+    position      INTEGER NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('pending','running','done','failed','skipped')),
+    scan_id       TEXT REFERENCES scans(scan_id),
+    error_code    TEXT,
+    error_message TEXT,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    started_at    TEXT,
+    finished_at   TEXT,
+    PRIMARY KEY (batch_id, page_index)
+);
+CREATE INDEX batch_pages_by_scan ON batch_pages(scan_id);
+
+CREATE TRIGGER batch_pages_no_delete
+BEFORE DELETE ON batch_pages BEGIN
+    SELECT RAISE(ABORT, 'batch pages are never deleted');
+END;
+CREATE TRIGGER batches_no_delete
+BEFORE DELETE ON batches BEGIN
+    SELECT RAISE(ABORT, 'batches are never deleted');
+END;
+"""
+
 
 def statements(sql: str) -> List[str]:
     """Split a SQL script into complete statements (trigger bodies included)."""
@@ -234,6 +281,7 @@ def _sql_step(sql: str) -> Migration:
 # version n -> n + 1
 MIGRATIONS: Dict[int, Migration] = {
     2: _sql_step(_V2_TO_V3),
+    3: _sql_step(_V3_TO_V4),
 }
 
 

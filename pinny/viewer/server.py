@@ -15,6 +15,14 @@ Routes (all JSON unless noted; errors are ``{"error": {"code", "message"}}``):
   GET  /api/scans/{scan_id}
   POST /api/scans/{scan_id}/actions  {action, request_id, pin_id?, x?, y?, expected_version?}
   GET  /api/scans/{scan_id}/report   (attachment)
+  POST /api/batches          {document_version, request_id, mode?, template_page_index?,
+                              template_box (not in mode "model"), page_indexes?, threshold?,
+                              model_threshold?}  -> 202, scans the pages in the background
+  GET  /api/batches/{batch_id}          progress and per-page review counts
+  GET  /api/batches/{batch_id}/queue?strategy=margin|lowest_score&limit=N
+  POST /api/batches/{batch_id}/cancel
+  POST /api/batches/{batch_id}/resume   {retry_failed?}
+  GET  /api/documents/{version}/batches
 """
 
 from __future__ import annotations
@@ -53,6 +61,12 @@ _ROUTES = [
     ("GET", r"/api/scans/(?P<s>[^/]+)", "scan_state"),
     ("POST", r"/api/scans/(?P<s>[^/]+)/actions", "act"),
     ("GET", r"/api/scans/(?P<s>[^/]+)/report", "report"),
+    ("POST", r"/api/batches", "batch_start"),
+    ("GET", r"/api/batches/(?P<b>[^/]+)", "batch_state"),
+    ("GET", r"/api/batches/(?P<b>[^/]+)/queue", "batch_queue"),
+    ("POST", r"/api/batches/(?P<b>[^/]+)/cancel", "batch_cancel"),
+    ("POST", r"/api/batches/(?P<b>[^/]+)/resume", "batch_resume"),
+    ("GET", r"/api/documents/(?P<v>[^/]+)/batches", "document_batches"),
 ]
 _COMPILED = [(m, re.compile(p + r"$"), n) for m, p, n in _ROUTES]
 
@@ -155,6 +169,44 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(doc, indent=2, sort_keys=True).encode()
         self._send(200, body, "application/json", extra={
             "Content-Disposition": f'attachment; filename="pinny-report-{p["s"]}.json"'})
+
+    def h_batch_start(self, p, q):
+        b = self._json_body()
+        mode = b.get("mode")
+        if mode is not None and not isinstance(mode, str):
+            raise ViewerError("invalid_mode", "mode must be a string.")
+        if not isinstance(b.get("document_version"), str):
+            raise ViewerError("invalid_document", "document_version is required.")
+        self._json(self.service.start_batch(document_version=b["document_version"],
+                                            request_id=b.get("request_id"),
+                                            template_box=b.get("template_box"),
+                                            template_page_index=b.get("template_page_index"),
+                                            page_indexes=b.get("page_indexes"),
+                                            mode=mode, threshold=b.get("threshold"),
+                                            model_threshold=b.get("model_threshold")), 202)
+
+    def h_batch_state(self, p, q):
+        self._json(self.service.batch_state(p["b"]))
+
+    def h_batch_queue(self, p, q):
+        limit = q.get("limit")
+        if limit is not None:
+            if not limit.isdigit():
+                raise ViewerError("invalid_limit", "limit must be a non-negative integer.")
+            limit = int(limit)
+        self._json(self.service.batch_queue(p["b"], q.get("strategy"), limit))
+
+    def h_batch_cancel(self, p, q):
+        self._json(self.service.cancel_batch(p["b"]))
+
+    def h_batch_resume(self, p, q):
+        retry = self._json_body().get("retry_failed", False)
+        if not isinstance(retry, bool):
+            raise ViewerError("invalid_retry", "retry_failed must be true or false.")
+        self._json(self.service.resume_batch(p["b"], retry_failed=retry))
+
+    def h_document_batches(self, p, q):
+        self._json({"batches": self.service.document_batches(p["v"])})
 
     # -------------------------------------------------------------- helpers
     def _body(self, limit: Optional[int]) -> bytes:

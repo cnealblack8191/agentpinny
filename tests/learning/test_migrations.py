@@ -46,7 +46,7 @@ class MigrationTests(unittest.TestCase):
 
     def test_upgrades_schema_2_in_place(self):
         with self.open() as s:
-            self.assertEqual(s.migrated_from, [2])
+            self.assertEqual(s.migrated_from, [2, 3])
             self.assertEqual(s.schema_version, contract.STORE_SCHEMA_VERSION)
             st = s.load_scan("scan-1")
             self.assertEqual({p.pin_id: p.state for p in st.pins if p.origin == "machine"},
@@ -115,7 +115,7 @@ class MigrationTests(unittest.TestCase):
         finally:
             db.close()
         with self.open() as s:  # the real migration still applies afterwards
-            self.assertEqual(s.migrated_from, [2])
+            self.assertEqual(s.migrated_from, [2, 3])
 
     def test_newer_and_prototype_schemas_are_refused(self):
         for version in ("99", "1"):
@@ -131,7 +131,7 @@ class MigrationTests(unittest.TestCase):
         db = sqlite3.connect(self.dir / "pinny.sqlite3", isolation_level=None)
         try:
             with self.assertRaises(ValueError):
-                schema.migrate(db, 4)
+                schema.migrate(db, contract.STORE_SCHEMA_VERSION + 1)
             self.assertEqual(schema.read_version(db), 2)
         finally:
             db.close()
@@ -155,7 +155,7 @@ class Phase2MigrationTests(unittest.TestCase):
 
     def test_edge_pin_survives_the_upgrade(self):
         with self.open() as s:
-            self.assertEqual(s.migrated_from, [2])
+            self.assertEqual(s.migrated_from, [2, 3])
             pin = s.get_pin("scan-1", PHASE2_EDGE_PIN)
             self.assertEqual((pin.x, pin.y, pin.state, pin.rotation), (1700.0, 1100.0, "added", None))
             labels = {e["pin_id"]: e["label"] for e in s.export()["examples"]}
