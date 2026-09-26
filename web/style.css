@@ -37,3 +37,19 @@ a.disabled { color: #999; pointer-events: none; }
    cursor readout appears mid-drag. */
 #cursor-pos { display: inline-block; width: 17em; min-height: 1.4em; white-space: nowrap; overflow: hidden; }
 #mode-info { margin: 4px 0; }
+#batch-start { margin-top: 6px; }
+#batch-start input { width: 100%; margin: 2px 0 4px; }
+#batch-progress { width: 100%; }
+#batch-actions button { margin: 2px 2px 2px 0; }
+#batch-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+#batch-table td, #batch-table th { text-align: left; padding: 2px 4px; border-bottom: 1px solid #eee; }
+#batch-table tr[data-page] { cursor: pointer; }
+#batch-table tr.current { background: #e6f0ff; }
+#batch-table .failed { color: #b00020; }
+/* Batch state on the page buttons. */
+.pages button[data-badge]::after { content: ""; display: inline-block; width: 7px; height: 7px;
+  border-radius: 50%; margin-left: 4px; vertical-align: middle; background: #bbb; }
+.pages button[data-badge=scanning]::after { background: #2a6df4; }
+.pages button[data-badge=review]::after { background: #ff8c00; }
+.pages button[data-badge=reviewed]::after { background: #0a8f2a; }
+.pages button[data-badge=failed]::after { background: #b00020; }

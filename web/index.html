@@ -41,7 +41,26 @@
         <label>Threshold <input id="threshold" type="number" min="-1" max="1" step="0.01" value="0.65"></label>
       </div>
       <button id="scan-btn" disabled>Scan this page</button>
+      <div id="batch-start">
+        <label for="batch-pages">Pages to scan</label>
+        <input id="batch-pages" type="text" placeholder="all (or e.g. 1-5, 8)" autocomplete="off">
+        <button id="batch-btn" disabled title="Uses the template box drawn on this page">Scan all pages</button>
+      </div>
       <p id="scan-status" class="status" role="status"></p>
+    </section>
+
+    <section id="batch-section">
+      <h2>Batch</h2>
+      <label for="batch-select">Batch</label>
+      <select id="batch-select" disabled><option value="">- none -</option></select>
+      <p id="batch-status" class="status" role="status"></p>
+      <progress id="batch-progress" max="1" value="0" hidden></progress>
+      <div id="batch-actions">
+        <button id="batch-next-btn" disabled title="B">Next mark to review</button>
+        <button id="batch-cancel-btn" disabled>Stop</button>
+        <button id="batch-retry-btn" disabled>Retry failed pages</button>
+      </div>
+      <table id="batch-table"><thead><tr><th>Page</th><th>Status</th><th>To review</th></tr></thead><tbody></tbody></table>
     </section>
 
     <section>

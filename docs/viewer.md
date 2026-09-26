@@ -120,7 +120,22 @@ scanned in the background. All three scan modes work.
   page. Each item carries `scan_id`, `pin_id` and `version`; review it with
   the normal `POST /api/scans/{scan_id}/actions`, so the learning data is
   the same as for single-page review.
-* The front end does not have batch controls yet; the API is ready for them.
+
+In the browser:
+
+1. Open the document, pick a page, and draw the template box as usual.
+2. Leave **Pages to scan** blank for every page, or list pages (`1-5, 8`,
+   numbered from 1), then press **Scan all pages** / **Scan listed pages**.
+3. The **Batch** section shows progress, a per-page table (click a row to
+   open that page and its batch scan) and each page button gets a dot:
+   blue scanning, orange marks to review (or a blank page to check for
+   misses), green reviewed, red failed.
+4. **Next mark to review** (key **B**) jumps to the most uncertain
+   unreviewed mark on any page, opening that page if needed. Review it with
+   **A** / **X** as usual, then press **B** again. Marks with unsaved edits
+   are skipped.
+5. **Stop** skips pages not yet started; **Retry failed pages** runs failed
+   pages again. The batch shown is kept in the URL, so a reload returns to it.
 
 ## HTTP API (local, viewer-internal)
 
@@ -155,7 +170,8 @@ carry the document identity and the frame.
 
 ```
 python -m pytest tests/viewer                       # service + HTTP (21)
-node --test tests/viewer/test_transform.mjs tests/viewer/test_edits.mjs   # (15)
+node --test tests/viewer/test_transform.mjs tests/viewer/test_edits.mjs tests/viewer/test_batch.mjs
+node tests/viewer/test_batch_browser.mjs            # batch scans in Chromium
 node tests/viewer/browser_e2e.mjs                   # Chromium end-to-end (90 checks)
 ```
 

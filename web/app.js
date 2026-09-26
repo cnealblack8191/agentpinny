@@ -12,6 +12,7 @@
 import { api, ApiError, newRequestId } from './api.js';
 import { EditQueue, projectPins, mergePins } from './edits.js';
 import * as T from './transform.js';
+import * as B from './batch.js';
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -27,12 +28,17 @@ const el = {
   stubBanner: $('stub-banner'),
   scanMode: $('scan-mode'), modeInfo: $('mode-info'), templateStep: $('template-step'),
   templateModeLabel: $('template-mode-label'),
+  batchPages: $('batch-pages'), batchBtn: $('batch-btn'), batchSelect: $('batch-select'),
+  batchStatus: $('batch-status'), batchProgress: $('batch-progress'),
+  batchNextBtn: $('batch-next-btn'), batchCancelBtn: $('batch-cancel-btn'),
+  batchRetryBtn: $('batch-retry-btn'), batchTable: $('batch-table'),
 };
 
 const HIDDEN_STATES = new Set(['rejected', 'removed']);
 const CLICK_SLOP = 4; // CSS px a pointer may move and still count as a click
 const MIN_TEMPLATE_SIDE = 8; // detector minimum (ScanSettings.min_template_side)
 const SCAN_MODE_KEY = 'pinny.scanMode';
+const BATCH_POLL_MS = 1500;
 const MODE_NAMES = { template: 'Template match', 'template+verifier': 'Template + verifier',
   model: 'Point detector (no template)' };
 
@@ -58,8 +64,12 @@ const S = {
   selected: null,
   scanning: false,
   lastScanRequest: null,
+  batches: [], // batches of the open document, oldest first
+  batch: null, // the batch shown in the Batch section
+  batchBusy: false, // a batch request (start, stop, retry, next) is in flight
+  lastBatchRequest: null,
   // Sequence numbers: a response is applied only if its number is still current.
-  seq: { doc: 0, page: 0, scan: 0, scanReq: 0 },
+  seq: { doc: 0, page: 0, scan: 0, scanReq: 0, batch: 0 },
 };
 
 // ------------------------------------------------------------ edit queue
@@ -81,6 +91,7 @@ const queue = new EditQueue({
     return api.act(e.scan_id, body);
   },
   onSaved: (e, result) => {
+    if (S.batch && S.batch.pages.some((p) => p.scan_id === e.scan_id)) refreshBatchSoon();
     if (e.scan_id !== S.scanId) return; // saved; not on screen
     S.serverPins = mergePins(S.serverPins, [result.pin]);
     if (S.selected === 'tmp:' + e.request_id) S.selected = result.pin.pin_id;
@@ -300,6 +311,9 @@ function renderPanel() {
     || c.failed > 0;
   renderModes();
   el.scanBtn.textContent = S.scanId ? 'Scan this page again' : 'Scan this page';
+  el.batchBtn.disabled = !S.frame || !templateOk || !modeOk || S.batchBusy;
+  el.batchBtn.textContent = el.batchPages.value.trim() ? 'Scan listed pages' : 'Scan all pages';
+  renderBatch();
   el.scanBtn.title = c.pending ? 'Wait until your edits are saved.'
     : c.failed ? 'Retry or discard the failed edits first.' : '';
 
@@ -420,7 +434,61 @@ function renderPanel() {
   // Pages
   for (const b of el.pages.querySelectorAll('button')) {
     b.setAttribute('aria-pressed', String(Number(b.dataset.page) === S.page));
+    const badge = B.pageBadge(S.batch, Number(b.dataset.page));
+    if (badge) b.dataset.badge = badge;
+    else delete b.dataset.badge;
+    b.title = `page_index ${b.dataset.page}${badge ? ` (batch: ${badge})` : ''}`;
   }
+}
+
+const BATCH_PAGE_TEXT = { pending: 'waiting', running: 'scanning', done: 'scanned', failed: 'failed',
+  skipped: 'skipped' };
+
+function renderBatch() {
+  const b = S.batch;
+  el.batchSelect.disabled = !S.batches.length;
+  const html = ['<option value="">- none -</option>'].concat(S.batches.map((x, i) =>
+    `<option value="${x.batch_id}">Batch ${i + 1} (${fmtTime(x.created_at)}, ${x.page_counts.total} p, `
+    + `${escapeHtml(x.status)})</option>`)).join('');
+  if (el.batchSelect.dataset.html !== html) {
+    el.batchSelect.innerHTML = html;
+    el.batchSelect.dataset.html = html;
+  }
+  el.batchSelect.value = b ? b.batch_id : '';
+  if (!el.batchStatus.dataset.message) {
+    setStatus(el.batchStatus, b ? B.progressText(b) : (S.doc ? 'No batch yet. Draw a template box and '
+      + 'press Scan all pages.' : ''), b && b.page_counts.failed ? 'error' : '');
+  }
+  el.batchProgress.hidden = !b;
+  if (b) {
+    const c = b.page_counts;
+    el.batchProgress.max = Math.max(1, c.total);
+    el.batchProgress.value = c.done + c.failed + c.skipped;
+  }
+  el.batchNextBtn.disabled = !b || S.batchBusy;
+  el.batchCancelBtn.disabled = !B.isActive(b) || S.batchBusy;
+  el.batchRetryBtn.disabled = !b || !b.page_counts.failed || b.status === 'cancelled' || S.batchBusy;
+  const rows = b ? b.pages.map((p) => {
+    const review = p.status === 'done' ? `${p.counts.unreviewed} of ${p.counts.total}`
+      + (p.review_complete ? ' (complete)' : '') : '';
+    const status = p.status === 'failed' && p.error ? `failed: ${p.error.message}` : BATCH_PAGE_TEXT[p.status];
+    return `<tr data-page="${p.page_index}" class="${p.page_index === S.page ? 'current' : ''}">`
+      + `<td>${p.page_index + 1}</td><td class="${p.status === 'failed' ? 'failed' : ''}">${escapeHtml(status)}</td>`
+      + `<td>${review}</td></tr>`;
+  }).join('') : '';
+  const tbody = el.batchTable.tBodies[0];
+  if (tbody.dataset.html !== rows) {
+    tbody.innerHTML = rows;
+    tbody.dataset.html = rows;
+  }
+}
+
+// A transient message in the Batch section; progress text returns after it.
+function batchMessage(text, kind = '') {
+  el.batchStatus.dataset.message = text ? '1' : '';
+  setStatus(el.batchStatus, text, kind);
+  if (!text) delete el.batchStatus.dataset.message;
+  render();
 }
 
 function actionName(a) {
@@ -459,6 +527,7 @@ function saveHash() {
     q.set('v', S.doc.document_version);
     if (S.page != null) q.set('p', S.page);
     if (S.scanId) q.set('s', S.scanId);
+    if (S.batch) q.set('b', S.batch.batch_id);
     if (S.frame) {
       q.set('z', +S.view.zoom.toFixed(6));
       q.set('r', S.view.rotation);
@@ -475,7 +544,7 @@ function readHash() {
   const view = ['z', 'r', 'x', 'y'].every((k) => num(k) !== null)
     ? { zoom: T.clampZoom(num('z')), rotation: T.normRotation(num('r')), panX: num('x'), panY: num('y') }
     : null;
-  return { version: q.get('v'), page: num('p'), scanId: q.get('s'), view };
+  return { version: q.get('v'), page: num('p'), scanId: q.get('s'), batchId: q.get('b'), view };
 }
 
 // ------------------------------------------------------------- loading
@@ -505,6 +574,11 @@ function openDocument(doc, restore = null) {
     el.pages.append(b);
   }
   setStatus(el.docStatus, `${doc.filename}: ${doc.page_count} page(s).`);
+  S.batches = [];
+  S.batch = null;
+  S.seq.batch += 1;
+  batchMessage('');
+  refreshBatches(restore && restore.batchId);
   clearPage();
   if (restore && restore.page != null && restore.page < doc.page_count) {
     selectPage(restore.page, restore);
@@ -687,6 +761,177 @@ async function runScan() {
   }
 }
 
+// -------------------------------------------------------------- batches
+// Batch scans (contracts §5a): one template, every listed page scanned in
+// the background, then one review list across the pages.
+async function refreshBatches(wantId = null) {
+  if (!S.doc) return;
+  const docToken = S.seq.doc;
+  try {
+    const { batches } = await api.documentBatches(S.doc.document_version);
+    if (docToken !== S.seq.doc) return;
+    S.batches = batches;
+    const keep = S.batch && batches.find((b) => b.batch_id === S.batch.batch_id);
+    const want = wantId && batches.find((b) => b.batch_id === wantId);
+    const active = [...batches].reverse().find(B.isActive);
+    showBatch(want || keep || active || batches[batches.length - 1] || null);
+  } catch (err) {
+    if (docToken === S.seq.doc) batchMessage(`Could not load batches: ${err.message}`, 'error');
+  }
+}
+
+let batchTimer = null;
+function showBatch(b) {
+  const prev = S.batch;
+  S.batch = b;
+  if (b) {
+    const i = S.batches.findIndex((x) => x.batch_id === b.batch_id);
+    if (i >= 0) S.batches[i] = b;
+    else S.batches.push(b);
+    pickUpFinishedScan(prev, b);
+  }
+  clearTimeout(batchTimer);
+  if (B.isActive(b)) batchTimer = setTimeout(pollBatch, BATCH_POLL_MS);
+  render();
+}
+
+// Review counts in the batch table follow saved edits, even after scanning
+// has finished and polling has stopped.
+let batchRefreshTimer = null;
+function refreshBatchSoon() {
+  clearTimeout(batchRefreshTimer);
+  batchRefreshTimer = setTimeout(() => { if (!B.isActive(S.batch)) pollBatch(); }, 400);
+}
+
+async function pollBatch() {
+  const b = S.batch;
+  if (!b) return;
+  const token = S.seq.batch;
+  try {
+    const next = await api.batch(b.batch_id);
+    if (token !== S.seq.batch || !S.batch || S.batch.batch_id !== b.batch_id) return;
+    showBatch(next);
+  } catch (err) {
+    if (token !== S.seq.batch) return;
+    batchMessage(`Lost touch with the batch (${err.message}); retrying...`, 'error');
+    clearTimeout(batchTimer);
+    batchTimer = setTimeout(() => { batchMessage(''); pollBatch(); }, BATCH_POLL_MS * 2);
+  }
+}
+
+// When the page on screen finishes scanning, list its new scan, and open it
+// if the page had none.
+function pickUpFinishedScan(prev, b) {
+  if (!S.frame || !S.doc || b.document.document_version !== S.doc.document_version) return;
+  const p = b.pages.find((x) => x.page_index === S.page);
+  if (!p || p.status !== 'done' || S.scans.some((s) => s.scan_id === p.scan_id)) return;
+  S.scans.push({ scan_id: p.scan_id, created_at: b.updated_at, template: b.template, mode: b.mode,
+    counts: { ...p.counts } });
+  if (!S.scanId) loadScan(p.scan_id);
+}
+
+async function startBatch() {
+  if (el.batchBtn.disabled) return;
+  const mode = S.scanMode;
+  let pages;
+  try {
+    pages = B.parsePages(el.batchPages.value, S.doc.page_count);
+  } catch (err) {
+    setStatus(el.scanStatus, err.message, 'error');
+    render();
+    return;
+  }
+  const threshold = Number(el.threshold.value);
+  if (needsTemplate(mode) && !(threshold >= -1 && threshold <= 1)) {
+    setStatus(el.scanStatus, 'Threshold must be a number between -1 and 1.', 'error');
+    return;
+  }
+  const n = pages ? pages.length : S.doc.page_count;
+  if (n > 1 && !window.confirm(`Scan ${n} page(s) with ${needsTemplate(mode) ? 'the template box drawn on '
+      + `page ${S.page + 1}` : 'the point detector'}? Scanning runs in the background; you can keep `
+      + 'reviewing while it works.')) return;
+  const body = { document_version: S.doc.document_version, mode };
+  if (pages) body.page_indexes = pages;
+  if (needsTemplate(mode)) {
+    Object.assign(body, { template_page_index: S.page, template_box: { ...S.template }, threshold });
+  }
+  // As with single scans, a retry after a failure reuses the request id, so
+  // a batch the server started but we never heard about is not started twice.
+  const key = JSON.stringify(body);
+  const reuse = S.lastBatchRequest && S.lastBatchRequest.key === key && S.lastBatchRequest.failed;
+  const requestId = reuse ? S.lastBatchRequest.request_id : newRequestId();
+  S.lastBatchRequest = { key, request_id: requestId, failed: false };
+  const docToken = S.seq.doc;
+  S.batchBusy = true;
+  setStatus(el.scanStatus, `Starting a batch of ${n} page(s)...`);
+  render();
+  try {
+    const b = await api.startBatch({ ...body, request_id: requestId });
+    if (docToken !== S.seq.doc) return;
+    S.seq.batch += 1;
+    showBatch(b);
+    setStatus(el.scanStatus, `Batch started: ${n} page(s). Progress is under Batch.`, 'ok');
+  } catch (err) {
+    if (S.lastBatchRequest && S.lastBatchRequest.request_id === requestId) S.lastBatchRequest.failed = true;
+    if (err.code === 'model_not_active' || err.code === 'models_unavailable') loadModels();
+    if (docToken === S.seq.doc) setStatus(el.scanStatus, `Could not start the batch: ${err.message}`, 'error');
+  } finally {
+    S.batchBusy = false;
+    render();
+  }
+}
+
+async function batchCall(fn, doneText) {
+  const b = S.batch;
+  if (!b) return;
+  S.batchBusy = true;
+  render();
+  try {
+    const next = await fn(b.batch_id);
+    if (S.batch && S.batch.batch_id === b.batch_id) showBatch(next);
+    batchMessage(doneText, 'ok');
+    setTimeout(() => batchMessage(''), 3000);
+  } catch (err) {
+    batchMessage(err.message, 'error');
+  } finally {
+    S.batchBusy = false;
+    render();
+  }
+}
+
+// Go to the most uncertain mark in the batch that has not been reviewed yet,
+// on whichever page it is.
+async function batchNext() {
+  const b = S.batch;
+  if (!b || S.batchBusy) return;
+  S.batchBusy = true;
+  render();
+  try {
+    const { items } = await api.batchQueue(b.batch_id, 200);
+    const busy = (scanId, pinId) => queue.entries.some((e) => e.scan_id === scanId && e.pin_id === pinId);
+    const cur = S.scanId && S.selected ? { scan_id: S.scanId, pin_id: S.selected } : null;
+    const item = B.nextQueueItem(items, busy, cur);
+    if (!item) {
+      const more = B.isActive(S.batch) ? ' More pages are still scanning; try again shortly.' : '';
+      batchMessage(`Nothing left to review in this batch.${more}`, more ? '' : 'ok');
+      return;
+    }
+    batchMessage('');
+    if (item.page_index !== S.page) await selectPage(item.page_index, { scanId: item.scan_id });
+    else if (S.scanId !== item.scan_id) await loadScan(item.scan_id);
+    if (S.page !== item.page_index || S.scanId !== item.scan_id) return; // the reviewer moved on
+    if (S.view.zoom < 0.5) S.view = { ...S.view, zoom: 0.5 };
+    selectPin(item.pin_id);
+    S.view = T.centreOn(S.view, item.x, item.y, S.css.w, S.css.h);
+    render();
+  } catch (err) {
+    batchMessage(`Could not load the review list: ${err.message}`, 'error');
+  } finally {
+    S.batchBusy = false;
+    render();
+  }
+}
+
 // -------------------------------------------------------------- review
 function selectedPin() {
   return displayPins().find((p) => p.pin_id === S.selected) || null;
@@ -865,6 +1110,22 @@ el.approveBtn.onclick = () => review('approve');
 el.rejectBtn.onclick = () => review('delete');
 el.nextBtn.onclick = selectNext;
 el.scanBtn.onclick = runScan;
+el.batchBtn.onclick = startBatch;
+el.batchPages.oninput = render;
+el.batchNextBtn.onclick = batchNext;
+el.batchCancelBtn.onclick = () => batchCall(api.cancelBatch, 'Stopped. Pages already scanned are kept.');
+el.batchRetryBtn.onclick = () => batchCall((id) => api.resumeBatch(id, true), 'Retrying the failed pages.');
+el.batchSelect.onchange = () => {
+  S.seq.batch += 1;
+  showBatch(S.batches.find((b) => b.batch_id === el.batchSelect.value) || null);
+  if (S.batch) pollBatch();
+};
+el.batchTable.addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-page]');
+  if (!tr || !S.batch) return;
+  const p = S.batch.pages.find((x) => x.page_index === Number(tr.dataset.page));
+  if (p) selectPage(p.page_index, p.scan_id ? { scanId: p.scan_id } : null);
+});
 el.scanMode.onchange = () => setScanMode(el.scanMode.value);
 el.scanMode.onfocus = () => loadModels();
 el.file.onchange = () => upload(el.file.files[0]);
@@ -892,7 +1153,7 @@ document.addEventListener('keydown', (e) => {
     0: () => el.fitBtn.onclick(), r: () => el.rotateBtn.onclick(),
     h: () => { el.hidePins.checked = !el.hidePins.checked; render(); },
     a: () => review('approve'), x: () => review('delete'), Delete: () => review('delete'),
-    Backspace: () => review('delete'), n: selectNext,
+    Backspace: () => review('delete'), n: selectNext, b: batchNext,
     Escape: () => { if (S.drag) { S.drag = null; S.dragBox = null; render(); } else if (S.selected) selectPin(null); else setMode('pan'); },
   };
   const fn = actions[k] || actions[k.toLowerCase()];
@@ -935,6 +1196,8 @@ window.__pinny = {
   page: () => S.page,
   template: () => S.template && { ...S.template },
   scanMode: () => S.scanMode,
+  batch: () => S.batch && JSON.parse(JSON.stringify(S.batch)),
+  selected: () => S.selected,
   models: () => S.models,
   queue: () => queue.entries.map((e) => ({ ...e })),
   idle: () => !!S.frame && !rafPending && !S.scanning && queue.counts().pending === 0,
