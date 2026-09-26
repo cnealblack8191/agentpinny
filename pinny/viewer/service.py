@@ -25,7 +25,7 @@ import os
 import subprocess
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -45,6 +45,9 @@ REPORT_FORMAT_VERSION = 1
 # Namespace for scan ids derived from the client's scan request id, so a
 # retried POST converges on one scan.
 _SCAN_NS = uuid.UUID("0b8f7a4e-2d7c-4f7e-9a51-3c9e3f1d6a10")
+# Namespace for batch ids (from the client's request id) and for each batch
+# page's scan request id (from batch id and page), so retries converge.
+_BATCH_NS = uuid.UUID("7c1d2e9a-4b6f-4a38-8e0d-5f2a9b3c7e41")
 
 ACTIONS = ("approve", "reject", "delete_pin", "add_manual", "remove_manual")
 
@@ -103,11 +106,21 @@ class ViewerService:
         self.store = self._db(_store.LearningStore, self.data_dir,
                               crop_renderer=self.render.crop_renderer,
                               default_reviewer=_store.local_reviewer_identity())
+        # Batch scans run one at a time, one page at a time, on this worker,
+        # which bounds memory to one page raster plus the detector's work.
+        self._batch_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pinny-batch")
+        self._batch_jobs: Dict[str, Future] = {}
+        self._batch_lock = threading.Lock()
+        self._closing = threading.Event()
 
     def _db(self, fn, *args, **kwargs):
         return self._exec.submit(fn, *args, **kwargs).result()
 
     def close(self) -> None:
+        # Stop between pages: the page being scanned finishes, later pages stay
+        # pending and resume when the batch is started or resumed again.
+        self._closing.set()
+        self._batch_exec.shutdown(wait=True, cancel_futures=True)
         self._db(self.store.close)
         self._exec.shutdown()
 
@@ -238,27 +251,45 @@ class ViewerService:
     def scan(self, *, document_version: str, page_index: int,
              template_box: Optional[dict] = None, request_id: str,
              threshold: Optional[float] = None, mode: Optional[str] = None,
-             model_threshold: Optional[float] = None) -> dict:
+             model_threshold: Optional[float] = None,
+             template_page_index: Optional[int] = None) -> dict:
         """Run one scan and record it immutably (contracts §4, P7).
 
         ``mode`` is ``template`` (the default, Phase 1), ``template+verifier``
         or ``model``. ``threshold`` is the template-matching threshold and
         applies to the two template modes. ``model_threshold`` overrides the
-        active model's operating point.
+        active model's operating point. ``template_page_index`` is the page
+        the template box was drawn on (default: the scanned page).
 
         ``request_id`` is the client's id for this scan request. The scan id
         is derived from it, so a retried request returns the first result.
         """
         _require_uuid(request_id, "request_id")
-        mode = "template" if mode is None else mode
-        if mode not in MODES:
-            raise ViewerError("invalid_mode",
-                              f"Unknown scan mode {mode!r}; use one of {', '.join(MODES)}.")
+        mode = self._check_scan_args(mode, template_box, threshold, model_threshold)
         scan_id = str(uuid.uuid5(_SCAN_NS, request_id))
         try:
             return self.scan_state(scan_id)
         except ViewerError:
             pass
+        info = self.document_info(document_version)
+        self.render.page_frame(document_version, page_index)  # 404s for an unknown page
+        template = None
+        if mode != "model":
+            template = self._template(document_version,
+                                      page_index if template_page_index is None else template_page_index,
+                                      template_box, record_page=template_page_index is not None)
+        model = self._active_model(mode) if mode != "template" else (None, None)
+        return self._scan_page(info, page_index, scan_id, request_id, mode, template, model,
+                               threshold, model_threshold)
+
+    @staticmethod
+    def _check_scan_args(mode: Optional[str], template_box: Any, threshold: Any,
+                         model_threshold: Any) -> str:
+        """Validate the mode and thresholds of a scan or batch; returns the mode."""
+        mode = "template" if mode is None else mode
+        if mode not in MODES:
+            raise ViewerError("invalid_mode",
+                              f"Unknown scan mode {mode!r}; use one of {', '.join(MODES)}.")
         if threshold is not None and (not _num(threshold) or not -1 <= threshold <= 1):
             raise ViewerError("invalid_threshold", "threshold must be a number in [-1, 1].")
         if model_threshold is not None:
@@ -275,16 +306,44 @@ class ViewerService:
                 raise ViewerError("invalid_threshold",
                                   "threshold is the template-matching threshold; in 'model' "
                                   "mode use model_threshold.")
+        return mode
 
-        info = self.document_info(document_version)
+    def _template(self, document_version: str, page_index: int, template_box: Any,
+                  record_page: bool) -> tuple:
+        """Crop the template from ``page_index``. Returns ``(Template, meta)``,
+        where ``meta`` is the scan result's ``template`` object (contracts §4;
+        ``page_index`` is the v1.2 additive field, set when ``record_page``)."""
         frame = self.render.page_frame(document_version, page_index)
-        box = _template_box(template_box, frame) if mode != "model" else None
-        model_id, model = self._active_model(mode) if mode != "template" else (None, None)
+        box = _template_box(template_box, frame)
+        page = self._page(document_version, page_index, frame)
+        try:
+            template = Template.from_page_crop(page, box)
+        except DetectionError as exc:
+            raise ViewerError(exc.code, str(exc)) from exc
+        meta = {"box": box.to_dict(), "sha256": hashlib.sha256(template.image.tobytes()).hexdigest()}
+        if record_page:
+            meta["page_index"] = page_index
+        return template, meta
+
+    def _page(self, document_version: str, page_index: int, frame: dict):
         page = self.render.render_page(document_version, page_index)
         if page.shape[:2] != (frame["height"], frame["width"]):
             raise ViewerError("frame_mismatch",
                               "The rendered page does not match its frame size; cannot scan.",
                               500)
+        return page
+
+    def _scan_page(self, info: dict, page_index: int, scan_id: str, request_id: str, mode: str,
+                   template: Optional[tuple], model: tuple, threshold: Optional[float],
+                   model_threshold: Optional[float], extra: Optional[dict] = None) -> dict:
+        """Detect on one page and record the scan. ``template`` is
+        ``(Template, meta)`` from ``_template`` (``None`` in model mode) and
+        ``model`` is ``(model_id, model)`` (``(None, None)`` in template mode).
+        ``extra`` is merged into the scan result (e.g. its batch)."""
+        document_version = info["document_version"]
+        model_id, model = model
+        frame = self.render.page_frame(document_version, page_index)
+        page = self._page(document_version, page_index, frame)
 
         document = {"document_id": info["document_id"], "document_version": document_version,
                     "page_index": page_index}
@@ -293,16 +352,14 @@ class ViewerService:
         if mode == "model":
             scan_result.update(self._model_scan(page, frame, model_id, model, model_threshold))
         else:
+            tpl, tpl_meta = template
             settings = (ScanSettings() if threshold is None
                         else ScanSettings(threshold=float(threshold)))
             try:
-                template = Template.from_page_crop(page, box)
-                result = self.detector.detect(page, template, settings)
+                result = self.detector.detect(page, tpl, settings)
             except DetectionError as exc:
                 raise ViewerError(exc.code, str(exc)) from exc
-            scan_result["template"] = {
-                "box": box.to_dict(),
-                "sha256": hashlib.sha256(template.image.tobytes()).hexdigest()}
+            scan_result["template"] = dict(tpl_meta)
             candidates = []
             for c in result.candidates:
                 cx, cy = c.center
@@ -327,6 +384,7 @@ class ViewerService:
             scan_result["detections"] = detections
         for n, d in enumerate(scan_result["detections"], start=1):
             d["id"] = f"det-{n}"
+        scan_result.update(extra or {})
         scan_result["created_at"] = _now()
 
         scan, dets = _store.Scan.from_scan_result(scan_result)
@@ -436,7 +494,189 @@ class ViewerService:
             "pins": [_pin_dict(p, scores, rotations, extras) for p in st.pins],
             "suppressed": result.get("suppressed", []),
             "counts": _counts(st.pins),
+            "batch": result.get("batch"),
         }
+
+    # ---------------------------------------------------------------- batches
+    def start_batch(self, *, document_version: str, request_id: str,
+                    template_box: Optional[dict] = None,
+                    template_page_index: Optional[int] = None,
+                    page_indexes: Optional[List[int]] = None, mode: Optional[str] = None,
+                    threshold: Optional[float] = None,
+                    model_threshold: Optional[float] = None) -> dict:
+        """Scan many pages with one template, in the background (contracts §5a).
+
+        The template box is drawn on ``template_page_index`` and matched on
+        every page in ``page_indexes`` (default: all pages, in order). Each
+        page gets its own ordinary scan, recorded as soon as it finishes, so
+        review can start on the first pages while later ones are scanned. A
+        page that fails is recorded as failed and the batch moves on.
+
+        The batch id is derived from ``request_id``. Repeating the request
+        returns the batch as it stands and resumes pages a shutdown or crash
+        interrupted; the same ``request_id`` with other arguments is a
+        ``request_conflict``.
+        """
+        _require_uuid(request_id, "request_id")
+        mode = self._check_scan_args(mode, template_box, threshold, model_threshold)
+        info = self.document_info(document_version)
+        count = int(info["page_count"])
+        if page_indexes is None:
+            pages = list(range(count))
+        else:
+            if not isinstance(page_indexes, list) or not page_indexes:
+                raise ViewerError("invalid_pages", "page_indexes must be a non-empty list.")
+            if any(isinstance(i, bool) or not isinstance(i, int) for i in page_indexes):
+                raise ViewerError("invalid_pages", "page_indexes must be integers.")
+            if len(set(page_indexes)) != len(page_indexes):
+                raise ViewerError("invalid_pages", "page_indexes lists a page twice.")
+            bad = [i for i in page_indexes if not 0 <= i < count]
+            if bad:
+                raise ViewerError("page_not_found",
+                                  f"Page(s) {bad} are not in this {count}-page document "
+                                  f"(pages are numbered from 0).", 404)
+            pages = list(page_indexes)
+        if not pages:
+            raise ViewerError("invalid_pages", "The document has no pages to scan.")
+        tpl_meta: Dict[str, Any] = {}
+        if mode != "model":
+            if template_page_index is None:
+                template_page_index = pages[0]
+            if (isinstance(template_page_index, bool) or not isinstance(template_page_index, int)
+                    or not 0 <= template_page_index < count):
+                raise ViewerError("invalid_page", "template_page_index must be a page of this "
+                                  "document.")
+            _, tpl_meta = self._template(document_version, template_page_index, template_box,
+                                         record_page=True)
+        elif template_page_index is not None:
+            raise ViewerError("template_not_used",
+                              "Scan mode 'model' needs no template; leave template_page_index out.")
+        if mode != "template":
+            self._active_model(mode)  # fail now, not once per page
+
+        batch_id = str(uuid.uuid5(_BATCH_NS, request_id))
+        settings = {"threshold": threshold, "model_threshold": model_threshold}
+        try:
+            self._db(self.store.create_batch, batch_id, document_id=info["document_id"],
+                     document_version=document_version, page_indexes=pages, mode=mode,
+                     settings=settings, template_page_index=template_page_index if tpl_meta else None,
+                     template_box=tpl_meta.get("box"), template_sha256=tpl_meta.get("sha256"),
+                     metadata={"request_id": request_id})
+        except _store.IdempotencyConflict:
+            raise ViewerError("request_conflict",
+                              "This request_id already started a different batch; use a new "
+                              "request_id.", 409) from None
+        return self.resume_batch(batch_id)
+
+    def resume_batch(self, batch_id: str, retry_failed: bool = False) -> dict:
+        """Continue a batch: requeue interrupted (and, with ``retry_failed``,
+        failed) pages and make sure its job is running. A no-op for a batch
+        that is complete or cancelled."""
+        self._batch(batch_id)  # 404s
+        with self._batch_lock:
+            job = self._batch_jobs.get(batch_id)
+            if job is None or job.done():
+                if self._closing.is_set():
+                    raise ViewerError("shutting_down", "The viewer is shutting down.", 503)
+                # Nothing of this batch is running, so a "running" page was
+                # interrupted and is safe to requeue.
+                self._db(self.store.requeue_batch, batch_id, retry_failed=bool(retry_failed))
+                self._batch_jobs[batch_id] = self._batch_exec.submit(self._run_batch, batch_id)
+            elif retry_failed:
+                # A job is mid-batch: leave its running page alone, and queue a
+                # follow-up job (it starts after this one) for the retried pages.
+                self._db(self.store.requeue_batch, batch_id, retry_failed=True,
+                         interrupted=False)
+                self._batch_jobs[batch_id] = self._batch_exec.submit(self._run_batch, batch_id)
+        return self.batch_state(batch_id)
+
+    def cancel_batch(self, batch_id: str) -> dict:
+        """Skip every page not yet started. The page being scanned finishes."""
+        self._batch(batch_id)
+        self._db(self.store.cancel_batch, batch_id)
+        return self.batch_state(batch_id)
+
+    def wait_batch(self, batch_id: str, timeout: Optional[float] = None) -> dict:
+        """Block until the batch's current job ends (for tests and scripts)."""
+        with self._batch_lock:
+            job = self._batch_jobs.get(batch_id)
+        if job is not None:
+            job.result(timeout=timeout)
+        return self.batch_state(batch_id)
+
+    def _run_batch(self, batch_id: str) -> None:
+        """Scan a batch's pending pages in order, one at a time."""
+        b = self._db(self.store.get_batch, batch_id)
+        threshold = b.settings.get("threshold")
+        model_threshold = b.settings.get("model_threshold")
+        info, template, model, setup_error = None, None, (None, None), None
+        try:
+            info = self.document_info(b.document_version)
+            if b.mode != "model":
+                template = self._template(b.document_version, b.template_page_index,
+                                          b.template_box, record_page=True)
+                if template[1]["sha256"] != b.template_sha256:
+                    raise ViewerError("template_changed",
+                                      "The template page no longer renders the same pixels; "
+                                      "start a new batch.", 409)
+            if b.mode != "template":
+                model = self._active_model(b.mode)
+        except Exception as exc:  # noqa: BLE001 - recorded on each page below
+            setup_error = exc
+        while not self._closing.is_set():
+            page_index = self._db(self.store.next_batch_page, batch_id)
+            if page_index is None:
+                return
+            try:
+                if setup_error is not None:
+                    raise setup_error
+                request_id = str(uuid.uuid5(_BATCH_NS, f"{batch_id}#p{page_index}"))
+                scan_id = str(uuid.uuid5(_SCAN_NS, request_id))
+                try:  # a scan recorded before an interruption is reused
+                    self._db(self.store.load_scan, scan_id)
+                except _store.NotFound:
+                    self._scan_page(info, page_index, scan_id, request_id, b.mode, template, model,
+                                    threshold, model_threshold,
+                                    extra={"batch": {"batch_id": batch_id,
+                                                     "page_index": page_index}})
+                self._db(self.store.finish_batch_page, batch_id, page_index, scan_id)
+            except Exception as exc:  # noqa: BLE001 - one bad page must not stop the batch
+                code = getattr(exc, "code", None)
+                self._db(self.store.fail_batch_page, batch_id, page_index,
+                         code if isinstance(code, str) else "scan_failed",
+                         str(exc) or type(exc).__name__)
+
+    def _batch(self, batch_id: str):
+        try:
+            return self._db(self.store.get_batch, batch_id)
+        except _store.NotFound:
+            raise ViewerError("unknown_batch", "That batch does not exist.", 404) from None
+
+    def batch_state(self, batch_id: str) -> dict:
+        return _batch_dict(self._batch(batch_id))
+
+    def document_batches(self, document_version: str) -> List[dict]:
+        """Batches of one document version, oldest first."""
+        return [_batch_dict(b) for b in self._db(self.store.list_batches, document_version)]
+
+    def batch_queue(self, batch_id: str, strategy: Optional[str] = None,
+                    limit: Optional[int] = None) -> dict:
+        """Unreviewed pins across every finished page, most uncertain first.
+        Each item names its ``scan_id`` and ``pin_id``; review it with the
+        ordinary ``act(scan_id, ...)``."""
+        self._batch(batch_id)
+        strategy = strategy or "margin"
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
+            raise ViewerError("invalid_limit", "limit must be a non-negative integer.")
+        try:
+            items = self._db(self.store.batch_review_queue, batch_id, strategy, limit=limit)
+        except _store.InvalidArgument as exc:
+            raise ViewerError("invalid_strategy", f"{exc}; use margin or lowest_score.") from None
+        return {"batch_id": batch_id, "strategy": strategy,
+                "items": [{"scan_id": i.scan_id, "page_index": i.page_index, "pin_id": i.pin_id,
+                           "score": i.score, "x": i.x, "y": i.y,
+                           "box": i.box.to_dict() if i.box is not None else None,
+                           "rotation": i.rotation, "version": i.version} for i in items]}
 
     # ---------------------------------------------------------------- reviews
     def act(self, scan_id: str, body: dict) -> dict:
@@ -610,6 +850,22 @@ def _pin_dict(p, scores: dict, rotations: dict, extras: Optional[dict] = None) -
     if extras and p.detection_id:
         out.update(extras.get(p.detection_id) or {})
     return out
+
+
+def _batch_dict(b) -> dict:
+    return {"batch_id": b.batch_id, "status": b.status, "mode": b.mode,
+            "document": {"document_id": b.document_id, "document_version": b.document_version},
+            "template": ({"page_index": b.template_page_index, "box": b.template_box,
+                          "sha256": b.template_sha256} if b.template_box else None),
+            "settings": b.settings, "created_at": b.created_at, "updated_at": b.updated_at,
+            "cancelled_at": b.cancelled_at, "page_counts": b.page_counts,
+            "pin_counts": b.pin_counts,
+            "pages": [{"page_index": p.page_index, "status": p.status, "scan_id": p.scan_id,
+                       "error": ({"code": p.error_code, "message": p.error_message}
+                                 if p.error_code else None),
+                       "attempts": p.attempts, "started_at": p.started_at,
+                       "finished_at": p.finished_at, "counts": p.counts,
+                       "review_complete": p.review_complete} for p in b.pages]}
 
 
 def _counts(pins) -> dict:

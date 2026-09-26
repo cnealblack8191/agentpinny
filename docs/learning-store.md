@@ -67,7 +67,7 @@ $PINNY_DATA_DIR  (default: $XDG_DATA_HOME/pinny or ~/.local/share/pinny)
 └── exports/*.json         # versioned metadata exports
 ```
 
-## Tables (store schema 3)
+## Tables (store schema 4)
 
 | table | mutability | contents |
 |---|---|---|
@@ -81,6 +81,8 @@ $PINNY_DATA_DIR  (default: $XDG_DATA_HOME/pinny or ~/.local/share/pinny)
 | `page_reviews` | current state | `canonical_page_id`, status `in_progress`/`complete`, `completed_at`, reviewer |
 | `splits` | current state | `document_id` → `train`/`val`/`test`/`eval` |
 | `dataset_exports` | append-only (trigger) | one row per `export_dataset` call with its manifest and sha256 |
+| `batches` | never deleted (trigger); `cancelled_at` set once | batch scan request (contracts §5a): document, mode, template page/box/sha256, settings, request sha |
+| `batch_pages` | per-page state, never deleted (trigger) | `page_index`, request-order `position`, status `pending`/`running`/`done`/`failed`/`skipped`, `scan_id`, error code/message, attempts |
 
 ## Schema migrations
 
@@ -100,7 +102,8 @@ Schema 2 → 3 adds `templates`, `page_reviews`, `splits`, `review_noops`,
 `dataset_exports`, `scans.template_id`, `pins.class_label`, `pins.rotation`
 (backfilled from detections), and the `scans_no_update` /
 `detections_no_delete` triggers. `python -m pinny.learning migrate` runs it
-explicitly. To add a migration, append a step and bump
+explicitly. Schema 3 → 4 adds `batches` and `batch_pages`; scans are
+untouched. To add a migration, append a step and bump
 `contract.STORE_SCHEMA_VERSION`; never edit the baseline or an old step.
 
 ## Semantics
@@ -152,6 +155,21 @@ explicitly. To add a migration, append a step and bump
 
 * A pin's effective class label is its own `class_label`, else the class
   label of its scan's registered template.
+
+### Batch scans (contracts §5a)
+
+The store keeps batch bookkeeping only; the viewer runs the scans.
+
+| Call | Does |
+|---|---|
+| `create_batch(batch_id, document_id=, document_version=, page_indexes=, mode=, settings=, template_page_index=, template_box=, template_sha256=, metadata=)` | records the batch with every page `pending`; idempotent on `batch_id`, `idempotency_conflict` on different content |
+| `next_batch_page(batch_id)` | claims the next `pending` page (request order), marks it `running`; `None` when done or cancelled |
+| `finish_batch_page(batch_id, page_index, scan_id)` | attaches the recorded scan (must be that document version and page) and marks it `done` |
+| `fail_batch_page(batch_id, page_index, code, message)` | marks a `running` page `failed` |
+| `cancel_batch(batch_id)` | `pending` → `skipped`; a no-op once nothing is pending |
+| `requeue_batch(batch_id, retry_failed=False)` | `running` (interrupted) → `pending`, and `failed` too if asked; not for a cancelled batch |
+| `get_batch` / `list_batches(document_version=, document_id=)` | `Batch` with per-page `BatchPage` (status, scan, error, pin-state counts, `review_complete`) and derived `status`, `page_counts`, `pin_counts` |
+| `batch_review_queue(batch_id, strategy="margin", threshold=None, limit=None)` | `QueueItem`s (scan, page, pin, score, point, box, version) for unreviewed machine pins on every `done` page, most uncertain first; each scan uses its own detector threshold unless one is given |
 
 ### Page review and splits
 

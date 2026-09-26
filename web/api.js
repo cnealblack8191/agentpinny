@@ -53,6 +53,14 @@ export const api = {
   scanState: (scanId) => request('GET', `/api/scans/${enc(scanId)}`),
   act: (scanId, body) => request('POST', `/api/scans/${enc(scanId)}/actions`, { json: body }),
   reportUrl: (scanId) => `/api/scans/${enc(scanId)}/report`,
+  startBatch: (body) => request('POST', '/api/batches', { json: body }),
+  batch: (batchId) => request('GET', `/api/batches/${enc(batchId)}`),
+  batchQueue: (batchId, limit) => request('GET',
+    `/api/batches/${enc(batchId)}/queue${limit != null ? `?limit=${limit}` : ''}`),
+  cancelBatch: (batchId) => request('POST', `/api/batches/${enc(batchId)}/cancel`, { json: {} }),
+  resumeBatch: (batchId, retryFailed) => request('POST', `/api/batches/${enc(batchId)}/resume`,
+    { json: { retry_failed: !!retryFailed } }),
+  documentBatches: (version) => request('GET', `/api/documents/${enc(version)}/batches`),
 };
 
 export function newRequestId() {

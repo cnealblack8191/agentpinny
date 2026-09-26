@@ -129,6 +129,40 @@ A scan is immutable once written. Corrections never modify it.
 * A corrected pin set is **never** a detections file. The evaluator
   rejects it.
 
+## 5a. Batch scans (*v1.2 additive*)
+
+A batch is one "scan every page" request: one template, many pages, one
+ordinary scan per page. It changes nothing in sections 4 or 5.
+
+* **Identity.** `batch_id` is derived from the client's `request_id`
+  (uuid5), so a retried request returns the same batch. The same
+  `request_id` with different arguments is refused (`request_conflict`).
+  Each page's scan id is derived from `batch_id` and `page_index`.
+* **Template.** The box is drawn on `template_page_index` and matched,
+  pixel for pixel, on every page in the batch. The page scans' `template`
+  object (section 4) gains `page_index`, the page it was cut from. It is
+  present on batch scans and on single scans that name a template page;
+  otherwise the template came from the scanned page itself. A different
+  drawing scale on another sheet needs its own batch (exact scale only,
+  see `docs/detection.md`).
+* **Pages.** A batch lists its pages in request order. Each page is
+  `pending` → `running` → `done` (with its `scan_id`) or `failed` (with an
+  error `code` and `message`), or `skipped` if the batch was cancelled
+  first. One failed page never stops the others. Pages left `running` by a
+  crash or shutdown go back to `pending` when the batch is resumed.
+* **Status** is derived from the pages: `queued` (nothing started),
+  `running`, `complete`, or `cancelled` (cancelled while pages were still
+  pending).
+* **Scan result.** A page scan carries `"batch": {"batch_id", "page_index"}`.
+  It is recorded when its page finishes, so review can start before the
+  batch completes.
+* **Review.** Pins are reviewed with the normal section 5 actions on the
+  page's own scan, so labels and training crops come out exactly as for
+  single-page review. The batch review queue lists the unreviewed machine
+  pins of every finished page, most uncertain first (the learning store's
+  `margin` or `lowest_score` order), each with its `scan_id`, `pin_id` and
+  pin `version`.
+
 ## 6. Training crops
 
 These are defined in canonical px (spec v2, which replaces the learning
