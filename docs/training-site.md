@@ -9,8 +9,8 @@ backups to S3. Anything here that contradicts `docs/contracts.md` sections
 reviews.
 
 Implementation status is marked per section: **built** (on
-`claude/beautiful-brahmagupta-vqz21o`), or **planned** (Step 4 jobs and
-sandbox, Step 5 deployment, Step 7 training pages).
+`claude/beautiful-brahmagupta-vqz21o`), or **planned** (Step 5
+deployment, Step 7 training pages).
 
 ## 1. Identity and roles (built)
 
@@ -137,17 +137,71 @@ which are written for users. Any 5xx, and any other exception, becomes
 `500 internal_error` with the request id; the detail goes only to the
 server log.
 
-## 4. Jobs (planned, Step 4)
+## 4. Jobs and sandbox (built)
 
-Today scans run on the web process's threads (single scans on the request
-thread, batches on one background worker) and PDFs are opened by the web
-process. Step 4 moves ingest, render, scan and training into sandboxed
-worker subprocesses behind the `RenderClient` seam (section 9): a SQLite
-job queue, one subprocess per job with memory, CPU-time and wall-clock
-limits and no network, cancellation, and recovery of orphaned jobs on
-restart. Payloads carry ids only, never client-supplied paths. Kinds:
-`ingest`, `render_page`, `scan`, `batch_page`, `build_dataset`,
-`train_verifier`, `train_detector`, `benchmark`.
+With jobs on (`PINNY_JOBS=sandbox` or `external`, required in production)
+the web process never opens a PDF. It queues a job and waits for its
+result:
+
+| Kind | Pool | Does | Payload (ids only) |
+|---|---|---|---|
+| `ingest` | interactive | inspect and store an upload | `staging_id` (32 hex), `filename`, `document_id` |
+| `render_page` | interactive | render a page to the PNG cache | `document_version`, `page_index` |
+| `template` | interactive | crop a template, return its pixel sha256 | `document_version`, `page_index`, `box` |
+| `scan` | scan | template matching on one page | `document_version`, `page_index`, `template {page_index, box, sha256}`, `settings` |
+| `selftest` | interactive | sandbox probes for tests; never submitted by the web tier | `action` |
+
+Training kinds (`build_dataset`, `train_verifier`, `train_detector`,
+`benchmark`) join the table in Step 7, with the training pages that start
+them.
+
+**Queue.** `jobs.sqlite3`, states `queued` → `running` → `done` |
+`failed` | `cancelled`. Workers claim the lowest priority number first,
+then the oldest: single scans (priority 0) go ahead of batch pages
+(10). Two pools, so an upload or a page image never waits behind a scan.
+A render of the same page already queued or running is reused
+(`dedupe_key`). Finished jobs are pruned after 7 days.
+
+**Worker.** Claims a job, starts one child process for it, writes the
+job to the child's stdin, heartbeats every 3 s, and kills the child's
+process group at its wall-clock limit (`timeout`, 504) or when the job is
+cancelled. A child that exits without an answer after a CPU kill is
+`cpu_limit`; any other silent exit is `job_crashed`.
+
+**Child** (`python -m pinny.jobs.child`), before it reads any file:
+
+1. new user and network namespaces: no network, only a loopback
+   interface;
+2. `PR_SET_PDEATHSIG` (it dies with its worker; set after step 1 because
+   a credential change clears it, and it exits if the worker is already
+   gone) and `PR_SET_NO_NEW_PRIVS`;
+3. limits: address space, CPU time, file size, 64 open files, no core
+   dumps (section 5);
+4. a minimal environment: no `PINNY_*`, cloud or other secrets, one
+   thread per numeric library.
+
+Every path is derived in the child from `PINNY_DATA_DIR` and a validated
+id. Answers are one JSON line; only 4xx messages (written for users)
+reach the client, and everything else becomes a generic message with the
+detail in the job's log.
+
+**Isolation is verified, not assumed.** In production the child refuses
+to run (`sandbox_unavailable`) unless it has no network interface but
+loopback. Ubuntu 24.04 restricts unprivileged user namespaces through
+AppArmor, so on the EC2 instance the workers run as their own systemd
+services with `PrivateNetwork=yes` (`PINNY_JOBS=external`, Step 5), and
+the child's check passes whether or not its own `unshare` works.
+
+**Crash recovery.** A running job whose heartbeat is older than 30 s lost
+its worker. Any worker requeues it (once), then fails it with
+`worker_lost`. With `PINNY_JOBS=sandbox` the web process requeues
+immediately on startup, since its own workers are the only ones.
+
+**Still in the web process:** decoding the PNG page images the jobs wrote
+(for training crops and for the two learned-model scan modes, which also
+run their models in-process). These images come from our own renderer,
+not from the uploaded PDF. Moving the model modes into jobs belongs with
+the training work in Step 7.
 
 ## 5. Limits (built unless noted)
 
@@ -160,7 +214,13 @@ restart. Payloads carry ids only, never client-supplied paths. Kinds:
 | Web worker threads | 40 (Starlette/anyio default), not one per connection |
 | Batch scans running at once | 1 (one page at a time) |
 | Upload staging | removed on success and failure |
-| Per-user quotas | planned (Step 4); not needed for 3 users |
+| Per-user quotas | not needed for 3 users |
+| `ingest` job | 2 GB address space, 120 s CPU, 180 s wall |
+| `render_page` job | 3 GB, 180 s CPU, 240 s wall |
+| `template` job | 2 GB, 60 s CPU, 120 s wall |
+| `scan` job | 4 GB, 300 s CPU, 360 s wall |
+| Every job | 1 GB largest file, 64 open files, no network, 2 attempts if its worker dies |
+| Workers (8 GB instance) | 1 interactive + 1 scan |
 
 ## 6. Audit events (built)
 
@@ -196,27 +256,30 @@ deletion is complete everywhere after 30 days.
 | 3 | Reviews under the server's OS account | signed-in email as reviewer | built |
 | 4 | `http.server`: no TLS, slow clients, a thread per connection | uvicorn + Starlette, bounded thread pool, TLS at Cloudflare, app bound to localhost | built |
 | 5 | Uploads held in memory | streamed to disk with the limit enforced while reading | built |
-| 6 | Heavy work in web requests | batches on one background worker; full move to workers | Step 4 |
-| 7 | Untrusted PDFs parsed in the web process | sandboxed workers | Step 4 |
+| 6 | Heavy work in web requests | rendering and template matching in job pools with limits | built |
+| 7 | Untrusted PDFs parsed in the web process | ingest and rendering only in sandboxed children | built |
 | 8 | CSRF | Origin and Content-Type checks | built |
 | 9 | Missing security headers | CSP, HSTS, frame, referrer, nosniff | built |
 | 10 | Internal errors reach clients | generic 500 with request id | built |
 | 11 | Nothing can be deleted | delete endpoint, section 7 | built |
 | 12 | Two default data dirs | one `PINNY_DATA_DIR` for the site | built |
 | 13 | `git:unknown` versions in a deployed image | `PINNY_VERSION` baked in at build; required in production | built |
-| 14 | CLI file-path arguments reachable from the web | no route takes a path; jobs take ids | built / Step 4 |
+| 14 | CLI file-path arguments reachable from the web | no route takes a path; job payloads are ids validated in the child | built |
 | 15 | Shared unsaved-edit queue across users | queue key includes the signed-in email | built |
 
 Residual risks for this deployment: a member's email account being taken
-over (mitigate with MFA on those mailboxes); a PDF parser exploit until
-Step 4; the single EC2 instance as a single point of failure (mitigated by
-nightly backups and weekly snapshots).
+over (mitigate with MFA on those mailboxes); a PDF parser exploit inside
+a child can still read and write what the worker's Unix user can, so Step
+5 runs the workers as their own user with write access only to
+`documents/` and `tmp/`; the single EC2 instance as a single point of
+failure (mitigated by nightly backups and weekly snapshots).
 
 ## 9. Seam between web and workers
 
 `pinny/viewer/service.py` talks to the render service only through these
-methods, which Step 4 re-implements as a job-backed client with the same
-signatures:
+methods (`pinny/viewer/render_client.py`). `RenderService` implements them
+in-process; `JobRenderClient` implements them with jobs and reads only
+`version.json` and the PNG page cache:
 
 ```python
 class RenderClient(Protocol):
@@ -241,6 +304,7 @@ class RenderClient(Protocol):
 | `PINNY_CF_AUD` | unused | required (the Access application's AUD tag) |
 | `PINNY_ADMIN_EMAILS` | optional | required for first start |
 | `PINNY_VERSION` | from git | required (build-time) |
+| `PINNY_JOBS` | `inprocess` (default) | `sandbox` (default) or `external`; `inprocess` is refused |
 | Bind address | `127.0.0.1` only | `127.0.0.1` (cloudflared connects locally) |
 
 Production refuses to start if any required variable is missing.

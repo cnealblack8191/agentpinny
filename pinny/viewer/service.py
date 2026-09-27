@@ -37,7 +37,10 @@ from pinny.render import RenderService
 from pinny.detection import (BoundingBox, DetectionError, OpenCVTemplateDetector,
                              ScanSettings, Template)
 
+from pinny.jobs.queue import PRIORITY_BATCH, PRIORITY_INTERACTIVE, JobQueue
+
 from .errors import ViewerError
+from .render_client import JobRenderClient
 
 _log = logging.getLogger("pinny.viewer")
 
@@ -83,6 +86,14 @@ def _settings_dict(settings: ScanSettings) -> Dict[str, Any]:
     return d
 
 
+@dataclasses.dataclass(frozen=True)
+class JobTemplate:
+    """Where a template comes from, for a sandboxed scan job to crop it again."""
+    page_index: int
+    box: dict
+    sha256: str
+
+
 def _now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="milliseconds").replace(
         "+00:00", "Z")
@@ -91,14 +102,19 @@ def _now() -> str:
 class ViewerService:
     def __init__(self, data_dir: Optional[os.PathLike] = None, *, render=None,
                  detector=None, model_classes: Optional[Dict[str, Any]] = None,
-                 version: Optional[str] = None) -> None:
+                 version: Optional[str] = None, jobs: Optional[JobQueue] = None) -> None:
         """``model_classes`` maps a model kind (``verifier``, ``detector``) to a
         class with the P6 ``load(model_dir)`` classmethod. Kinds left out use
         the real classes, imported lazily. Tests pass fakes here.
         ``version`` is the build's version string (``PINNY_VERSION``); by
-        default the git commit."""
+        default the git commit. With ``jobs`` (docs/training-site.md
+        section 4), uploads, page rendering, template crops and template
+        matching run in sandboxed jobs and this process never opens a PDF."""
         self.data_dir = Path(data_dir) if data_dir is not None else _store.default_data_dir()
-        self.render = render if render is not None else RenderService(self.data_dir)
+        self.jobs = jobs
+        if render is None:
+            render = JobRenderClient(self.data_dir, jobs) if jobs is not None else RenderService(self.data_dir)
+        self.render = render
         self.detector = detector or OpenCVTemplateDetector()
         self.detector_version = version or _git_version()
         self.registry = ModelRegistry(self.data_dir)
@@ -331,12 +347,17 @@ class ViewerService:
         ``page_index`` is the v1.2 additive field, set when ``record_page``)."""
         frame = self.render.page_frame(document_version, page_index)
         box = _template_box(template_box, frame)
-        page = self._page(document_version, page_index, frame)
-        try:
-            template = Template.from_page_crop(page, box)
-        except DetectionError as exc:
-            raise ViewerError(exc.code, str(exc)) from exc
-        meta = {"box": box.to_dict(), "sha256": hashlib.sha256(template.image.tobytes()).hexdigest()}
+        if self.jobs is not None:  # cropped in a sandboxed job; the web never decodes the page
+            meta = dict(self.jobs.run("template", {"document_version": document_version,
+                                                   "page_index": page_index, "box": box.to_dict()}))
+            template = JobTemplate(page_index, box.to_dict(), meta["sha256"])
+        else:
+            page = self._page(document_version, page_index, frame)
+            try:
+                template = Template.from_page_crop(page, box)
+            except DetectionError as exc:
+                raise ViewerError(exc.code, str(exc)) from exc
+            meta = {"box": box.to_dict(), "sha256": hashlib.sha256(template.image.tobytes()).hexdigest()}
         if record_page:
             meta["page_index"] = page_index
         return template, meta
@@ -360,7 +381,10 @@ class ViewerService:
         document_version = info["document_version"]
         model_id, model = model
         frame = self.render.page_frame(document_version, page_index)
-        page = self._page(document_version, page_index, frame)
+        # Template matching runs in a sandboxed job when jobs are on; the page
+        # raster is decoded here only for the learned models.
+        page = (None if self.jobs is not None and mode == "template"
+                else self._page(document_version, page_index, frame))
 
         document = {"document_id": info["document_id"], "document_version": document_version,
                     "page_index": page_index}
@@ -372,19 +396,12 @@ class ViewerService:
             tpl, tpl_meta = template
             settings = (ScanSettings() if threshold is None
                         else ScanSettings(threshold=float(threshold)))
-            try:
-                result = self.detector.detect(page, tpl, settings)
-            except DetectionError as exc:
-                raise ViewerError(exc.code, str(exc)) from exc
+            result = self._detect(document_version, page_index, page, tpl, settings,
+                                  batch=bool(extra and extra.get("batch")), requested_by=requested_by)
             scan_result["template"] = dict(tpl_meta)
-            candidates = []
-            for c in result.candidates:
-                cx, cy = c.center
-                candidates.append({"box": c.box.to_dict(), "x": cx, "y": cy,
-                                   "score": float(c.score), "rotation": c.rotation,
-                                   "source": "detector"})
+            candidates = result["candidates"]
             if mode == "template":
-                scan_result["detector"] = {"name": result.detector,
+                scan_result["detector"] = {"name": result["detector"],
                                            "version": self.detector_version,
                                            "settings": _settings_dict(settings)}
                 detections = candidates
@@ -396,8 +413,8 @@ class ViewerService:
                     "settings": dict(_settings_dict(settings), verifier=vsettings,
                                      code_version=self.detector_version)}
                 scan_result["suppressed"] = suppressed
-            scan_result["truncated"] = result.truncated
-            scan_result["warnings"] = list(result.warnings)
+            scan_result["truncated"] = result["truncated"]
+            scan_result["warnings"] = list(result["warnings"])
             scan_result["detections"] = detections
         for n, d in enumerate(scan_result["detections"], start=1):
             d["id"] = f"det-{n}"
@@ -411,6 +428,31 @@ class ViewerService:
         scan = dataclasses.replace(scan, metadata=metadata)
         self._db(self.store.record_scan, scan, dets)
         return self.scan_state(scan_id)
+
+    def _detect(self, document_version: str, page_index: int, page, tpl, settings: ScanSettings, *,
+                batch: bool, requested_by: Optional[str]) -> dict:
+        """Template matching: ``{detector, candidates, truncated, warnings}``.
+        In a sandboxed ``scan`` job when jobs are on, else in this process."""
+        if self.jobs is not None:
+            return self.jobs.run("scan", {"document_version": document_version, "page_index": page_index,
+                                          "template": {"page_index": tpl.page_index, "box": tpl.box,
+                                                       "sha256": tpl.sha256},
+                                          "settings": _settings_dict(settings)},
+                                 priority=PRIORITY_BATCH if batch else PRIORITY_INTERACTIVE,
+                                 requested_by=requested_by)
+        if page is None:
+            page = self._page(document_version, page_index, self.render.page_frame(document_version, page_index))
+        try:
+            result = self.detector.detect(page, tpl, settings)
+        except DetectionError as exc:
+            raise ViewerError(exc.code, str(exc)) from exc
+        candidates = []
+        for c in result.candidates:
+            cx, cy = c.center
+            candidates.append({"box": c.box.to_dict(), "x": cx, "y": cy, "score": float(c.score),
+                               "rotation": c.rotation, "source": "detector"})
+        return {"detector": result.detector, "candidates": candidates, "truncated": result.truncated,
+                "warnings": list(result.warnings)}
 
     def _verify(self, page, candidates: List[dict], model_id: str, model,
                 model_threshold: Optional[float]):

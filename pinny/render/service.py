@@ -258,8 +258,7 @@ class RenderService:
         if png.is_file():
             rgb = decode_png_rgb(png.read_bytes())
         else:
-            rgb = pdf.render_rgb(self._version_dir(document_version) / "source.pdf", page_index, page.width_px, page.height_px)
-            _write_atomic(png, encode_png_rgb(rgb))
+            rgb = self._render_uncached(document_version, page_index, page, png)
         if rgb.shape != (page.height_px, page.width_px, 3):
             raise PdfUnreadableError("raster_size_mismatch", "Cached raster does not match the page frame; delete it and retry.")
         rgb.setflags(write=False)
@@ -267,6 +266,13 @@ class RenderService:
             self._cache[key] = rgb
             while len(self._cache) > self._cache_size:
                 self._cache.popitem(last=False)
+        return rgb
+
+    def _render_uncached(self, document_version: str, page_index: int, page: PageInfo, png: Path) -> np.ndarray:
+        """Render a page from the PDF and write its PNG cache. The web tier's
+        job-backed client overrides this so it never opens a PDF itself."""
+        rgb = pdf.render_rgb(self._version_dir(document_version) / "source.pdf", page_index, page.width_px, page.height_px)
+        _write_atomic(png, encode_png_rgb(rgb))
         return rgb
 
     def render_page_png(self, document_version: str, page_index: int) -> bytes:

@@ -35,7 +35,10 @@ Run locally, the viewer is in development mode: no sign-in, you are the
 admin, and it refuses to listen on anything but 127.0.0.1. On the internet
 it runs in production mode behind Cloudflare Access; see
 `docs/training-site.md` (sign-in, roles, API, deletion, configuration) and
-manage members with `python -m pinny.viewer.members`.
+manage members with `python -m pinny.viewer.members`. There, PDFs are
+opened only by sandboxed job processes (`PINNY_JOBS=sandbox`, or separate
+`python -m pinny.jobs.worker --pool interactive|scan` services with
+`PINNY_JOBS=external`); see `docs/training-site.md` section 4.
 
 Optional extras, not in the lock: `train` (torch and torchvision, for the
 Phase 2 models) and `onnx` (onnxruntime, for the ONNX embedding verifier),

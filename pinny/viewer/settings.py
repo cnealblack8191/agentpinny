@@ -18,6 +18,12 @@ from pinny.learning.store import default_data_dir as _store_default_data_dir
 DEVELOPMENT = "development"
 PRODUCTION = "production"
 
+# Where PDF work runs (docs/training-site.md section 4).
+JOBS_INPROCESS = "inprocess"  # development and tests only: no sandbox
+JOBS_SANDBOX = "sandbox"  # worker threads in the web process, each job in a sandboxed child
+JOBS_EXTERNAL = "external"  # separate `python -m pinny.jobs.worker` services
+JOBS_MODES = (JOBS_INPROCESS, JOBS_SANDBOX, JOBS_EXTERNAL)
+
 
 class ConfigError(ValueError):
     """The environment does not describe a site that can start safely."""
@@ -52,6 +58,7 @@ class Settings:
     admin_emails: Tuple[str, ...] = ()
     version: str = "git:unknown"
     dev_email: str = "local@localhost"
+    jobs: str = JOBS_INPROCESS
 
     @property
     def production(self) -> bool:
@@ -71,6 +78,9 @@ class Settings:
         team = (e.get("PINNY_CF_TEAM_DOMAIN") or "").strip().lower() or None
         if team:
             team = team.removeprefix("https://").rstrip("/")
+        jobs = (e.get("PINNY_JOBS") or (JOBS_SANDBOX if env == PRODUCTION else JOBS_INPROCESS)).strip().lower()
+        if jobs not in JOBS_MODES:
+            raise ConfigError(f"PINNY_JOBS must be one of {', '.join(JOBS_MODES)}, not {jobs!r}.")
         s = cls(env=env,
                 data_dir=Path(raw_dir).resolve() if raw_dir else _store_default_data_dir(),
                 origin=origin, cf_team_domain=team,
@@ -78,7 +88,8 @@ class Settings:
                 admin_emails=admins,
                 version=(e.get("PINNY_VERSION") or "").strip() or _git_version(),
                 dev_email=((e.get("PINNY_REVIEWER") or "").strip() or _os_user()) if env == DEVELOPMENT
-                else "")
+                else "",
+                jobs=jobs)
         if s.production:
             missing = [name for name, val in (
                 ("PINNY_DATA_DIR", raw_dir), ("PINNY_ORIGIN", origin),
@@ -88,6 +99,9 @@ class Settings:
                 raise ConfigError("Production needs these settings: " + ", ".join(missing) + ".")
             if not origin.startswith("https://"):
                 raise ConfigError("PINNY_ORIGIN must start with https:// in production.")
+            if jobs == JOBS_INPROCESS:
+                raise ConfigError("Production opens PDFs only in sandboxed jobs: set PINNY_JOBS to "
+                                  "sandbox or external.")
         return s
 
     def check_bind(self, host: str) -> None:

@@ -36,7 +36,10 @@ from pinny.render.service import DEFAULT_MAX_UPLOAD_BYTES
 from .auth import PUBLIC, Authenticator, Identity
 from .errors import ViewerError
 from .service import ViewerService
-from .settings import ConfigError, Settings
+from pinny.jobs.queue import JobQueue
+from pinny.jobs.worker import WorkerPool
+
+from .settings import JOBS_INPROCESS, JOBS_SANDBOX, ConfigError, Settings
 from .sitedb import ADMIN, REVIEWER, SiteDB
 
 _log = logging.getLogger("pinny.viewer")
@@ -472,11 +475,19 @@ def main(argv=None) -> int:
     except ConfigError as exc:
         print(f"Cannot start: {exc}", file=sys.stderr)
         return 2
-    service = ViewerService(settings.data_dir, version=settings.version)
+    jobs, workers = None, None
+    if settings.jobs != JOBS_INPROCESS:
+        jobs = JobQueue(settings.data_dir)
+        if settings.jobs == JOBS_SANDBOX:
+            # Our workers are the only ones, and none is running yet: requeue
+            # what a restart cut off. (External workers recover their own.)
+            jobs.recover(stale_after=0)
+            workers = WorkerPool(jobs, settings.data_dir, require_isolation=settings.production).start()
+    service = ViewerService(settings.data_dir, version=settings.version, jobs=jobs)
     httpd = make_server(service, args.host, args.port, args.verbose, settings=settings)
     host, port = httpd.server_address[:2]
-    print(f"Pinny viewer on http://{host}:{port}/  ({settings.env}, data: {service.data_dir}, "
-          f"version {settings.version})", flush=True)
+    print(f"Pinny viewer on http://{host}:{port}/  ({settings.env}, jobs: {settings.jobs}, "
+          f"data: {service.data_dir}, version {settings.version})", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -484,6 +495,8 @@ def main(argv=None) -> int:
     finally:
         httpd.server_close()
         service.close()
+        if workers is not None:
+            workers.stop()
     return 0
 
 
