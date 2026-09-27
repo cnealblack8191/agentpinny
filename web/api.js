@@ -61,6 +61,11 @@ export const api = {
   resumeBatch: (batchId, retryFailed) => request('POST', `/api/batches/${enc(batchId)}/resume`,
     { json: { retry_failed: !!retryFailed } }),
   documentBatches: (version) => request('GET', `/api/documents/${enc(version)}/batches`),
+  me: () => request('GET', '/api/me'),
+  deleteDocument: (version) => request('DELETE', `/api/documents/${enc(version)}`),
+  members: () => request('GET', '/api/members'),
+  putMember: (email, role) => request('POST', '/api/members', { json: { email, role } }),
+  removeMember: (email) => request('POST', '/api/members/remove', { json: { email } }),
 };
 
 export function newRequestId() {

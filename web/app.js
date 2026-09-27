@@ -10,7 +10,7 @@
 // converted back with its inverse. Nothing is stored in screen units.
 
 import { api, ApiError, newRequestId } from './api.js';
-import { EditQueue, projectPins, mergePins } from './edits.js';
+import { EditQueue, projectPins, mergePins, storageKeyFor } from './edits.js';
 import * as T from './transform.js';
 import * as B from './batch.js';
 
@@ -32,6 +32,9 @@ const el = {
   batchStatus: $('batch-status'), batchProgress: $('batch-progress'),
   batchNextBtn: $('batch-next-btn'), batchCancelBtn: $('batch-cancel-btn'),
   batchRetryBtn: $('batch-retry-btn'), batchTable: $('batch-table'),
+  userBar: $('user-bar'), deleteDocBtn: $('delete-doc-btn'), membersSection: $('members-section'),
+  membersTable: $('members-table'), memberEmail: $('member-email'), memberRole: $('member-role'),
+  memberAddBtn: $('member-add-btn'), membersStatus: $('members-status'),
 };
 
 const HIDDEN_STATES = new Set(['rejected', 'removed']);
@@ -64,6 +67,8 @@ const S = {
   selected: null,
   scanning: false,
   lastScanRequest: null,
+  me: null, // GET /api/me: {email, role, env, sign_out_url}
+  members: [],
   batches: [], // batches of the open document, oldest first
   batch: null, // the batch shown in the Batch section
   batchBusy: false, // a batch request (start, stop, retry, next) is in flight
@@ -314,6 +319,7 @@ function renderPanel() {
   el.batchBtn.disabled = !S.frame || !templateOk || !modeOk || S.batchBusy;
   el.batchBtn.textContent = el.batchPages.value.trim() ? 'Scan listed pages' : 'Scan all pages';
   renderBatch();
+  renderAccount();
   el.scanBtn.title = c.pending ? 'Wait until your edits are saved.'
     : c.failed ? 'Retry or discard the failed edits first.' : '';
 
@@ -439,6 +445,73 @@ function renderPanel() {
     else delete b.dataset.badge;
     b.title = `page_index ${b.dataset.page}${badge ? ` (batch: ${badge})` : ''}`;
   }
+}
+
+function canDelete(doc) {
+  return !!(doc && S.me && (S.me.role === 'admin' || doc.uploaded_by === S.me.email));
+}
+
+function renderAccount() {
+  el.deleteDocBtn.hidden = !S.doc;
+  el.deleteDocBtn.disabled = !canDelete(S.doc);
+  el.deleteDocBtn.title = S.doc && !canDelete(S.doc) ? 'Only the person who uploaded it or an admin can delete it.' : '';
+  const admin = !!(S.me && S.me.role === 'admin');
+  el.membersSection.hidden = !admin;
+  if (!admin) return;
+  const rows = S.members.map((m) => `<tr><td>${escapeHtml(m.email)}</td><td>${escapeHtml(m.role)}</td>`
+    + `<td>${m.email === S.me.email ? '(you)' : `<button data-remove="${escapeHtml(m.email)}">Remove</button>`}`
+    + '</td></tr>').join('');
+  const tbody = el.membersTable.tBodies[0];
+  if (tbody.dataset.html !== rows) {
+    tbody.innerHTML = rows;
+    tbody.dataset.html = rows;
+  }
+}
+
+async function loadMembers() {
+  try {
+    S.members = (await api.members()).members;
+  } catch (err) {
+    setStatus(el.membersStatus, err.message, 'error');
+  }
+  render();
+}
+
+async function memberCall(fn, done) {
+  try {
+    await fn();
+    setStatus(el.membersStatus, done, 'ok');
+    await loadMembers();
+  } catch (err) {
+    setStatus(el.membersStatus, err.message, 'error');
+  }
+}
+
+async function deleteDocument() {
+  const doc = S.doc;
+  if (!doc || !canDelete(doc)) return;
+  if (queue.counts().pending) {
+    setStatus(el.docStatus, 'Wait until your edits are saved.', 'error');
+    return;
+  }
+  if (!window.confirm(`Delete ${doc.filename} from Pinny? The PDF and its page images are removed for `
+      + 'everyone. Reviews already made are kept as training labels. This cannot be undone.')) return;
+  try {
+    await api.deleteDocument(doc.document_version);
+    S.seq.doc += 1;
+    S.doc = null;
+    S.batches = [];
+    S.batch = null;
+    clearPage();
+    el.pages.innerHTML = '<span class="muted">Upload a PDF first.</span>';
+    await refreshDocuments();
+    setViewMessage('Upload a PDF and choose a page.');
+    setStatus(el.docStatus, `Deleted ${doc.filename}.`, 'ok');
+    history.replaceState(null, '', location.pathname);
+  } catch (err) {
+    setStatus(el.docStatus, `Could not delete: ${err.message}`, 'error');
+  }
+  render();
 }
 
 const BATCH_PAGE_TEXT = { pending: 'waiting', running: 'scanning', done: 'scanned', failed: 'failed',
@@ -1111,6 +1184,19 @@ el.rejectBtn.onclick = () => review('delete');
 el.nextBtn.onclick = selectNext;
 el.scanBtn.onclick = runScan;
 el.batchBtn.onclick = startBatch;
+el.deleteDocBtn.onclick = deleteDocument;
+el.memberAddBtn.onclick = () => {
+  const email = el.memberEmail.value.trim();
+  if (!email) return;
+  memberCall(() => api.putMember(email, el.memberRole.value), `Saved ${email}.`)
+    .then(() => { el.memberEmail.value = ''; });
+};
+el.membersTable.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-remove]');
+  if (!b) return;
+  const email = b.dataset.remove;
+  if (window.confirm(`Remove ${email} from Pinny?`)) memberCall(() => api.removeMember(email), `Removed ${email}.`);
+});
 el.batchPages.oninput = render;
 el.batchNextBtn.onclick = batchNext;
 el.batchCancelBtn.onclick = () => batchCall(api.cancelBatch, 'Stopped. Pages already scanned are kept.');
@@ -1200,6 +1286,7 @@ window.__pinny = {
   selected: () => S.selected,
   models: () => S.models,
   queue: () => queue.entries.map((e) => ({ ...e })),
+  queueKey: () => queue.storageKey,
   idle: () => !!S.frame && !rafPending && !S.scanning && queue.counts().pending === 0,
   toScreen: (x, y) => T.toScreen(S.view, x, y),
   lookAt: (x, y, zoom, rotation) => setView(T.centreOn({ ...S.view, zoom: T.clampZoom(zoom),
@@ -1236,6 +1323,27 @@ async function start() {
   try { S.scanMode = MODE_NAMES[localStorage.getItem(SCAN_MODE_KEY)] ? localStorage.getItem(SCAN_MODE_KEY) : 'template'; } catch (err) { /* ignore */ }
   sizeCanvas();
   render();
+  try {
+    S.me = await api.me();
+  } catch (err) {
+    // 401: not signed in at the gate; 403: signed in but not a member.
+    setViewMessage(err.message, true);
+    el.userBar.textContent = err.status === 403 ? 'Not a Pinny member.' : 'Not signed in.';
+    return;
+  }
+  el.userBar.textContent = `Signed in as ${S.me.email} (${S.me.role})`;
+  if (S.me.sign_out_url) {
+    const a = document.createElement('a');
+    a.href = S.me.sign_out_url;
+    a.textContent = 'Sign out';
+    el.userBar.append(' · ', a);
+  }
+  if (S.me.env === 'production') {
+    try {
+      queue.useStorageKey(storageKeyFor(S.me.email));
+    } catch (err) { /* edits saved before sign-in existed; keep them rather than drop them */ }
+  }
+  if (S.me.role === 'admin') loadMembers();
   loadModels();
   try {
     const h = await api.health();

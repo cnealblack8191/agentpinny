@@ -31,6 +31,12 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python -m pinny.viewer      # then open http://127.0.0.1:8765/
 ```
 
+Run locally, the viewer is in development mode: no sign-in, you are the
+admin, and it refuses to listen on anything but 127.0.0.1. On the internet
+it runs in production mode behind Cloudflare Access; see
+`docs/training-site.md` (sign-in, roles, API, deletion, configuration) and
+manage members with `python -m pinny.viewer.members`.
+
 Optional extras, not in the lock: `train` (torch and torchvision, for the
 Phase 2 models) and `onnx` (onnxruntime, for the ONNX embedding verifier),
 for example `pip install -e ".[train]"`.
@@ -48,8 +54,10 @@ python -m pytest tests evaluation/tests               # every Python suite
 PYTHONPATH=evaluation python -m pinny_eval score-corpus \
   --manifest evaluation/fixtures/corpus_mini/manifest.json \
   --baseline evaluation/fixtures/corpus_mini/baseline.json --max-drop 0.01   # evaluator gate
-node --test tests/viewer/test_transform.mjs tests/viewer/test_edits.mjs      # viewer JS units
+node --test tests/viewer/test_transform.mjs tests/viewer/test_edits.mjs tests/viewer/test_batch.mjs  # viewer JS units
 node tests/viewer/test_modes_browser.mjs                                     # Chromium, fake models
+node tests/viewer/test_batch_browser.mjs                                     # Chromium, batch scans
+node tests/viewer/test_site_browser.mjs                                      # Chromium, signed-in site
 ```
 
 Tests that need `torch` or `onnxruntime` skip when those extras are not

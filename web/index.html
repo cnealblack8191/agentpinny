@@ -9,6 +9,7 @@
 <body>
   <aside id="panel">
     <h1>Pinny</h1>
+    <p id="user-bar" class="muted"></p>
     <div id="stub-banner" class="banner" hidden>
       Stub render service: page images are synthetic stand-ins, not the PDF content.
     </div>
@@ -19,6 +20,7 @@
       <label for="doc-select">or open</label>
       <select id="doc-select"><option value="">- uploaded documents -</option></select>
       <p id="doc-status" class="status" role="status"></p>
+      <button id="delete-doc-btn" disabled hidden>Delete this drawing</button>
     </section>
 
     <section>
@@ -79,6 +81,18 @@
       <label><input type="checkbox" id="show-hidden"> Show rejected and removed pins</label>
       <p><a id="report-link" class="disabled" aria-disabled="true">Export report (JSON)</a></p>
       <table id="pin-table"><thead><tr><th>Pin</th><th>Score</th><th>State</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="members-section" hidden>
+      <h2>Members (admin)</h2>
+      <p class="muted">People must also be on the Cloudflare Access allow-list to reach the site.</p>
+      <table id="members-table"><thead><tr><th>Email</th><th>Role</th><th></th></tr></thead><tbody></tbody></table>
+      <div id="member-add">
+        <input id="member-email" type="email" placeholder="name@company.com" autocomplete="off">
+        <select id="member-role"><option value="reviewer">Reviewer</option><option value="admin">Admin</option></select>
+        <button id="member-add-btn">Add or change</button>
+      </div>
+      <p id="members-status" class="status" role="status"></p>
     </section>
   </aside>
 

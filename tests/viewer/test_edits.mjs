@@ -1,7 +1,7 @@
 // node --test tests/viewer/test_edits.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EditQueue, projectPins, mergePins, STORAGE_KEY } from '../../web/edits.js';
+import { EditQueue, projectPins, mergePins, STORAGE_KEY, storageKeyFor } from '../../web/edits.js';
 
 class MemStorage {
   constructor() { this.m = new Map(); }
@@ -120,4 +120,19 @@ test('mergePins never rolls a pin back to an older version', () => {
   const out = Object.fromEntries(mergePins(known, stale).map((p) => [p.pin_id, p]));
   assert.equal(out.a.state, 'approved');
   assert.ok(out.b);
+});
+
+test('each signed-in person has their own outbox', () => {
+  const storage = new MemStorage();
+  storage.setItem(storageKeyFor('a@x.com'), JSON.stringify([
+    { scan_id: 's', action: 'approve', pin_id: 'p', request_id: 'r-a', status: 'pending', attempts: 0 }]));
+  const q = new EditQueue({ storage, send: async () => ({ pin: {} }), setTimer: () => 0 });
+  assert.equal(q.entries.length, 0); // the unscoped outbox is empty
+  q.useStorageKey(storageKeyFor('B@x.com'));
+  assert.equal(q.entries.length, 0); // B never sees A's edits
+  assert.equal(q.storageKey, 'pinny.viewer.outbox.v1:b@x.com');
+  const qa = new EditQueue({ storage, send: async () => ({ pin: {} }), setTimer: () => 0,
+    storageKey: storageKeyFor('a@x.com') });
+  assert.equal(qa.entries.length, 1);
+  assert.throws(() => qa.useStorageKey(storageKeyFor('b@x.com')), /not empty/);
 });

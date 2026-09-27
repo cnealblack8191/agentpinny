@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import threading
 import unicodedata
 import uuid
@@ -218,6 +219,21 @@ class RenderService:
                 if document_id is None or meta.document_id == document_id:
                     out.append(meta)
         return sorted(out, key=lambda m: m.uploaded_at)
+
+    def delete_version(self, document_version: str) -> None:
+        """Remove a version's PDF, metadata and cached rasters
+        (docs/training-site.md section 7). Raises
+        ``document_version_not_found`` if it does not exist."""
+        with self._lock:
+            self._load_meta(document_version)  # 404s for an unknown version
+            vdir = self._version_dir(document_version)
+            prefix = document_version + "#"
+            for key in [k for k in self._cache if k.startswith(prefix)]:
+                del self._cache[key]
+            # Rename first so a concurrent reader sees "not found", not half a directory.
+            trash = self.root / "tmp" / f"deleted_{uuid.uuid4().hex}"
+            os.replace(vdir, trash)
+        shutil.rmtree(trash, ignore_errors=True)
 
     # --- contract section 9 --------------------------------------------------
     def page_frame(self, document_version: str, page_index: int) -> dict[str, Any]:

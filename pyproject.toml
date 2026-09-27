@@ -15,6 +15,11 @@ dependencies = [
     # Vector-first symbol matcher (pinny.vector). MPL-2.0.
     "pikepdf==10.13.0.post1",
     "pypdfium2==5.13.0",
+    # Web tier for the training site (docs/training-site.md): ASGI app,
+    # server, and Cloudflare Access token verification.
+    "starlette==1.7.0",
+    "uvicorn==0.54.0",
+    "PyJWT[crypto]==2.15.0",
 ]
 
 [project.optional-dependencies]

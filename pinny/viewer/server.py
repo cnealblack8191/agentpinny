@@ -1,227 +1,199 @@
-"""Local HTTP server for the viewer: JSON API plus the static front end in
-``web/``. Standard library only; single-user, bound to localhost by default.
+"""HTTP layer for the viewer and training site: a Starlette app served by
+uvicorn (docs/training-site.md section 3). ``ViewerService`` stays the
+service layer; this module adds identity, roles, CSRF checks, security
+headers, streamed uploads and safe errors.
 
-Routes (all JSON unless noted; errors are ``{"error": {"code", "message"}}``):
-
-  GET  /api/health
-  GET  /api/documents
-  POST /api/documents?filename=..&document_id=..     body: PDF bytes
-  GET  /api/documents/{version}/pages/{i}/frame
-  GET  /api/documents/{version}/pages/{i}/raster.png  (image/png)
-  GET  /api/documents/{version}/pages/{i}/scans
-  GET  /api/models           scan modes, whether each can run, the active models
-  POST /api/scans            {document_version, page_index, request_id, mode?,
-                              template_box (not in mode "model"), threshold?, model_threshold?}
-  GET  /api/scans/{scan_id}
-  POST /api/scans/{scan_id}/actions  {action, request_id, pin_id?, x?, y?, expected_version?}
-  GET  /api/scans/{scan_id}/report   (attachment)
-  POST /api/batches          {document_version, request_id, mode?, template_page_index?,
-                              template_box (not in mode "model"), page_indexes?, threshold?,
-                              model_threshold?}  -> 202, scans the pages in the background
-  GET  /api/batches/{batch_id}          progress and per-page review counts
-  GET  /api/batches/{batch_id}/queue?strategy=margin|lowest_score&limit=N
-  POST /api/batches/{batch_id}/cancel
-  POST /api/batches/{batch_id}/resume   {retry_failed?}
-  GET  /api/documents/{version}/batches
+Every route declares a minimum role in ``ROUTES``; ``tests/viewer/test_site.py``
+fails if one does not.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import logging
 import mimetypes
+import os
 import re
+import socket
 import sys
+import tempfile
 import threading
-import traceback
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import uuid
 from pathlib import Path
-from typing import Optional
-from urllib.parse import parse_qs, unquote, urlsplit
+from typing import Any, Callable, Optional
+
+import uvicorn
+from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
 
 from pinny.render.service import DEFAULT_MAX_UPLOAD_BYTES
 
+from .auth import PUBLIC, Authenticator, Identity
 from .errors import ViewerError
 from .service import ViewerService
+from .settings import ConfigError, Settings
+from .sitedb import ADMIN, REVIEWER, SiteDB
+
+_log = logging.getLogger("pinny.viewer")
 
 WEB_ROOT = Path(__file__).resolve().parents[2] / "web"
 MAX_JSON_BYTES = 1024 * 1024
 
-_PAGE = r"/api/documents/(?P<v>[^/]+)/pages/(?P<i>\d+)"
-_ROUTES = [
-    ("GET", r"/api/health", "health"),
-    ("GET", r"/api/documents", "documents"),
-    ("POST", r"/api/documents", "upload"),
-    ("GET", _PAGE + r"/frame", "frame"),
-    ("GET", _PAGE + r"/raster\.png", "raster"),
-    ("GET", _PAGE + r"/scans", "page_scans"),
-    ("GET", r"/api/models", "models"),
-    ("POST", r"/api/scans", "scan"),
-    ("GET", r"/api/scans/(?P<s>[^/]+)", "scan_state"),
-    ("POST", r"/api/scans/(?P<s>[^/]+)/actions", "act"),
-    ("GET", r"/api/scans/(?P<s>[^/]+)/report", "report"),
-    ("POST", r"/api/batches", "batch_start"),
-    ("GET", r"/api/batches/(?P<b>[^/]+)", "batch_state"),
-    ("GET", r"/api/batches/(?P<b>[^/]+)/queue", "batch_queue"),
-    ("POST", r"/api/batches/(?P<b>[^/]+)/cancel", "batch_cancel"),
-    ("POST", r"/api/batches/(?P<b>[^/]+)/resume", "batch_resume"),
-    ("GET", r"/api/documents/(?P<v>[^/]+)/batches", "document_batches"),
+_VERSION_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+CSP = ("default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; "
+       "frame-ancestors 'none'; form-action 'self'")
+
+# (method, path, handler, minimum role, body kind). Body kind is what a
+# state-changing request must send: "json", "pdf" or None (no body).
+ROUTES = [
+    ("GET", "/healthz", "healthz", PUBLIC, None),
+    ("GET", "/api/me", "me", REVIEWER, None),
+    ("GET", "/api/health", "health", REVIEWER, None),
+    ("GET", "/api/documents", "documents", REVIEWER, None),
+    ("POST", "/api/documents", "upload", REVIEWER, "pdf"),
+    ("DELETE", "/api/documents/{v}", "delete_document", REVIEWER, None),
+    ("GET", "/api/documents/{v}/pages/{i:int}/frame", "frame", REVIEWER, None),
+    ("GET", "/api/documents/{v}/pages/{i:int}/raster.png", "raster", REVIEWER, None),
+    ("GET", "/api/documents/{v}/pages/{i:int}/scans", "page_scans", REVIEWER, None),
+    ("GET", "/api/documents/{v}/batches", "document_batches", REVIEWER, None),
+    ("GET", "/api/models", "models", REVIEWER, None),
+    ("POST", "/api/scans", "scan", REVIEWER, "json"),
+    ("GET", "/api/scans/{s}", "scan_state", REVIEWER, None),
+    ("POST", "/api/scans/{s}/actions", "act", REVIEWER, "json"),
+    ("GET", "/api/scans/{s}/report", "report", REVIEWER, None),
+    ("POST", "/api/batches", "batch_start", REVIEWER, "json"),
+    ("GET", "/api/batches/{b}", "batch_state", REVIEWER, None),
+    ("GET", "/api/batches/{b}/queue", "batch_queue", REVIEWER, None),
+    ("POST", "/api/batches/{b}/cancel", "batch_cancel", REVIEWER, "json"),
+    ("POST", "/api/batches/{b}/resume", "batch_resume", REVIEWER, "json"),
+    ("GET", "/api/members", "members", ADMIN, None),
+    ("POST", "/api/members", "member_put", ADMIN, "json"),
+    ("POST", "/api/members/remove", "member_remove", ADMIN, "json"),
+    ("GET", "/api/audit", "audit", ADMIN, None),
+    ("GET", "/{path:path}", "static", PUBLIC, None),
 ]
-_COMPILED = [(m, re.compile(p + r"$"), n) for m, p, n in _ROUTES]
 
 
-class Handler(BaseHTTPRequestHandler):
-    service: ViewerService  # set on the subclass by make_server
-    web_root: Path = WEB_ROOT
-    server_version = "PinnyViewer/1"
+class SecurityHeaders:
+    """ASGI middleware: a request id and the security headers on every
+    response, including errors and static files."""
 
-    def log_message(self, fmt, *args):  # quieter default logging
-        if getattr(self.server, "verbose", False):
-            super().log_message(fmt, *args)
+    def __init__(self, app, production: bool) -> None:
+        self.app = app
+        self.production = production
 
-    # ------------------------------------------------------------- dispatch
-    def do_GET(self):
-        self._dispatch("GET")
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        rid = uuid.uuid4().hex[:16]
+        scope.setdefault("state", {})["request_id"] = rid
+        is_api = scope["path"].startswith("/api/")
 
-    def do_POST(self):
-        self._dispatch("POST")
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = [(k, v) for k, v in message.get("headers", [])
+                           if k.lower() not in (b"server",)]
+                have = {k.lower() for k, _ in headers}
+                add = [(b"x-request-id", rid.encode()),
+                       (b"content-security-policy", CSP.encode()),
+                       (b"referrer-policy", b"no-referrer"),
+                       (b"x-content-type-options", b"nosniff"),
+                       (b"x-frame-options", b"DENY")]
+                if self.production:
+                    add.append((b"strict-transport-security", b"max-age=31536000"))
+                if is_api and b"cache-control" not in have:
+                    add.append((b"cache-control", b"no-store"))
+                message = dict(message, headers=headers + [h for h in add if h[0] not in have])
+            await send(message)
 
-    def _dispatch(self, method: str) -> None:
-        url = urlsplit(self.path)
-        path = url.path
-        if not path.startswith("/api/"):
-            if method == "GET":
-                return self._static(path)
-            return self._error(ViewerError("not_found", "Not found.", 404))
-        for m, rx, name in _COMPILED:
-            match = rx.match(path)
-            if match and m == method:
-                params = {k: unquote(v) for k, v in match.groupdict().items()}
-                query = {k: v[-1] for k, v in parse_qs(url.query).items()}
-                try:
-                    return getattr(self, "h_" + name)(params, query)
-                except ViewerError as exc:
-                    return self._error(exc)
-                except Exception as exc:  # noqa: BLE001
-                    code = getattr(exc, "code", None)
-                    if isinstance(code, str):  # a PinnyError from another module
-                        return self._error(ViewerError(code, str(exc),
-                                                       getattr(exc, "http_status", 400)))
-                    traceback.print_exc()
-                    return self._error(ViewerError("internal_error",
-                                                   "Unexpected server error; see the server log.",
-                                                   500))
-        self._error(ViewerError("not_found", f"No route for {method} {path}.", 404))
+        await self.app(scope, receive, send_with_headers)
 
-    # ------------------------------------------------------------- handlers
-    def h_health(self, p, q):
-        self._json({"ok": True, "render_service":
-                    getattr(self.service.render, "render_service", "foundation")})
 
-    def h_documents(self, p, q):
-        self._json({"documents": self.service.documents()})
+class Site:
+    def __init__(self, service: ViewerService, settings: Settings,
+                 authenticator: Optional[Authenticator] = None, web_root: Path = WEB_ROOT) -> None:
+        self.service = service
+        self.settings = settings
+        self.sitedb = SiteDB(settings.data_dir)
+        self.sitedb.ensure_admins(settings.admin_emails)
+        self.auth = authenticator or Authenticator(settings, self.sitedb)
+        self.web_root = web_root
+        self.app = Starlette(
+            routes=[Route(path, self._endpoint(method, name, role, body), methods=[method], name=name)
+                    for method, path, name, role, body in ROUTES],
+            exception_handlers={404: self._not_found, 405: self._not_allowed})
+        self.app.add_middleware(SecurityHeaders, production=settings.production)
 
-    def h_upload(self, p, q):
-        data = self._body(limit=None)
-        self._json(self.service.upload(data, q.get("filename", "upload.pdf"),
-                                       document_id=q.get("document_id") or None), 201)
+    # --------------------------------------------------------------- plumbing
+    def _endpoint(self, method: str, name: str, role: str, body: Optional[str]) -> Callable:
+        handler = getattr(self, "h_" + name)
 
-    def h_frame(self, p, q):
-        self._json(self.service.frame(p["v"], int(p["i"])))
+        async def endpoint(request: Request) -> Response:
+            rid = request.scope.get("state", {}).get("request_id", "")
+            try:
+                ident = None
+                if role != PUBLIC:
+                    ident = await run_in_threadpool(self.auth.identify, request.headers)
+                    if not ident.allows(role):
+                        raise ViewerError("forbidden", "Only an admin can do that.", 403)
+                if method in ("POST", "DELETE"):
+                    self._check_csrf(request, body)
+                self._check_ids(request.path_params)
+                if asyncio.iscoroutinefunction(handler):
+                    return await handler(request, ident)
+                payload = await self._json_body(request) if body == "json" else None
+                return await run_in_threadpool(handler, request, ident, payload)
+            except Exception as exc:  # noqa: BLE001 - mapped to a safe response
+                return self._error(exc, rid)
 
-    def h_raster(self, p, q):
-        png = self.service.raster_png(p["v"], int(p["i"]))
-        self._send(200, png, "image/png", extra={"Cache-Control": "private, max-age=3600"})
+        return endpoint
 
-    def h_page_scans(self, p, q):
-        self._json({"scans": self.service.page_scans(p["v"], int(p["i"]))})
+    def _check_csrf(self, request: Request, body: Optional[str]) -> None:
+        expected = self.settings.origin
+        if not expected:  # development: the page's own origin
+            expected = f"{request.url.scheme}://{request.headers.get('host', '')}"
+        if request.headers.get("origin") != expected:
+            raise ViewerError("bad_origin", "This request did not come from the Pinny page.", 403)
+        if body is not None:
+            want = {"json": "application/json", "pdf": "application/pdf"}[body]
+            ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+            if ctype != want:
+                raise ViewerError("unsupported_media_type", f"Send this request as {want}.", 415)
 
-    def h_models(self, p, q):
-        self._json(self.service.models())
+    @staticmethod
+    def _check_ids(params: dict) -> None:
+        """Malformed ids read as not found, before the service is called."""
+        if "v" in params and not _VERSION_RE.match(params["v"]):
+            raise ViewerError("document_version_not_found", "That document does not exist.", 404)
+        if "s" in params and not _UUID_RE.match(params["s"]):
+            raise ViewerError("unknown_scan", "That scan does not exist.", 404)
+        if "b" in params and not _UUID_RE.match(params["b"]):
+            raise ViewerError("unknown_batch", "That batch does not exist.", 404)
 
-    def h_scan(self, p, q):
-        b = self._json_body()
-        mode = b.get("mode")
-        if mode is not None and not isinstance(mode, str):
-            raise ViewerError("invalid_mode", "mode must be a string.")
-        page_index = b.get("page_index")
-        if isinstance(page_index, bool) or not isinstance(page_index, int):
-            raise ViewerError("invalid_page", "page_index must be an integer.")
-        if not isinstance(b.get("document_version"), str):
-            raise ViewerError("invalid_document", "document_version is required.")
-        self._json(self.service.scan(document_version=b["document_version"],
-                                     page_index=page_index,
-                                     template_box=b.get("template_box"),
-                                     request_id=b.get("request_id"),
-                                     threshold=b.get("threshold"),
-                                     mode=mode,
-                                     model_threshold=b.get("model_threshold")), 201)
-
-    def h_scan_state(self, p, q):
-        self._json(self.service.scan_state(p["s"]))
-
-    def h_act(self, p, q):
-        self._json(self.service.act(p["s"], self._json_body()))
-
-    def h_report(self, p, q):
-        doc = self.service.report(p["s"])
-        body = json.dumps(doc, indent=2, sort_keys=True).encode()
-        self._send(200, body, "application/json", extra={
-            "Content-Disposition": f'attachment; filename="pinny-report-{p["s"]}.json"'})
-
-    def h_batch_start(self, p, q):
-        b = self._json_body()
-        mode = b.get("mode")
-        if mode is not None and not isinstance(mode, str):
-            raise ViewerError("invalid_mode", "mode must be a string.")
-        if not isinstance(b.get("document_version"), str):
-            raise ViewerError("invalid_document", "document_version is required.")
-        self._json(self.service.start_batch(document_version=b["document_version"],
-                                            request_id=b.get("request_id"),
-                                            template_box=b.get("template_box"),
-                                            template_page_index=b.get("template_page_index"),
-                                            page_indexes=b.get("page_indexes"),
-                                            mode=mode, threshold=b.get("threshold"),
-                                            model_threshold=b.get("model_threshold")), 202)
-
-    def h_batch_state(self, p, q):
-        self._json(self.service.batch_state(p["b"]))
-
-    def h_batch_queue(self, p, q):
-        limit = q.get("limit")
-        if limit is not None:
-            if not limit.isdigit():
-                raise ViewerError("invalid_limit", "limit must be a non-negative integer.")
-            limit = int(limit)
-        self._json(self.service.batch_queue(p["b"], q.get("strategy"), limit))
-
-    def h_batch_cancel(self, p, q):
-        self._json(self.service.cancel_batch(p["b"]))
-
-    def h_batch_resume(self, p, q):
-        retry = self._json_body().get("retry_failed", False)
-        if not isinstance(retry, bool):
-            raise ViewerError("invalid_retry", "retry_failed must be true or false.")
-        self._json(self.service.resume_batch(p["b"], retry_failed=retry))
-
-    def h_document_batches(self, p, q):
-        self._json({"batches": self.service.document_batches(p["v"])})
-
-    # -------------------------------------------------------------- helpers
-    def _body(self, limit: Optional[int]) -> bytes:
+    @staticmethod
+    async def _read_limited(request: Request, limit: int, code: str, message: str) -> bytes:
         try:
-            n = int(self.headers.get("Content-Length", "0"))
+            declared = int(request.headers.get("content-length", "0") or 0)
         except ValueError:
             raise ViewerError("bad_request", "Invalid Content-Length.") from None
-        if limit is not None and n > limit:
-            raise ViewerError("body_too_large", "Request body is too large.", 413)
-        if n > DEFAULT_MAX_UPLOAD_BYTES:
-            raise ViewerError("upload_too_large", "The file is too large.", 413)
-        return self.rfile.read(n) if n > 0 else b""
+        if declared > limit:
+            raise ViewerError(code, message, 413)
+        buf = bytearray()
+        async for chunk in request.stream():
+            buf += chunk
+            if len(buf) > limit:
+                raise ViewerError(code, message, 413)
+        return bytes(buf)
 
-    def _json_body(self) -> dict:
-        raw = self._body(limit=MAX_JSON_BYTES)
+    async def _json_body(self, request: Request) -> dict:
+        raw = await self._read_limited(request, MAX_JSON_BYTES, "body_too_large", "Request body is too large.")
         try:
             b = json.loads(raw or b"{}")
         except ValueError:
@@ -230,59 +202,281 @@ class Handler(BaseHTTPRequestHandler):
             raise ViewerError("bad_json", "Request body must be a JSON object.")
         return b
 
-    def _json(self, obj, status: int = 200) -> None:
-        self._send(status, json.dumps(obj).encode(), "application/json",
-                   extra={"Cache-Control": "no-store"})
+    def _error(self, exc: Exception, rid: str) -> JSONResponse:
+        status = getattr(exc, "status", None)
+        if not isinstance(status, int):
+            status = getattr(exc, "http_status", None)
+        code = getattr(exc, "code", None)
+        if isinstance(code, str) and isinstance(status, int) and 400 <= status < 500:
+            message = getattr(exc, "message", None) or str(exc)
+        else:
+            _log.exception("request %s failed", rid, exc_info=exc)
+            status, code = 500, "internal_error"
+            message = f"Something went wrong on the server (request {rid}). Please try again."
+        return JSONResponse({"error": {"code": code, "message": message, "request_id": rid}}, status)
 
-    def _error(self, exc: ViewerError) -> None:
-        self._json({"error": {"code": exc.code, "message": exc.message}}, exc.status)
+    async def _not_found(self, request: Request, exc) -> JSONResponse:
+        rid = request.scope.get("state", {}).get("request_id", "")
+        return JSONResponse({"error": {"code": "not_found", "message": "Not found.", "request_id": rid}}, 404)
 
-    def _send(self, status: int, body: bytes, ctype: str, extra: Optional[dict] = None) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("X-Content-Type-Options", "nosniff")
-        for k, v in (extra or {}).items():
-            self.send_header(k, v)
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
+    async def _not_allowed(self, request: Request, exc) -> JSONResponse:
+        rid = request.scope.get("state", {}).get("request_id", "")
+        return JSONResponse({"error": {"code": "method_not_allowed", "message": "Method not allowed.",
+                                       "request_id": rid}}, 405)
 
-    def _static(self, path: str) -> None:
-        rel = "index.html" if path in ("", "/") else unquote(path).lstrip("/")
+    @staticmethod
+    def _json(obj: Any, status: int = 200) -> JSONResponse:
+        return JSONResponse(obj, status)
+
+    # --------------------------------------------------------------- handlers
+    def h_healthz(self, request, ident, body):
+        return self._json({"ok": True, "version": self.settings.version})
+
+    def h_me(self, request, ident: Identity, body):
+        return self._json({"email": ident.email, "role": ident.role, "env": self.settings.env,
+                           "sign_out_url": self.auth.sign_out_url, "version": self.settings.version})
+
+    def h_health(self, request, ident, body):
+        return self._json({"ok": True, "version": self.settings.version,
+                           "render_service": getattr(self.service.render, "render_service", "foundation")})
+
+    def _doc_with_owner(self, d: dict) -> dict:
+        return dict(d, uploaded_by=self.sitedb.uploaded_by(d["document_version"]))
+
+    def h_documents(self, request, ident, body):
+        return self._json({"documents": [self._doc_with_owner(d) for d in self.service.documents()]})
+
+    async def h_upload(self, request: Request, ident: Identity) -> Response:
+        limit = getattr(self.service.render, "max_upload_bytes", DEFAULT_MAX_UPLOAD_BYTES)
+        too_big = f"The PDF is larger than the {limit // (1024 * 1024)} MB limit."
+        try:
+            declared = int(request.headers.get("content-length", "0") or 0)
+        except ValueError:
+            raise ViewerError("bad_request", "Invalid Content-Length.") from None
+        if declared > limit:
+            raise ViewerError("upload_too_large", too_big, 413)
+        tmp_dir = self.settings.data_dir / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=tmp_dir, prefix="upload_", suffix=".part")
+        try:
+            size = 0
+            with os.fdopen(fd, "wb") as out:  # streamed: never the whole file in memory
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > limit:
+                        raise ViewerError("upload_too_large", too_big, 413)
+                    out.write(chunk)
+            filename = request.query_params.get("filename", "upload.pdf")
+            doc = await run_in_threadpool(self.service.upload, tmp, filename,
+                                          request.query_params.get("document_id") or None)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+        await run_in_threadpool(self.sitedb.record_upload, doc["document_version"], ident.email,
+                                doc.get("filename") or "")
+        return self._json(self._doc_with_owner(doc), 201)
+
+    def h_delete_document(self, request, ident: Identity, body):
+        v = request.path_params["v"]
+        owner = self.sitedb.uploaded_by(v)
+        if ident.role != ADMIN and owner != ident.email:
+            info = self.service.document_info(v)  # 404 first, so existence is not hidden from members
+            raise ViewerError("forbidden", f"Only the person who uploaded {info['filename']} or an admin "
+                              "can delete it.", 403)
+        out = self.service.delete_document(v)
+        self.sitedb.record_deletion(v, out.get("document_id"), out.get("filename"), ident.email)
+        return self._json(out)
+
+    def h_frame(self, request, ident, body):
+        p = request.path_params
+        return self._json(self.service.frame(p["v"], p["i"]))
+
+    def h_raster(self, request, ident, body):
+        p = request.path_params
+        png = self.service.raster_png(p["v"], p["i"])
+        return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
+    def h_page_scans(self, request, ident, body):
+        p = request.path_params
+        return self._json({"scans": self.service.page_scans(p["v"], p["i"])})
+
+    def h_document_batches(self, request, ident, body):
+        return self._json({"batches": self.service.document_batches(request.path_params["v"])})
+
+    def h_models(self, request, ident, body):
+        return self._json(self.service.models())
+
+    def h_scan(self, request, ident: Identity, b: dict):
+        mode = b.get("mode")
+        if mode is not None and not isinstance(mode, str):
+            raise ViewerError("invalid_mode", "mode must be a string.")
+        page_index = b.get("page_index")
+        if isinstance(page_index, bool) or not isinstance(page_index, int):
+            raise ViewerError("invalid_page", "page_index must be an integer.")
+        if not isinstance(b.get("document_version"), str):
+            raise ViewerError("invalid_document", "document_version is required.")
+        return self._json(self.service.scan(document_version=b["document_version"], page_index=page_index,
+                                            template_box=b.get("template_box"),
+                                            request_id=b.get("request_id"), threshold=b.get("threshold"),
+                                            mode=mode, model_threshold=b.get("model_threshold"),
+                                            requested_by=ident.email), 201)
+
+    def h_scan_state(self, request, ident, body):
+        return self._json(self.service.scan_state(request.path_params["s"]))
+
+    def h_act(self, request, ident: Identity, b: dict):
+        reviewer = None if self.auth.verifier is None else ident.email
+        return self._json(self.service.act(request.path_params["s"], b, reviewer=reviewer))
+
+    def h_report(self, request, ident, body):
+        s = request.path_params["s"]
+        doc = self.service.report(s)
+        return Response(json.dumps(doc, indent=2, sort_keys=True).encode(), media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="pinny-report-{s}.json"'})
+
+    def h_batch_start(self, request, ident: Identity, b: dict):
+        mode = b.get("mode")
+        if mode is not None and not isinstance(mode, str):
+            raise ViewerError("invalid_mode", "mode must be a string.")
+        if not isinstance(b.get("document_version"), str):
+            raise ViewerError("invalid_document", "document_version is required.")
+        out = self.service.start_batch(document_version=b["document_version"],
+                                       request_id=b.get("request_id"), template_box=b.get("template_box"),
+                                       template_page_index=b.get("template_page_index"),
+                                       page_indexes=b.get("page_indexes"), mode=mode,
+                                       threshold=b.get("threshold"), model_threshold=b.get("model_threshold"),
+                                       requested_by=ident.email)
+        self.sitedb.audit(ident.email, "batch_started", out["batch_id"],
+                          {"document_version": b["document_version"], "pages": out["page_counts"]["total"]})
+        return self._json(out, 202)
+
+    def h_batch_state(self, request, ident, body):
+        return self._json(self.service.batch_state(request.path_params["b"]))
+
+    def h_batch_queue(self, request, ident, body):
+        limit = request.query_params.get("limit")
+        if limit is not None:
+            if not limit.isdigit():
+                raise ViewerError("invalid_limit", "limit must be a non-negative integer.")
+            limit = int(limit)
+        return self._json(self.service.batch_queue(request.path_params["b"],
+                                                   request.query_params.get("strategy"), limit))
+
+    def h_batch_cancel(self, request, ident, b):
+        return self._json(self.service.cancel_batch(request.path_params["b"]))
+
+    def h_batch_resume(self, request, ident, b):
+        retry = b.get("retry_failed", False)
+        if not isinstance(retry, bool):
+            raise ViewerError("invalid_retry", "retry_failed must be true or false.")
+        return self._json(self.service.resume_batch(request.path_params["b"], retry_failed=retry))
+
+    def h_members(self, request, ident, body):
+        return self._json({"members": [m.to_dict() for m in self.sitedb.members()]})
+
+    def h_member_put(self, request, ident: Identity, b: dict):
+        try:
+            m = self.sitedb.put_member(b.get("email"), b.get("role"), actor=ident.email)
+        except ValueError as exc:
+            raise ViewerError("invalid_member", str(exc)) from None
+        return self._json(m.to_dict())
+
+    def h_member_remove(self, request, ident: Identity, b: dict):
+        email = b.get("email")
+        if isinstance(email, str) and email.strip().lower() == ident.email:
+            raise ViewerError("invalid_member", "You cannot remove yourself.")
+        try:
+            removed = self.sitedb.remove_member(email, actor=ident.email)
+        except ValueError as exc:
+            raise ViewerError("invalid_member", str(exc)) from None
+        if not removed:
+            raise ViewerError("unknown_member", "That person is not a member.", 404)
+        return self._json({"removed": email.strip().lower()})
+
+    def h_audit(self, request, ident, body):
+        limit = request.query_params.get("limit", "100")
+        if not limit.isdigit():
+            raise ViewerError("invalid_limit", "limit must be a non-negative integer.")
+        return self._json({"events": self.sitedb.audit_log(min(int(limit), 1000))})
+
+    def h_static(self, request, ident, body):
+        path = request.path_params.get("path", "")
+        if path.startswith("api/") or path == "api":
+            raise ViewerError("not_found", f"No route for {request.method} /{path}.", 404)
+        rel = path or "index.html"
         root = self.web_root.resolve()
         target = (root / rel).resolve()
-        if root not in target.parents and target != root or not target.is_file():
-            return self._error(ViewerError("not_found", "Not found.", 404))
+        if (root not in target.parents and target != root) or not target.is_file():
+            raise ViewerError("not_found", "Not found.", 404)
         ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-        if target.suffix == ".js" or target.suffix == ".mjs":
+        if target.suffix in (".js", ".mjs"):
             ctype = "text/javascript"
-        self._send(200, target.read_bytes(), ctype, extra={"Cache-Control": "no-cache"})
+        return Response(target.read_bytes(), media_type=ctype, headers={"Cache-Control": "no-cache"})
+
+
+class SiteServer:
+    """uvicorn serving a ``Site`` on an already bound socket, with the small
+    interface the tests and ``main`` use (``serve_forever``, ``shutdown``)."""
+
+    def __init__(self, site: Site, host: str, port: int, verbose: bool = False) -> None:
+        self.site = site
+        self.verbose = verbose
+        self._sock = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind((host, port))
+        self._sock.listen(128)  # connections queue until uvicorn's loop starts accepting
+        self.server_address = self._sock.getsockname()
+        config = uvicorn.Config(site.app, log_level="info" if verbose else "warning",
+                                access_log=verbose, server_header=False, timeout_keep_alive=5,
+                                limit_concurrency=200, lifespan="off")
+        self._server = uvicorn.Server(config)
+        self._stopped = threading.Event()
+
+    def serve_forever(self) -> None:
+        try:
+            self._server.run(sockets=[self._sock])
+        finally:
+            self._stopped.set()
+
+    def shutdown(self) -> None:
+        self._server.should_exit = True
+        self._stopped.wait(10)
+
+    def server_close(self) -> None:
+        try:
+            self._sock.close()
+        except OSError:
+            pass
 
 
 def make_server(service: ViewerService, host: str = "127.0.0.1", port: int = 8765,
-                verbose: bool = False) -> ThreadingHTTPServer:
-    handler = type("BoundHandler", (Handler,), {"service": service})
-    httpd = ThreadingHTTPServer((host, port), handler)
-    httpd.verbose = verbose  # type: ignore[attr-defined]
-    httpd.daemon_threads = True
-    return httpd
+                verbose: bool = False, *, settings: Optional[Settings] = None,
+                authenticator: Optional[Authenticator] = None) -> SiteServer:
+    settings = settings or Settings.from_env(data_dir=service.data_dir)
+    settings.check_bind(host)
+    return SiteServer(Site(service, settings, authenticator), host, port, verbose)
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m pinny.viewer",
-                                 description="Pinny viewer and pin review (local).")
+                                 description="Pinny viewer and training site.")
     ap.add_argument("--data-dir", help="defaults to $PINNY_DATA_DIR or ~/.local/share/pinny")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args(argv)
-    service = ViewerService(args.data_dir)
-    httpd = make_server(service, args.host, args.port, args.verbose)
+    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
+                        format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    try:
+        settings = Settings.from_env(data_dir=args.data_dir)
+        settings.check_bind(args.host)
+    except ConfigError as exc:
+        print(f"Cannot start: {exc}", file=sys.stderr)
+        return 2
+    service = ViewerService(settings.data_dir, version=settings.version)
+    httpd = make_server(service, args.host, args.port, args.verbose, settings=settings)
     host, port = httpd.server_address[:2]
-    print(f"Pinny viewer on http://{host}:{port}/  (data: {service.data_dir}, "
-          f"render service: {getattr(service.render, 'render_service', 'foundation')})",
-          flush=True)
+    print(f"Pinny viewer on http://{host}:{port}/  ({settings.env}, data: {service.data_dir}, "
+          f"version {settings.version})", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

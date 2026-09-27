@@ -10,12 +10,19 @@
 // Pure logic with injected storage/send/timers, so node tests can drive it.
 
 export const STORAGE_KEY = 'pinny.viewer.outbox.v1';
+
+// Each signed-in person gets their own outbox, so on a shared computer one
+// person's unsaved edits are never sent under the next person's sign-in.
+export function storageKeyFor(email) {
+  return email ? `${STORAGE_KEY}:${email.toLowerCase()}` : STORAGE_KEY;
+}
 const MAX_AUTO_ATTEMPTS = 3;
 
 export class EditQueue {
   constructor({ storage, send, onChange = () => {}, onSaved = () => {}, now = () => Date.now(),
-    setTimer = (fn, ms) => setTimeout(fn, ms) }) {
+    setTimer = (fn, ms) => setTimeout(fn, ms), storageKey = STORAGE_KEY }) {
     this.storage = storage;
+    this.storageKey = storageKey;
     this.send = send;
     this.onChange = onChange;
     this.onSaved = onSaved;
@@ -30,7 +37,7 @@ export class EditQueue {
   load() {
     let raw = null;
     try {
-      raw = this.storage && this.storage.getItem(STORAGE_KEY);
+      raw = this.storage && this.storage.getItem(this.storageKey);
     } catch (e) { /* storage unavailable: keep edits in memory only */ }
     let list = [];
     try {
@@ -46,11 +53,21 @@ export class EditQueue {
 
   persist() {
     try {
-      if (this.storage) this.storage.setItem(STORAGE_KEY, JSON.stringify(this.entries));
+      if (this.storage) this.storage.setItem(this.storageKey, JSON.stringify(this.entries));
       this.storageOk = true;
     } catch (e) {
       this.storageOk = false;
     }
+  }
+
+  // Switch to another person's outbox (after sign-in is known). Only
+  // allowed while this one is empty, so no edit changes owner.
+  useStorageKey(key) {
+    if (key === this.storageKey) return;
+    if (this.entries.length) throw new Error('The edit queue is not empty.');
+    this.storageKey = key;
+    this.load();
+    this.onChange(this);
   }
 
   changed() {

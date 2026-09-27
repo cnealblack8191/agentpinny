@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -278,6 +279,8 @@ def server(svc):
 def _req(method, url, body=None, headers=None):
     data = json.dumps(body).encode() if isinstance(body, dict) else body
     h = {"Content-Type": "application/json"} if isinstance(body, dict) else {}
+    parts = urllib.parse.urlsplit(url)
+    h["Origin"] = f"{parts.scheme}://{parts.netloc}"  # as a browser sends it (CSRF check)
     h.update(headers or {})
     req = urllib.request.Request(url, data=data, method=method, headers=h)
     try:
@@ -326,8 +329,11 @@ def test_http_flow(server):
 
 
 def test_http_errors_and_static(server):
-    code, _, raw = _req("POST", server + "/api/documents?filename=x.txt", b"not a pdf")
+    code, _, raw = _req("POST", server + "/api/documents?filename=x.txt", b"not a pdf",
+                        {"Content-Type": "application/pdf"})
     assert code == 422 and json.loads(raw)["error"]["code"] == "pdf_unreadable"
+    code, _, raw = _req("POST", server + "/api/documents?filename=x.txt", b"not a pdf")
+    assert code == 415 and json.loads(raw)["error"]["code"] == "unsupported_media_type"
     code, _, raw = _req("GET", server + "/api/scans/nope")
     assert code == 404 and json.loads(raw)["error"]["message"]
     code, _, raw = _req("POST", server + "/api/scans", b"{bad", {"Content-Type": "application/json"})

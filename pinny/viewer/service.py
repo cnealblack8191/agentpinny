@@ -24,6 +24,7 @@ import math
 import os
 import subprocess
 import threading
+import logging
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -37,6 +38,8 @@ from pinny.detection import (BoundingBox, DetectionError, OpenCVTemplateDetector
                              ScanSettings, Template)
 
 from .errors import ViewerError
+
+_log = logging.getLogger("pinny.viewer")
 
 SOURCE = "viewer"
 REPORT_FORMAT = "pinny.viewer.report"
@@ -87,14 +90,17 @@ def _now() -> str:
 
 class ViewerService:
     def __init__(self, data_dir: Optional[os.PathLike] = None, *, render=None,
-                 detector=None, model_classes: Optional[Dict[str, Any]] = None) -> None:
+                 detector=None, model_classes: Optional[Dict[str, Any]] = None,
+                 version: Optional[str] = None) -> None:
         """``model_classes`` maps a model kind (``verifier``, ``detector``) to a
         class with the P6 ``load(model_dir)`` classmethod. Kinds left out use
-        the real classes, imported lazily. Tests pass fakes here."""
+        the real classes, imported lazily. Tests pass fakes here.
+        ``version`` is the build's version string (``PINNY_VERSION``); by
+        default the git commit."""
         self.data_dir = Path(data_dir) if data_dir is not None else _store.default_data_dir()
         self.render = render if render is not None else RenderService(self.data_dir)
         self.detector = detector or OpenCVTemplateDetector()
-        self.detector_version = _git_version()
+        self.detector_version = version or _git_version()
         self.registry = ModelRegistry(self.data_dir)
         self._model_classes = dict(model_classes or {})
         self._loaded: Dict[tuple, Any] = {}  # (kind, model_id) -> loaded model
@@ -139,6 +145,15 @@ class ViewerService:
         return {"document_id": v.document_id, "document_version": v.document_version,
                 "filename": v.original_filename, "page_count": v.page_count,
                 "render_service": getattr(self.render, "render_service", "foundation")}
+
+    def delete_document(self, document_version: str) -> dict:
+        """Delete a version's drawing: PDF, cached page images and training-crop
+        files (docs/training-site.md section 7). Scans, pins and review events
+        stay; they are the labels and hold no drawing pixels."""
+        info = self.document_info(document_version)  # 404s for an unknown version
+        self.render.delete_version(document_version)
+        crops = self._db(self.store.purge_document_crops, document_version)
+        return dict(info, deleted=True, crops_deleted=crops)
 
     def frame(self, document_version: str, page_index: int) -> dict:
         frame = dict(self.render.page_frame(document_version, page_index))
@@ -252,7 +267,8 @@ class ViewerService:
              template_box: Optional[dict] = None, request_id: str,
              threshold: Optional[float] = None, mode: Optional[str] = None,
              model_threshold: Optional[float] = None,
-             template_page_index: Optional[int] = None) -> dict:
+             template_page_index: Optional[int] = None,
+             requested_by: Optional[str] = None) -> dict:
         """Run one scan and record it immutably (contracts §4, P7).
 
         ``mode`` is ``template`` (the default, Phase 1), ``template+verifier``
@@ -280,7 +296,7 @@ class ViewerService:
                                       template_box, record_page=template_page_index is not None)
         model = self._active_model(mode) if mode != "template" else (None, None)
         return self._scan_page(info, page_index, scan_id, request_id, mode, template, model,
-                               threshold, model_threshold)
+                               threshold, model_threshold, requested_by=requested_by)
 
     @staticmethod
     def _check_scan_args(mode: Optional[str], template_box: Any, threshold: Any,
@@ -335,7 +351,8 @@ class ViewerService:
 
     def _scan_page(self, info: dict, page_index: int, scan_id: str, request_id: str, mode: str,
                    template: Optional[tuple], model: tuple, threshold: Optional[float],
-                   model_threshold: Optional[float], extra: Optional[dict] = None) -> dict:
+                   model_threshold: Optional[float], extra: Optional[dict] = None,
+                   requested_by: Optional[str] = None) -> dict:
         """Detect on one page and record the scan. ``template`` is
         ``(Template, meta)`` from ``_template`` (``None`` in model mode) and
         ``model`` is ``(model_id, model)`` (``(None, None)`` in template mode).
@@ -388,8 +405,10 @@ class ViewerService:
         scan_result["created_at"] = _now()
 
         scan, dets = _store.Scan.from_scan_result(scan_result)
-        scan = dataclasses.replace(scan, metadata={"scan_result": scan_result,
-                                                   "request_id": request_id})
+        metadata = {"scan_result": scan_result, "request_id": request_id}
+        if requested_by:
+            metadata["requested_by"] = requested_by  # docs/training-site.md section 1
+        scan = dataclasses.replace(scan, metadata=metadata)
         self._db(self.store.record_scan, scan, dets)
         return self.scan_state(scan_id)
 
@@ -503,7 +522,8 @@ class ViewerService:
                     template_page_index: Optional[int] = None,
                     page_indexes: Optional[List[int]] = None, mode: Optional[str] = None,
                     threshold: Optional[float] = None,
-                    model_threshold: Optional[float] = None) -> dict:
+                    model_threshold: Optional[float] = None,
+                    requested_by: Optional[str] = None) -> dict:
         """Scan many pages with one template, in the background (contracts §5a).
 
         The template box is drawn on ``template_page_index`` and matched on
@@ -561,7 +581,8 @@ class ViewerService:
                      document_version=document_version, page_indexes=pages, mode=mode,
                      settings=settings, template_page_index=template_page_index if tpl_meta else None,
                      template_box=tpl_meta.get("box"), template_sha256=tpl_meta.get("sha256"),
-                     metadata={"request_id": request_id})
+                     metadata={"request_id": request_id,
+                               **({"requested_by": requested_by} if requested_by else {})})
         except _store.IdempotencyConflict:
             raise ViewerError("request_conflict",
                               "This request_id already started a different batch; use a new "
@@ -638,13 +659,18 @@ class ViewerService:
                     self._scan_page(info, page_index, scan_id, request_id, b.mode, template, model,
                                     threshold, model_threshold,
                                     extra={"batch": {"batch_id": batch_id,
-                                                     "page_index": page_index}})
+                                                     "page_index": page_index}},
+                                    requested_by=b.metadata.get("requested_by"))
                 self._db(self.store.finish_batch_page, batch_id, page_index, scan_id)
             except Exception as exc:  # noqa: BLE001 - one bad page must not stop the batch
                 code = getattr(exc, "code", None)
-                self._db(self.store.fail_batch_page, batch_id, page_index,
-                         code if isinstance(code, str) else "scan_failed",
-                         str(exc) or type(exc).__name__)
+                status = getattr(exc, "status", getattr(exc, "http_status", 500))
+                if isinstance(code, str) and isinstance(status, int) and status < 500:
+                    message = str(exc)  # written for users (PinnyError / ViewerError)
+                else:  # internal detail stays in the server log
+                    _log.exception("batch %s page %s failed", batch_id, page_index)
+                    code, message = "scan_failed", "The scan failed because of an internal error."
+                self._db(self.store.fail_batch_page, batch_id, page_index, code, message)
 
     def _batch(self, batch_id: str):
         try:
@@ -679,8 +705,9 @@ class ViewerService:
                            "rotation": i.rotation, "version": i.version} for i in items]}
 
     # ---------------------------------------------------------------- reviews
-    def act(self, scan_id: str, body: dict) -> dict:
-        """Apply one review action (contracts §5)."""
+    def act(self, scan_id: str, body: dict, reviewer: Optional[str] = None) -> dict:
+        """Apply one review action (contracts §5). ``reviewer`` is the signed-in
+        member; ``None`` keeps the store's local default (development, CLI)."""
         action = body.get("action")
         if action not in ACTIONS:
             raise ViewerError("unknown_action", f"Unknown action {action!r}.")
@@ -691,6 +718,8 @@ class ViewerService:
             raise ViewerError("invalid_version", "expected_version must be an integer.")
         state = self.scan_state(scan_id)  # 404s for an unknown scan
         kw = {"request_id": request_id, "source": SOURCE}
+        if reviewer is not None:
+            kw["reviewer"] = reviewer
         try:
             if action == "add_manual":
                 frame = state["coordinate_frame"]

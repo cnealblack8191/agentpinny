@@ -137,6 +137,17 @@ In the browser:
 5. **Stop** skips pages not yet started; **Retry failed pages** runs failed
    pages again. The batch shown is kept in the URL, so a reload returns to it.
 
+## Sign-in and security
+
+The HTTP layer is Starlette on uvicorn (`server.py`). In development it is
+a single local admin with no sign-in, on 127.0.0.1 only. In production it
+verifies Cloudflare Access, checks the members table and each route's
+role, enforces Origin and Content-Type on state-changing requests, sends
+security headers, streams uploads to disk, and hides internal errors
+behind a request id. `docs/training-site.md` is the contract; the page
+shows who is signed in, a sign-out link, an admin-only Members panel and a
+Delete button for drawings (uploader or admin).
+
 ## HTTP API (local, viewer-internal)
 
 | Route | Purpose |
@@ -172,6 +183,7 @@ carry the document identity and the frame.
 python -m pytest tests/viewer                       # service + HTTP (21)
 node --test tests/viewer/test_transform.mjs tests/viewer/test_edits.mjs tests/viewer/test_batch.mjs
 node tests/viewer/test_batch_browser.mjs            # batch scans in Chromium
+node tests/viewer/test_site_browser.mjs             # signed-in site in Chromium
 node tests/viewer/browser_e2e.mjs                   # Chromium end-to-end (90 checks)
 ```
 

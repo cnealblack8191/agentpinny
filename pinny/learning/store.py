@@ -82,6 +82,8 @@ SOURCES = frozenset({"viewer", "cli", "test"})
 CROP_PENDING = "pending"
 CROP_WRITTEN = "written"
 CROP_FAILED = "failed"
+# last_error of a crop whose drawing was deleted; such crops are never regenerated.
+CROP_DOCUMENT_DELETED = "document_deleted"
 
 # Page review states.
 PAGE_IN_PROGRESS = "in_progress"
@@ -1369,6 +1371,8 @@ class LearningStore:
         row = db.execute("SELECT * FROM crops WHERE crop_key=?", (crop_key,)).fetchone()
         if row is None:
             raise NotFound(f"crop {crop_key} not found")
+        if row["last_error"] == CROP_DOCUMENT_DELETED:
+            return row["status"]  # the drawing is gone; never cut it again
         note = None
         if row["status"] == CROP_WRITTEN:
             on_disk = self._file_sha(row["rel_path"])
@@ -1419,11 +1423,30 @@ class LearningStore:
                                (CROP_PENDING, reason, self._clock(), r["crop_key"]))
         counts = {CROP_WRITTEN: 0, CROP_FAILED: 0, CROP_PENDING: 0}
         keys = [r["crop_key"] for r in db.execute(
-            "SELECT crop_key FROM crops WHERE status IN (?,?) ORDER BY created_at",
-            (CROP_PENDING, CROP_FAILED))]
+            "SELECT crop_key FROM crops WHERE status IN (?,?) AND last_error IS NOT ? ORDER BY created_at",
+            (CROP_PENDING, CROP_FAILED, CROP_DOCUMENT_DELETED))]
         for k in keys:
             counts[self._materialize(k)] += 1
         return counts
+
+    def purge_document_crops(self, document_version: str) -> int:
+        """Delete the crop files cut from ``document_version`` after the
+        drawing itself was deleted (docs/training-site.md section 7). The rows
+        stay, marked ``failed`` with ``document_deleted``, and are never
+        regenerated. Labels and events are untouched. Returns the count."""
+        db = self._db
+        rows = db.execute("SELECT crop_key, rel_path FROM crops"
+                          " WHERE json_extract(spec, '$.document_version')=?", (document_version,)).fetchall()
+        now = self._clock()
+        for r in rows:
+            if r["rel_path"]:
+                try:
+                    (self.data_dir / r["rel_path"]).unlink()
+                except FileNotFoundError:
+                    pass
+            db.execute("UPDATE crops SET status=?, rel_path=NULL, sha256=NULL, last_error=?, updated_at=?"
+                       " WHERE crop_key=?", (CROP_FAILED, CROP_DOCUMENT_DELETED, now, r["crop_key"]))
+        return len(rows)
 
     def crop_status_counts(self) -> Dict[str, int]:
         return {r["status"]: r["n"] for r in self._db.execute(

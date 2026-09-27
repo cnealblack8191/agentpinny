@@ -53,3 +53,8 @@ a.disabled { color: #999; pointer-events: none; }
 .pages button[data-badge=review]::after { background: #ff8c00; }
 .pages button[data-badge=reviewed]::after { background: #0a8f2a; }
 .pages button[data-badge=failed]::after { background: #b00020; }
+#user-bar { margin: 0 0 6px; font-size: 13px; }
+#delete-doc-btn { margin-top: 4px; color: #b00020; }
+#members-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0; }
+#members-table td, #members-table th { text-align: left; padding: 2px 4px; border-bottom: 1px solid #eee; word-break: break-all; }
+#member-add input { width: 100%; margin-bottom: 4px; }
