@@ -91,6 +91,20 @@ def test_crop_renderer(render_service):
     assert ei.value.code == "invalid_crop_spec"
 
 
+def test_crop_renderer_accepts_learning_store_crop_specs(render_service):
+    # The learning store passes a CropSpec whose box is a Box object, not a
+    # mapping; the viewer's training crops depend on this.
+    from pinny.learning import contract
+    v = render_service.ingest_pdf(build_pdf([PageSpec(content=square_ops(100, 500, 10))]))
+    f = render_service.page_frame(v.document_version, 0)
+    spec = contract.pin_crop(v.document_version, 0, f["width"], f["height"], 295.0, 805.0, None, origin="manual")
+    crop = decode_png_rgb(render_service.crop_renderer(spec))
+    assert crop.shape == (128, 128, 3)
+    full = render_service.render_page(v.document_version, 0)
+    b = spec.box
+    assert np.array_equal(crop, full[b.y:b.y + b.height, b.x:b.x + b.width])
+
+
 @pytest.mark.parametrize(
     "data,code",
     [

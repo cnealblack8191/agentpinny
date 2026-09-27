@@ -283,7 +283,12 @@ class RenderService:
             x0, y0, x1, y1 = (float(v) for v in get("pixel_box"))
         elif get("box") is not None:
             b = get("box")
-            b = b if isinstance(b, Mapping) else {"x": b[0], "y": b[1], "width": b[2], "height": b[3]}
+            if isinstance(b, Mapping):
+                pass
+            elif all(hasattr(b, k) for k in ("x", "y", "width", "height")):  # learning-store Box
+                b = {"x": b.x, "y": b.y, "width": b.width, "height": b.height}
+            else:
+                b = {"x": b[0], "y": b[1], "width": b[2], "height": b[3]}
             x0, y0 = float(b["x"]), float(b["y"])
             x1, y1 = x0 + float(b["width"]), y0 + float(b["height"])
         else:
