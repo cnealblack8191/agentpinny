@@ -13,20 +13,37 @@ confidential: invited users only, and every page behind sign-in.
 
 ## 1. Server facts
 
-Fill this in once and paste it into the prompts that ask for it.
+Filled in from the owner's answers on 2026-09-27. Items marked
+*(default)* are assumptions: correct them if they are wrong. Paste this
+block into the prompts that ask for it.
 
 ```
 SERVER FACTS
-- Machine(s) for the site: OS, CPU cores, RAM, free SSD space, GPU (if any)
-- Docker available? (yes / no / can install)
-- Network: public IP with ports 80/443 open | behind an office or home router | behind an existing reverse proxy (nginx, IIS, Traefik, ...)
-- Domain or subdomain for the site, and where its DNS is managed
-- Company sign-in: Microsoft 365 / Entra ID | Google Workspace | other
-- Who will use it: employees only | also invited customers; roughly how many
-- Where backups go today (NAS, cloud bucket, backup service)
-- A separate machine with a GPU for training (optional)
-- Anything already running on these machines that must not be disturbed
+- Machine for the site: the owner's AWS account. Default: its own EC2 instance,
+  Ubuntu 24.04 LTS, 2 vCPU / 8 GB RAM (e.g. m7i.large), 100 GB gp3 EBS, no GPU (default)
+- Docker available? yes, installed on the instance (default)
+- Network: EC2 with no inbound ports open; Cloudflare Tunnel makes an outbound connection
+- Domain: new domain to be registered, DNS on Cloudflare (needed for the tunnel)
+- Sign-in: no company directory needed. Cloudflare Access with email one-time codes
+  for an allow-list of three addresses
+- Who will use it: 3 people. Owner = admin (super admin); assistant and draftsman = reviewers.
+  No customers
+- Backups: AWS. Nightly encrypted backup to a private S3 bucket in the same account,
+  30-day retention, plus weekly EBS snapshots
+- Separate GPU machine for training: none (CPU training on the instance)
+- Must not be disturbed: nothing, if the instance is Pinny's own (default)
+- Clients: web browsers (including the Surface Pro). The Surface Pro is not the server
 ```
+
+### Scope for this deployment (3 users)
+
+Keep every item of the security baseline in section 3 that protects the
+drawings: sign-in, HTTPS, per-user reviewer identity, CSRF and headers,
+streaming uploads, PDFs parsed outside the web process, deletion, backups
+and alerts. Defer what a 3-person team does not need yet: multiple
+workspaces (keep a `workspace_id` column with one workspace so it can be
+added later), Windows service scripts and Locust load testing. Steps 3,
+4 and 5 stay as written, targeting the facts above.
 
 ## 2. What in the current code is unsafe on the internet
 
