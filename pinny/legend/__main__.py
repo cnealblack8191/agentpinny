@@ -9,6 +9,8 @@ import argparse
 import json
 import sys
 
+from pinny.detection.types import DetectionError
+
 from .errors import LegendError
 from .library import EngineerLibrary, compare
 from .model import Legend
@@ -58,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         diffs = compare(lg, EngineerLibrary.load(args.library))
         print(json.dumps({k: [d.to_dict() for d in v] for k, v in diffs.items()}, indent=2))
         return 0
-    except LegendError as exc:
+    except (LegendError, DetectionError) as exc:
         print(f"error [{exc.code}]: {exc}", file=sys.stderr)
         return 2
 

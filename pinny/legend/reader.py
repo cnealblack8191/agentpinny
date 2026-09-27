@@ -65,8 +65,11 @@ WIRING_RE = re.compile(r"\b(HOME ?RUN|CONDUIT|WIRING|RACEWAY|CABLE TRAY|CIRCUIT 
 class ReaderSettings:
     #: Widest symbol area searched left of the description, in px (1.2 in).
     max_symbol_width_px: float = 240.0
-    #: Gap, in line heights, that ends a legend column.
+    #: Gap, in line heights, that ends a legend column when the next line
+    #: has no symbol beside it.
     column_end_gap: float = 3.5
+    #: Gap, in line heights, that ends a legend column regardless.
+    max_row_gap: float = 12.0
     #: Gap, in line heights, still treated as a wrapped description line.
     wrap_gap: float = 0.9
     #: Horizontal gap, in line heights, that separates two symbol drawings.
@@ -308,7 +311,7 @@ class LegendReader:
 
         rows: List[_Row] = []
         for col in columns:
-            rows.extend(self._rows_in_column(col, body, geom, lh, head))
+            rows.extend(self._rows_in_column(col, body, geom, lh, head, top=header_bottom + 1))
         if len([r for r in rows if r.section is None]) < 1:
             raise LegendError("legend_not_found", "No symbol rows under the heading.")
 
@@ -346,7 +349,9 @@ class LegendReader:
             entries=entries, rows=legend_rows,
         )
 
-    def _rows_in_column(self, col: _Column, body: List[TextLine], geom: _PageGeometry, lh: float, head: TextLine) -> List[_Row]:
+    def _rows_in_column(self, col: _Column, body: List[TextLine], geom: _PageGeometry, lh: float, head: TextLine,
+                        top: Optional[float] = None) -> List[_Row]:
+        top = head.y1 if top is None else top
         st = self.settings
         tol = lh * 0.8
         cand = sorted([t for t in body if col.desc_x - tol <= t.x0 < col.right and t.x0 < col.desc_x + lh * 3], key=lambda t: t.y0)
@@ -356,11 +361,14 @@ class LegendReader:
         last_y1 = head.y1
         for t in cand:
             up = t.text.upper()
-            if rows and t.y0 - last_y1 > st.column_end_gap * lh:
-                break
             if STOP_RE.search(up) and len(t.text.split()) <= 4 and t.x0 <= col.desc_x + tol:
                 break
             band = (col.sym_x0, t.y0 - lh * 0.6, col.sym_x1, t.y1 + lh * 0.6)
+            if rows and t.y0 - last_y1 > st.column_end_gap * lh:
+                # A big gap ends the column, unless the next line has a symbol
+                # beside it (legends with large symbols space rows widely).
+                if t.y0 - last_y1 > st.max_row_gap * lh or not len(self._symbol_ids(geom, band, col, lh)):
+                    break
             ids = self._symbol_ids(geom, band, col, lh)
             if rows and len(ids):
                 # A drawing that starts above this line belongs to the row
@@ -392,10 +400,22 @@ class LegendReader:
         for i, r in enumerate(real):
             above = [y for y in rules if y <= r.y0 + 1]
             below_r = [y for y in rules if y >= r.y1 - 1]
-            prev_y1 = real[i - 1].y1 if i else r.y0 - lh
-            next_y0 = real[i + 1].y0 if i + 1 < len(real) else r.y1 + lh
-            r.y0 = max(above) if above and max(above) > prev_y1 - 1 else (r.y0 + prev_y1) / 2 if i else r.y0 - lh * 0.6
-            r.y1 = min(below_r) if below_r and min(below_r) < next_y0 + 1 else (r.y1 + next_y0) / 2 if i + 1 < len(real) else r.y1 + lh * 0.6
+            prev_y1 = real[i - 1].y1 if i else max(top, r.y0 - 2 * lh)
+            next_y0 = real[i + 1].y0 if i + 1 < len(real) else r.y1 + 2 * lh
+            if above and max(above) > prev_y1 - 1:
+                r.y0 = max(above)
+            elif i:
+                r.y0 = (r.y0 + prev_y1) / 2
+            else:
+                # First row: up to the column headers (or heading), so a symbol
+                # taller than its text keeps its top.
+                r.y0 = max(top, r.y0 - 1.5 * lh)
+            if below_r and min(below_r) < next_y0 + 1:
+                r.y1 = min(below_r)
+            elif i + 1 < len(real):
+                r.y1 = (r.y1 + next_y0) / 2
+            else:
+                r.y1 = r.y1 + 1.5 * lh
         return real
 
     def _symbol_ids(self, geom: _PageGeometry, band: Box, col: _Column, lh: float) -> np.ndarray:
@@ -433,8 +453,10 @@ class LegendReader:
             boxes.append((float(b[:, 0].min()), float(b[:, 1].min()), float(b[:, 2].max()), float(b[:, 3].max())))
             cluster_ids.append(c)
         label_texts = []
+        label_boxes = []
         for t in labels:
             label_texts.append(t.text.upper())
+            label_boxes.append(t.box)
             if boxes:
                 k = int(np.argmin([max(0.0, t.x0 - bx[2], bx[0] - t.x1) for bx in boxes]))
                 bx = boxes[k]
@@ -477,7 +499,7 @@ class LegendReader:
         sigs = [symbol_signature(geom, bx, ids=c if len(c) else None) for bx, c in zip(boxes, cluster_ids)]
         return LegendEntry(
             id="", tag=tag, tag_source=tag_source, name=name, description=description, group=group,
-            count=count, not_counted_reason=reason, symbol_boxes=boxes, labels=label_texts,
+            count=count, not_counted_reason=reason, symbol_boxes=boxes, labels=label_texts, label_boxes=label_boxes,
             row_box=(col.sym_x0, r.y0, max(t.x1 for t in r.lines), r.y1), flags=flags, signatures=sigs,
         )
 

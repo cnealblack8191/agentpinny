@@ -6,6 +6,7 @@ space. Text uses Helvetica, so PDFium extracts it exactly.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -163,9 +164,26 @@ def floor_plan(c: Canvas) -> None:
     c.text(100, 760, "E-101 FIRST FLOOR POWER PLAN", size=10)
 
 
-def build(pages: Sequence[Tuple[Canvas, int, Optional[Tuple[float, float, float, float]]]], path: str) -> None:
-    """Write pages ``(canvas, rotate, cropbox)``."""
+def use_form(c: Canvas, name: str, cx: float, cy: float, rot: int = 0, scale: float = 1.0) -> None:
+    """Place Form XObject ``name`` (see ``build(forms=...)``) at (cx, cy) top-down."""
+    th = math.radians(rot)
+    a, b = scale * math.cos(th), scale * math.sin(th)
+    c.ops.append(f"q {a:.6f} {b:.6f} {-b:.6f} {a:.6f} {cx:.3f} {c.Y(cy):.3f} cm /{name} Do Q\n")
+
+
+def build(pages: Sequence[Tuple[Canvas, int, Optional[Tuple[float, float, float, float]]]], path: str,
+          forms: Optional[Dict[str, str]] = None) -> None:
+    """Write pages ``(canvas, rotate, cropbox)``. ``forms`` maps a name to a
+    symbol kind; each becomes one Form XObject shared by every page."""
     pdf = pikepdf.new()
+    xobjects = pikepdf.Dictionary()
+    for name, kind in (forms or {}).items():
+        sub = Canvas(PAGE[0], 0.0)
+        sub.symbol(kind, 0.0, 0.0)
+        form = pikepdf.Stream(pdf, "".join(sub.ops).encode("latin-1"))
+        form.Type, form.Subtype = pikepdf.Name.XObject, pikepdf.Name.Form
+        form.BBox = pikepdf.Array([-20, -20, 20, 20])
+        xobjects[f"/{name}"] = pdf.make_indirect(form)
     font = pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1,
                                                 BaseFont=pikepdf.Name.Helvetica, Encoding=pikepdf.Name.WinAnsiEncoding))
     for c, rotate, crop in pages:
@@ -176,6 +194,8 @@ def build(pages: Sequence[Tuple[Canvas, int, Optional[Tuple[float, float, float,
         if rotate:
             page.obj.Rotate = rotate
         page.obj.Resources = pikepdf.Dictionary(Font=pikepdf.Dictionary(F1=font))
+        if forms:
+            page.obj.Resources.XObject = xobjects
         prefix = ""
         if rotate or crop:
             # Draw so the sheet displays upright, as CAD exports do: the
@@ -201,3 +221,34 @@ MAIN_ROWS = [
     Row(["tstat"], ["THERMOSTAT (BY MECH)"]),
     Row(["homerun"], ["HOMERUN TO PANEL, HASH MARKS = CONDUCTORS"]),
 ]
+
+
+def place(c: Canvas, kind: str, cx: float, cy: float, rot: int = 0, scale: float = 1.0, label: Optional[str] = None) -> None:
+    """Draw ``kind`` at (cx, cy) top-down, turned ``rot`` degrees and scaled."""
+    sub = Canvas(c.w, 0.0)  # Y(y) = -y: symbol drawn about the origin, y up
+    sub.symbol(kind, 0.0, 0.0)
+    th = math.radians(rot)
+    a, b = scale * math.cos(th), scale * math.sin(th)
+    c.ops.append(f"q {a:.6f} {b:.6f} {-b:.6f} {a:.6f} {cx:.3f} {c.Y(cy):.3f} cm\n" + "".join(sub.ops) + "Q\n")
+    if label:
+        c.text(cx + 9 * scale, cy + 11 * scale, label, size=5 * scale)
+
+
+def raster_copy(src_pdf: str, page_index: int, out_pdf: str) -> None:
+    """A 'scanned' copy of one page: its 200 DPI render embedded as an image."""
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(src_pdf)
+    page = doc[page_index]
+    w, h = page.get_size()
+    img = np.asarray(page.render(scale=200 / 72, rev_byteorder=True).to_numpy())[:, :, :3]
+    doc.close()
+    pdf = pikepdf.new()
+    pg = pdf.add_blank_page(page_size=(w, h))
+    stream = pikepdf.Stream(pdf, np.ascontiguousarray(img).tobytes())
+    stream.Type, stream.Subtype = pikepdf.Name.XObject, pikepdf.Name.Image
+    stream.Width, stream.Height = img.shape[1], img.shape[0]
+    stream.ColorSpace, stream.BitsPerComponent = pikepdf.Name.DeviceRGB, 8
+    pg.obj.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(Im0=stream))
+    pg.obj.Contents = pdf.make_stream(f"q {w} 0 0 {h} 0 0 cm /Im0 Do Q".encode())
+    pdf.save(out_pdf)

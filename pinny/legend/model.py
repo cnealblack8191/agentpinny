@@ -82,6 +82,8 @@ class LegendEntry:
     symbol_boxes: List[Box] = field(default_factory=list)
     #: Short text drawn inside the symbol area (e.g. "GFI", "WP").
     labels: List[str] = field(default_factory=list)
+    #: Where each label is on the legend page (canonical px), same order.
+    label_boxes: List[Box] = field(default_factory=list)
     row_box: Optional[Box] = None
     flags: List[str] = field(default_factory=list)
     #: "read" (from the legend) or "user" (added or split by a person).
@@ -102,6 +104,7 @@ class LegendEntry:
         d = asdict(self)
         d["symbol_boxes"] = [list(b) for b in self.symbol_boxes]
         d["row_box"] = list(self.row_box) if self.row_box else None
+        d["label_boxes"] = [list(b) for b in self.label_boxes]
         d["status"] = self.status
         return d
 
@@ -111,6 +114,7 @@ class LegendEntry:
         d.pop("status", None)
         d["symbol_boxes"] = [tuple(float(v) for v in b) for b in d.get("symbol_boxes", [])]
         d["row_box"] = tuple(float(v) for v in d["row_box"]) if d.get("row_box") else None
+        d["label_boxes"] = [tuple(float(v) for v in b) for b in d.get("label_boxes", [])]
         return cls(**d)
 
 
@@ -259,7 +263,8 @@ class Legend:
                 LegendEntry(
                     id=self._new_id(), tag=tag, tag_source=src, name=name, description=desc, group=e.group,
                     count=e.count, not_counted_reason=e.not_counted_reason, symbol_boxes=[e.symbol_boxes[i]],
-                    labels=list(e.labels) if n == 0 else [], row_box=e.row_box,
+                    labels=list(e.labels) if n == 0 else [], label_boxes=list(e.label_boxes) if n == 0 else [],
+                    row_box=e.row_box,
                     flags=[f for f in e.flags if f not in ("combined", "wrapped", "duplicate_tag")] + (["generated_tag"] if src == "generated" else []),
                     source="user", confirmed=True,
                     signatures=[e.signatures[i]] if i < len(e.signatures) else [],
@@ -278,7 +283,11 @@ class Legend:
         src, dst = self.entry(entry_id), self.entry(into_id)
         dst.symbol_boxes.extend(src.symbol_boxes)
         dst.signatures.extend(src.signatures)
-        dst.labels.extend(l for l in src.labels if l not in dst.labels)
+        for l, lb in zip(src.labels, src.label_boxes or [None] * len(src.labels)):
+            if l not in dst.labels:
+                dst.labels.append(l)
+                if lb is not None:
+                    dst.label_boxes.append(lb)
         dst.count = dst.count or src.count
         self.entries.remove(src)
         self._log("merge", entry_id, into=into_id)

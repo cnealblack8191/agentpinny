@@ -80,7 +80,8 @@ Each entry contains:
 * `id`, `tag`, `tag_source`, `name`, `description`, `group`;
 * `count` and `not_counted_reason`;
 * `symbol_boxes` (one per drawing, canonical px on the legend page),
-  `labels`, `row_box`;
+  `labels` and `label_boxes` (where each label is, used to check labels on
+  scanned sheets), `row_box`;
 * `flags`, `source` (`read` or `user`), `confirmed`, `signatures`;
 * `status`: `ok`, `check` (needs a look) or `added` (added or split by a
   person).

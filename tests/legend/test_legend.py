@@ -369,3 +369,30 @@ def test_cli(main_set, tmp_path, capsys):
     build([(plan, 0, None)], str(tmp_path / "p.pdf"))
     assert cli(["find", str(tmp_path / "p.pdf")]) == 2
     assert cli(["bogus"]) == 64
+
+
+def test_cli_missing_file(tmp_path):
+    assert cli(["read", str(tmp_path / "missing.pdf")]) == 2
+
+
+def test_first_row_keeps_a_symbol_taller_than_its_text(main_set):
+    path, centres, legend = main_set
+    cx, cy = centres['DUPLEX RECEPTACLE, 20A, 125V, +18" AFF U.O.N.'][0]
+    stem_top = (cy - 11) * 200 / 72
+    assert legend.entries[0].symbol_boxes[0][1] <= stem_top + 2
+
+
+def test_widely_spaced_rows_with_large_symbols(tmp_path):
+    from .pdfgen import place
+
+    leg = Canvas()
+    leg.text(50, 58, "LEGEND", size=12)
+    leg.text(55, 74, "SYMBOL", size=7); leg.text(112, 74, "TAG", size=7); leg.text(150, 74, "DESCRIPTION", size=7)
+    for i, (k, t, d) in enumerate([("duplex", "D", "DUPLEX RECEPTACLE"), ("quad", "Q", "QUAD RECEPTACLE"),
+                                   ("jbox", "J", "JUNCTION BOX")]):
+        y = 100 + 40 * i
+        place(leg, k, 75, y, 0, scale=1.8)
+        leg.text(112, y + 3, t); leg.text(150, y + 3, d)
+    path = tmp_path / "wide.pdf"
+    build([(leg, 0, None)], str(path))
+    assert [e.tag for e in read_legend(path).entries] == ["D", "Q", "J"]

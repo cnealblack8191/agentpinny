@@ -172,6 +172,7 @@ pinny/                 application package (one import root)
   vector/              vector-first PDF symbol matcher (pikepdf)
   model/               .pinny model packages: train on the website, run in the QC app
   legend/              reads the drawing set's symbol legend; per-engineer saved legends
+  scan/                scans every sheet for the legend's symbols; interim 200 DPI renderer
   viewer/ (+ web/)     viewer session
 evaluation/            standalone, stdlib-only, must not import pinny
 tests/<module>/        per-module tests
