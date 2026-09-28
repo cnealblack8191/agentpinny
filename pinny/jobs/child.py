@@ -132,12 +132,14 @@ def main() -> int:
 
     try:
         from . import tasks
-        result = tasks.run(kind, payload, data_dir)
+        result = tasks.run(kind, payload, data_dir, job_id=req.get("job_id"))
         return answer({"ok": True, "result": result})
     except MemoryError:
         traceback.print_exc()
+        from .limits import TRAIN_KINDS
+        what = "This job" if kind in TRAIN_KINDS else "This page"
         return answer({"ok": False, "code": "out_of_memory", "status": 422,
-                       "message": "This page needs more memory than Pinny allows for one job."})
+                       "message": f"{what} needs more memory than Pinny allows for one job."})
     except Exception as exc:  # noqa: BLE001 - reported to the worker
         traceback.print_exc()
         code = getattr(exc, "code", None)

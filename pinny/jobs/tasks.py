@@ -10,7 +10,7 @@ import hashlib
 import re
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 _VERSION_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _STAGE_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -173,5 +173,19 @@ _TASKS: Dict[str, Callable[[Dict[str, Any], Path], Any]] = {
 }
 
 
-def run(kind: str, payload: Dict[str, Any], data_dir: str) -> Any:
+def run(kind: str, payload: Dict[str, Any], data_dir: str, *, job_id: Optional[str] = None,
+        progress=None) -> Any:
+    """Run one job. Training kinds (``pinny.jobs.train_tasks``) also need the
+    job id, which names their output and progress directories, and report
+    through ``progress`` (by default a ``Progress`` in the job's directory)."""
+    from .train_tasks import TRAIN_TASKS
+    if kind in TRAIN_TASKS:
+        from .progress import Progress, job_dir
+        try:
+            directory = job_dir(data_dir, job_id)
+        except ValueError:
+            raise TaskError("invalid_job", "Bad job id.") from None
+        if progress is None:
+            progress = Progress(directory, data_dir=data_dir)
+        return TRAIN_TASKS[kind](payload, Path(data_dir), progress, job_id)
     return _TASKS[kind](payload, Path(data_dir))
