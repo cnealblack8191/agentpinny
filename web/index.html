@@ -85,7 +85,7 @@
 
     <section id="members-section" hidden>
       <h2>Members (admin)</h2>
-      <p class="muted">People must also be on the Cloudflare Access allow-list to reach the site.</p>
+      <p class="muted">A new member gets a one-time link to choose their password. Send it to them privately.</p>
       <table id="members-table"><thead><tr><th>Email</th><th>Role</th><th></th></tr></thead><tbody></tbody></table>
       <div id="member-add">
         <input id="member-email" type="email" placeholder="name@company.com" autocomplete="off">
@@ -93,6 +93,21 @@
         <button id="member-add-btn">Add or change</button>
       </div>
       <p id="members-status" class="status" role="status"></p>
+      <div id="setup-link-box" hidden>
+        <p class="muted">Set-password link for <strong id="setup-link-email"></strong>, valid until <span id="setup-link-expires"></span>:</p>
+        <input id="setup-link-url" type="text" readonly>
+        <button id="setup-link-copy">Copy link</button>
+      </div>
+    </section>
+
+    <section id="account-section" hidden>
+      <h2>Your password</h2>
+      <form id="password-form">
+        <input id="pw-current" type="password" autocomplete="current-password" placeholder="Current password" required>
+        <input id="pw-new" type="password" autocomplete="new-password" placeholder="New password (12+ characters)" minlength="12" required>
+        <button type="submit">Change password</button>
+      </form>
+      <p id="password-status" class="status" role="status"></p>
     </section>
   </aside>
 

@@ -19,7 +19,6 @@ dependencies = [
     # server, and verification of the load balancer's signed sign-in header.
     "starlette==1.7.0",
     "uvicorn==0.54.0",
-    "cryptography==50.0.1",
 ]
 
 [project.optional-dependencies]

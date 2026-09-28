@@ -35,6 +35,10 @@ const el = {
   userBar: $('user-bar'), deleteDocBtn: $('delete-doc-btn'), membersSection: $('members-section'),
   membersTable: $('members-table'), memberEmail: $('member-email'), memberRole: $('member-role'),
   memberAddBtn: $('member-add-btn'), membersStatus: $('members-status'),
+  setupLinkBox: $('setup-link-box'), setupLinkEmail: $('setup-link-email'),
+  setupLinkExpires: $('setup-link-expires'), setupLinkUrl: $('setup-link-url'), setupLinkCopy: $('setup-link-copy'),
+  accountSection: $('account-section'), passwordForm: $('password-form'), pwCurrent: $('pw-current'),
+  pwNew: $('pw-new'), passwordStatus: $('password-status'),
 };
 
 const HIDDEN_STATES = new Set(['rejected', 'removed']);
@@ -458,8 +462,14 @@ function renderAccount() {
   const admin = !!(S.me && S.me.role === 'admin');
   el.membersSection.hidden = !admin;
   if (!admin) return;
-  const rows = S.members.map((m) => `<tr><td>${escapeHtml(m.email)}</td><td>${escapeHtml(m.role)}</td>`
-    + `<td>${m.email === S.me.email ? '(you)' : `<button data-remove="${escapeHtml(m.email)}">Remove</button>`}`
+  const signIn = !!S.me.sign_in;
+  const rows = S.members.map((m) => `<tr><td>${escapeHtml(m.email)}`
+    + `${signIn && !m.has_password ? ' <span class="muted">(no password yet)</span>' : ''}</td>`
+    + `<td>${escapeHtml(m.role)}</td><td>`
+    + (m.email === S.me.email ? '(you)'
+      : (signIn ? `<button data-link="${escapeHtml(m.email)}" data-reset="${m.has_password ? '1' : ''}">`
+        + `${m.has_password ? 'Reset password' : 'New link'}</button> ` : '')
+        + `<button data-remove="${escapeHtml(m.email)}">Remove</button>`)
     + '</td></tr>').join('');
   const tbody = el.membersTable.tBodies[0];
   if (tbody.dataset.html !== rows) {
@@ -479,12 +489,21 @@ async function loadMembers() {
 
 async function memberCall(fn, done) {
   try {
-    await fn();
+    const out = await fn();
     setStatus(el.membersStatus, done, 'ok');
+    showSetupLink(out && (out.setup || (out.setup_url ? out : null)));
     await loadMembers();
   } catch (err) {
     setStatus(el.membersStatus, err.message, 'error');
   }
+}
+
+function showSetupLink(link) {
+  el.setupLinkBox.hidden = !link;
+  if (!link) return;
+  el.setupLinkEmail.textContent = link.email;
+  el.setupLinkExpires.textContent = new Date(link.expires_at).toLocaleString();
+  el.setupLinkUrl.value = link.setup_url;
 }
 
 async function deleteDocument() {
@@ -1191,7 +1210,31 @@ el.memberAddBtn.onclick = () => {
   memberCall(() => api.putMember(email, el.memberRole.value), `Saved ${email}.`)
     .then(() => { el.memberEmail.value = ''; });
 };
+el.setupLinkCopy.onclick = async () => {
+  el.setupLinkUrl.select();
+  try { await navigator.clipboard.writeText(el.setupLinkUrl.value); setStatus(el.membersStatus, 'Link copied.', 'ok'); }
+  catch (err) { setStatus(el.membersStatus, 'Select the link and copy it.', ''); }
+};
+el.passwordForm.onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await api.changePassword(el.pwCurrent.value, el.pwNew.value);
+    el.passwordForm.reset();
+    setStatus(el.passwordStatus, 'Password changed. Other devices were signed out.', 'ok');
+  } catch (err) {
+    setStatus(el.passwordStatus, err.message, 'error');
+  }
+};
 el.membersTable.addEventListener('click', (e) => {
+  const l = e.target.closest('button[data-link]');
+  if (l) {
+    const email = l.dataset.link;
+    const reset = l.dataset.reset === '1';
+    if (!reset || window.confirm(`Reset ${email}'s password? They are signed out until they use the new link.`)) {
+      memberCall(() => api.setupLink(email, reset), `New link for ${email}.`);
+    }
+    return;
+  }
   const b = e.target.closest('button[data-remove]');
   if (!b) return;
   const email = b.dataset.remove;
@@ -1326,17 +1369,27 @@ async function start() {
   try {
     S.me = await api.me();
   } catch (err) {
-    // 401: not signed in at the gate; 403: signed in but not a member.
+    // 401: not signed in; 403: no longer a member.
+    if (err.status === 401) {
+      location.replace('login.html?next=' + encodeURIComponent(location.pathname + location.hash));
+      return;
+    }
     setViewMessage(err.message, true);
     el.userBar.textContent = err.status === 403 ? 'Not a Pinny member.' : 'Not signed in.';
     return;
   }
   el.userBar.textContent = `Signed in as ${S.me.email} (${S.me.role})`;
-  if (S.me.sign_out_url) {
-    const a = document.createElement('a');
-    a.href = S.me.sign_out_url;
-    a.textContent = 'Sign out';
-    el.userBar.append(' · ', a);
+  if (S.me.sign_in) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'link';
+    b.textContent = 'Sign out';
+    b.onclick = async () => {
+      try { await api.logout(); } catch (err) { /* the cookie is cleared either way */ }
+      location.replace('login.html');
+    };
+    el.userBar.append(' · ', b);
+    el.accountSection.hidden = false;
   }
   if (S.me.env === 'production') {
     try {

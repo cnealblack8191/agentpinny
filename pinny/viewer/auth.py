@@ -1,10 +1,10 @@
 """Who is making a request (docs/training-site.md section 1).
 
-Production: an AWS Application Load Balancer with Amazon Cognito signs the
-user in and adds a signed ``x-amzn-oidc-data`` token (ES256) to every
-request. We verify it on every request (signature against the region's ALB
-public key, ``signer`` pinned to our load balancer, expiry, and the Cognito
-issuer when configured), then look the email up in the members table.
+Production: Pinny's own sign-in. A member signs in with their email and
+password and gets a session cookie (``HttpOnly``, ``Secure``,
+``SameSite=Lax``). Only a hash of the session token is stored. Every
+request looks the session up, then the member, so removing a member or
+resetting their password takes effect at once.
 
 Development: every request is the local user (an admin), and the server
 refuses to listen anywhere but loopback.
@@ -12,151 +12,172 @@ refuses to listen anywhere but loopback.
 
 from __future__ import annotations
 
-import base64
-import json
-import re
 import threading
 import time
-import urllib.request
+from collections import deque
 from dataclasses import dataclass
-from typing import Callable, Dict, Mapping, Optional
+from http.cookies import CookieError, SimpleCookie
+from typing import Callable, Deque, Dict, Mapping, Optional
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
-
+from . import passwords
 from .errors import ViewerError
 from .settings import Settings
-from .sitedb import ADMIN, REVIEWER, SiteDB
-
-ALB_HEADER = "x-amzn-oidc-data"
-_KID_RE = re.compile(r"^[A-Za-z0-9-]{1,128}$")
-LEEWAY_S = 60
+from .sitedb import ADMIN, REVIEWER, SESSION_MAX_S, SiteDB
 
 # Minimum role per route: public < reviewer < admin.
 PUBLIC = "public"
 ROLE_RANK = {PUBLIC: 0, REVIEWER: 1, ADMIN: 2}
+
+# Wrong passwords from one address, across all accounts (the per-account
+# lock is in SiteDB).
+IP_FAILURES = 30
+IP_WINDOW_S = 15 * 60
+
+_BAD_LOGIN = "That email and password don't match. Try again, or ask an admin for a new set-password link."
 
 
 @dataclass(frozen=True)
 class Identity:
     email: str
     role: str
+    session: Optional[str] = None  # the session token, when signed in with a cookie
 
     def allows(self, needed: str) -> bool:
         return ROLE_RANK[self.role] >= ROLE_RANK[needed]
 
 
-class AlbOidcVerifier:
-    """Verifies the ``x-amzn-oidc-data`` JWT an Application Load Balancer
-    adds after Cognito sign-in. ``key_for(kid)`` returns the PEM public key;
-    by default it is fetched once per key id from the region's ALB key
-    endpoint and cached. Tests pass their own.
+class _FailureWindow:
+    """Recent failed sign-ins per client address, in memory."""
 
-    The ``signer`` check is what stops a token from any other load balancer
-    (or anyone who can reach the instance) from being accepted; the
-    instance's security group must also admit traffic only from the ALB.
-    """
-
-    header = ALB_HEADER
-    sign_out_path = "/logout"
-
-    def __init__(self, alb_arn: str, region: str, issuer: Optional[str] = None,
-                 key_for: Optional[Callable[[str], object]] = None) -> None:
-        self.alb_arn = alb_arn
-        self.issuer = issuer
-        self._keys: Dict[str, object] = {}
+    def __init__(self, limit: int, window_s: float) -> None:
+        self.limit, self.window_s = limit, window_s
+        self._hits: Dict[str, Deque[float]] = {}
         self._lock = threading.Lock()
-        self._key_for = key_for or (lambda kid: self._fetch(region, kid))
 
-    def _fetch(self, region: str, kid: str) -> bytes:
+    def _recent(self, key: str, now: float) -> Deque[float]:
+        q = self._hits.setdefault(key, deque())
+        while q and q[0] < now - self.window_s:
+            q.popleft()
+        return q
+
+    def blocked(self, key: str, now: float) -> bool:
         with self._lock:
-            if kid in self._keys:
-                return self._keys[kid]
-        url = f"https://public-keys.auth.elb.{region}.amazonaws.com/{kid}"
-        with urllib.request.urlopen(url, timeout=5) as r:  # noqa: S310 - fixed AWS host
-            pem = r.read(16384)
+            return len(self._recent(key, now)) >= self.limit
+
+    def hit(self, key: str, now: float) -> None:
         with self._lock:
-            self._keys[kid] = pem
-        return pem
-
-    def email(self, token: str) -> str:
-        # Verified by hand: the ALB keeps "=" padding in its base64url
-        # segments, which PyJWT rejects, and the signature covers the
-        # segments exactly as sent.
-        try:
-            parts = token.split(".")
-            if len(parts) != 3:
-                raise ValueError("not a JWT")
-            head = json.loads(_b64decode(parts[0]))
-            kid = head.get("kid")
-            if head.get("alg") != "ES256" or not isinstance(kid, str) or not _KID_RE.match(kid):
-                raise ValueError("unexpected header")
-            if head.get("signer") != self.alb_arn:
-                raise ValueError("signed by another load balancer")
-            sig = _b64decode(parts[2])
-            if len(sig) != 64:
-                raise ValueError("bad signature length")
-            key = self._public_key(kid)
-            key.verify(encode_dss_signature(int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big")),
-                       f"{parts[0]}.{parts[1]}".encode("ascii"), ec.ECDSA(hashes.SHA256()))
-            claims = json.loads(_b64decode(parts[1]))
-            if not isinstance(claims, dict):
-                raise ValueError("bad claims")
-            exp = claims.get("exp", head.get("exp"))
-            if isinstance(exp, bool) or not isinstance(exp, (int, float)) or time.time() > exp + LEEWAY_S:
-                raise ValueError("expired")
-            if self.issuer and claims.get("iss", head.get("iss")) != self.issuer:
-                raise ValueError("wrong issuer")
-        except (InvalidSignature, KeyError, ValueError, TypeError, UnicodeError, OSError) as exc:
-            raise ViewerError("unauthenticated", "Your sign-in could not be verified. Sign in again.",
-                              401) from exc
-        email = claims.get("email")
-        if not isinstance(email, str) or "@" not in email:
-            raise ViewerError("unauthenticated", "Your sign-in has no email address.", 401)
-        return email.strip().lower()
-
-    def _public_key(self, kid: str):
-        key = serialization.load_pem_public_key(self._key_for(kid))
-        if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):
-            raise ValueError("unexpected key type")
-        return key
-
-
-def _b64decode(segment: str) -> bytes:
-    """base64url with or without padding."""
-    if not isinstance(segment, str) or not re.fullmatch(r"[A-Za-z0-9_-]*={0,2}", segment):
-        raise ValueError("bad base64url")
-    return base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
+            self._recent(key, now).append(now)
+            if len(self._hits) > 10000:  # bound memory under a spray of addresses
+                for k in [k for k, q in self._hits.items() if not q]:
+                    del self._hits[k]
 
 
 class Authenticator:
-    def __init__(self, settings: Settings, sitedb: SiteDB,
-                 verifier=None) -> None:
+    def __init__(self, settings: Settings, sitedb: SiteDB, *, login: Optional[bool] = None,
+                 clock: Callable[[], float] = time.time) -> None:
         self.settings = settings
         self.sitedb = sitedb
-        if settings.production:
-            self.verifier = verifier or AlbOidcVerifier(settings.alb_arn, settings.alb_region,
-                                                        settings.oidc_issuer)
-        else:
-            self.verifier = verifier  # tests may exercise real verification in development
+        # Tests may turn sign-in on in development; production always has it.
+        self.enabled = settings.production if login is None else (login or settings.production)
+        self.clock = clock
+        self._ip_failures = _FailureWindow(IP_FAILURES, IP_WINDOW_S)
+
+    @property
+    def cookie_name(self) -> str:
+        # The __Host- prefix makes browsers refuse the cookie unless it is
+        # Secure, host-only and Path=/, so no subdomain can plant one.
+        return "__Host-pinny_session" if (self.settings.origin or "").startswith("https://") else "pinny_session"
+
+    def cookie_attrs(self) -> dict:
+        return {"path": "/", "httponly": True, "samesite": "lax", "secure": self.cookie_name.startswith("__Host-")}
+
+    def session_token(self, headers: Mapping[str, str]) -> Optional[str]:
+        raw = headers.get("cookie")
+        if not raw:
+            return None
+        try:
+            c = SimpleCookie()
+            c.load(raw)
+        except CookieError:
+            return None
+        m = c.get(self.cookie_name)
+        return m.value if m is not None and 0 < len(m.value) <= 128 else None
 
     def identify(self, headers: Mapping[str, str]) -> Identity:
         """The signed-in member, or a 401/403 ``ViewerError``."""
-        if self.verifier is None:
+        if not self.enabled:
             return Identity(self.settings.dev_email, ADMIN)
-        token = headers.get(self.verifier.header)
-        if not token:
+        token = self.session_token(headers)
+        email = self.sitedb.session_email(token, self.clock()) if token else None
+        if email is None:
             raise ViewerError("unauthenticated", "Sign in to use Pinny.", 401)
-        email = self.verifier.email(token)
         member = self.sitedb.member(email)
-        if member is None:
-            raise ViewerError("not_a_member",
-                              f"{email} is signed in but is not a Pinny member. Ask an admin to add you.",
-                              403)
-        return Identity(member.email, member.role)
+        if member is None:  # removal deletes sessions; this covers a race with it
+            raise ViewerError("not_a_member", f"{email} is no longer a Pinny member. Ask an admin.", 403)
+        return Identity(member.email, member.role, token)
+
+    # ----------------------------------------------------------- sign-in
+    def login(self, email, password, client: str) -> Identity:
+        """Check a password and start a session. Every failure gives the same
+        answer, and an unknown email costs as much time as a wrong password."""
+        now = self.clock()
+        if not isinstance(email, str) or not isinstance(password, str) or len(password) > passwords.MAX_LENGTH:
+            raise ViewerError("bad_login", _BAD_LOGIN, 401)
+        email = email.strip().lower()
+        if self._ip_failures.blocked(client, now):
+            raise ViewerError("too_many_attempts",
+                              "Too many wrong passwords from this network. Wait 15 minutes and try again.", 429)
+        rec = self.sitedb.password_record(email) if self.sitedb.member(email) else None
+        if rec is None:
+            passwords.burn_time(password)
+            self._ip_failures.hit(client, now)
+            raise ViewerError("bad_login", _BAD_LOGIN, 401)
+        if rec["locked_until"] > now:
+            minutes = max(1, int((rec["locked_until"] - now + 59) // 60))
+            raise ViewerError("account_locked", f"Too many wrong passwords for this account. Try again in "
+                              f"{minutes} minute{'s' if minutes != 1 else ''}, or ask an admin to reset it.", 429)
+        if not passwords.verify_password(password, rec["hash"]):
+            self._ip_failures.hit(client, now)
+            self.sitedb.record_login_failure(email, now)
+            raise ViewerError("bad_login", _BAD_LOGIN, 401)
+        self.sitedb.clear_login_failures(email)
+        member = self.sitedb.member(email)
+        return Identity(member.email, member.role, self.sitedb.create_session(email, now))
+
+    def setup_email(self, token) -> str:
+        """The member a set-password link belongs to."""
+        email = self.sitedb.setup_link_email(token, self.clock()) if isinstance(token, str) and token else None
+        if email is None:
+            raise ViewerError("bad_setup_link", "This set-password link has expired or was already used. "
+                              "Ask an admin for a new one.", 400)
+        return email
+
+    def complete_setup(self, token, password) -> Identity:
+        email = self.setup_email(token)
+        try:
+            passwords.check_policy(password, email)
+        except passwords.WeakPassword as exc:
+            raise ViewerError("weak_password", str(exc)) from None
+        self.sitedb.set_password(email, passwords.hash_password(password), actor=email)
+        member = self.sitedb.member(email)
+        return Identity(member.email, member.role, self.sitedb.create_session(email, self.clock()))
+
+    def change_password(self, ident: Identity, current, new) -> None:
+        rec = self.sitedb.password_record(ident.email)
+        if rec is None or not isinstance(current, str) or not passwords.verify_password(current, rec["hash"]):
+            raise ViewerError("bad_login", "Your current password is not right.", 400)
+        try:
+            passwords.check_policy(new, ident.email)
+        except passwords.WeakPassword as exc:
+            raise ViewerError("weak_password", str(exc)) from None
+        self.sitedb.set_password(ident.email, passwords.hash_password(new), actor=ident.email,
+                                 keep_session=ident.session)
+
+    def logout(self, headers: Mapping[str, str]) -> None:
+        token = self.session_token(headers)
+        if token:
+            self.sitedb.delete_session(token)
 
     @property
-    def sign_out_url(self) -> Optional[str]:
-        return self.verifier.sign_out_path if self.verifier is not None else None
+    def session_max_age(self) -> int:
+        return SESSION_MAX_S

@@ -58,3 +58,12 @@ a.disabled { color: #999; pointer-events: none; }
 #members-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0; }
 #members-table td, #members-table th { text-align: left; padding: 2px 4px; border-bottom: 1px solid #eee; word-break: break-all; }
 #member-add input { width: 100%; margin-bottom: 4px; }
+#setup-link-box input, #password-form input { width: 100%; margin-bottom: 4px; }
+button.link { background: none; border: none; padding: 0; color: #2a6df4; text-decoration: underline; cursor: pointer; font: inherit; }
+/* Sign-in and set-password pages. */
+body.auth { display: block; background: #f4f4f4; }
+.auth-box { max-width: 360px; margin: 12vh auto 0; background: #fff; border: 1px solid #ccc; padding: 16px 20px; }
+.auth-box h1 { font-size: 20px; margin: 0 0 12px; }
+.auth-box label { display: block; margin: 8px 0 2px; }
+.auth-box input { width: 100%; padding: 6px; font: inherit; }
+.auth-box button { margin-top: 12px; padding: 6px 14px; font: inherit; }

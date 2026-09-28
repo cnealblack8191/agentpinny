@@ -66,6 +66,13 @@ export const api = {
   members: () => request('GET', '/api/members'),
   putMember: (email, role) => request('POST', '/api/members', { json: { email, role } }),
   removeMember: (email) => request('POST', '/api/members/remove', { json: { email } }),
+  setupLink: (email, reset) => request('POST', '/api/members/setup-link', { json: { email, reset: !!reset } }),
+  login: (email, password) => request('POST', '/api/login', { json: { email, password } }),
+  logout: () => request('POST', '/api/logout', { json: {} }),
+  setupCheck: (token) => request('POST', '/api/setup/check', { json: { token } }),
+  setup: (token, password) => request('POST', '/api/setup', { json: { token, password } }),
+  changePassword: (current, next) => request('POST', '/api/me/password',
+    { json: { current_password: current, new_password: next } }),
 };
 
 export function newRequestId() {
