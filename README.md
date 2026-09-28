@@ -57,10 +57,11 @@ python -m pytest tests evaluation/tests               # every Python suite
 PYTHONPATH=evaluation python -m pinny_eval score-corpus \
   --manifest evaluation/fixtures/corpus_mini/manifest.json \
   --baseline evaluation/fixtures/corpus_mini/baseline.json --max-drop 0.01   # evaluator gate
-node --test tests/viewer/test_transform.mjs tests/viewer/test_edits.mjs tests/viewer/test_batch.mjs  # viewer JS units
+node --test tests/viewer/test_transform.mjs tests/viewer/test_edits.mjs tests/viewer/test_batch.mjs tests/viewer/test_training.mjs  # viewer JS units
 node tests/viewer/test_modes_browser.mjs                                     # Chromium, fake models
 node tests/viewer/test_batch_browser.mjs                                     # Chromium, batch scans
 node tests/viewer/test_site_browser.mjs                                      # Chromium, signed-in site
+node tests/viewer/test_training_browser.mjs                                  # Chromium, training pages
 ```
 
 Tests that need `torch` or `onnxruntime` skip when those extras are not
