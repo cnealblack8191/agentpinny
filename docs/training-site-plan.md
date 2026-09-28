@@ -19,21 +19,27 @@ block into the prompts that ask for it.
 
 ```
 SERVER FACTS
-- Machine for the site: the owner's AWS account. Default: its own EC2 instance,
-  Ubuntu 24.04 LTS, 2 vCPU / 8 GB RAM (e.g. m7i.large), 100 GB gp3 EBS, no GPU (default)
-- Docker available? yes, installed on the instance (default)
-- Network (updated 2026-09-28: AWS services instead of Cloudflare): an internet-facing
-  Application Load Balancer (HTTPS 443, ACM certificate) in front of the EC2 instance;
-  the instance's security group admits the app port only from the ALB
-- Domain: subdomain pinny.ecinc.us; DNS record details to come from the owner's AWS setup
-- Sign-in: Amazon Cognito user pool, invite-only, email one-time codes, via the ALB's
-  authenticate-cognito rule; PINNY_GATE=alb
+- Machine for the site: the owner's AWS account, its own EC2 instance,
+  Ubuntu 24.04 LTS, 2 vCPU / 8 GB RAM (m7i.large), 100 GB gp3 EBS (encrypted), no GPU
+- Hours (updated 2026-09-28): the instance runs 07:00-19:00 America/New_York,
+  Monday-Friday, and is stopped otherwise (EventBridge Scheduler start/stop);
+  about $40/month in all
+- Docker: not used. Web and workers are native systemd services (deploy/systemd/)
+- Network (updated 2026-09-28): Caddy on the instance terminates HTTPS with automatic
+  Let's Encrypt certificates and forwards to Pinny on 127.0.0.1. Security group:
+  TCP 80 and 443 from anywhere, nothing else (admin access through SSM Session Manager).
+  Elastic IP; no load balancer
+- Domain: pinny.ecinc.us (production) and staging.pinny.ecinc.us (staging), A records
+  to the Elastic IP; the DNS provider for ecinc.us is still to be confirmed
+- Sign-in (updated 2026-09-28): Pinny's own password sign-in; admins invite people with
+  one-time set-password links; no paid identity service
 - Who will use it: 3 people. Owner = admin (super admin); assistant and draftsman = reviewers.
   No customers
-- Backups: AWS. Nightly encrypted backup to a private S3 bucket in the same account,
-  30-day retention, plus weekly EBS snapshots
+- Backups: AWS. A daily (weekdays, 18:15 New York time) encrypted backup to a private,
+  versioned S3 bucket in the same account, 30-day retention, plus weekly EBS snapshots
+  (Data Lifecycle Manager, kept 4 weeks); alerts by email through SNS
 - Separate GPU machine for training: none (CPU training on the instance)
-- Must not be disturbed: nothing, if the instance is Pinny's own (default)
+- Must not be disturbed: nothing, the instance is Pinny's own
 - Clients: web browsers (including the Surface Pro). The Surface Pro is not the server
 ```
 
@@ -118,10 +124,13 @@ UI escapes server text, and the lock file pins hashes.
 
 ## 4. Target architecture
 
-> **Decision (2026-09-28):** the owner chose AWS services only. The gate is
-> an Application Load Balancer with Amazon Cognito sign-in at
-> `pinny.ecinc.us`; Cloudflare is not used. `docs/training-site.md` is the
-> contract. The options below are kept as the original analysis.
+> **Decision (2026-09-28, revised):** no load balancer, no Cognito and no
+> Cloudflare. Caddy on the EC2 instance provides HTTPS (Let's Encrypt) and
+> Pinny has its own password sign-in. Web and workers are native systemd
+> services, not containers; the instance runs on weekdays 07:00-19:00 New
+> York time. `docs/training-site.md` is the contract and
+> `docs/deployment.md` the runbook (`deploy/`). The options below are kept
+> as the original analysis.
 
 ```
  Internet

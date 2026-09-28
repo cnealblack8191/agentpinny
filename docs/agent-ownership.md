@@ -30,7 +30,7 @@ coordinator merges them back in plan order (steps 6a and 8).
 | Training-site contract | `docs/training-site.md`, `docs/training-site-plan.md` | `training-site` (coordinator) | plan copied; contract is Step 2 |
 | Secure web tier | `pinny/viewer/`, `web/` (viewer pages), `tests/viewer/` | `training-site-web` | not started (Step 3) |
 | Jobs and sandbox | `pinny/jobs/`, `tests/jobs/` | `training-site-jobs` | not started (Step 4) |
-| Deployment | `deploy/`, `docs/deployment.md`, CI image builds | `training-site-deploy` | not started (Step 5) |
+| Deployment | `deploy/`, `docs/deployment.md`, `tests/deploy/`, the `deploy` job in `.github/workflows/tests.yml` | `training-site-deploy` | built (Step 5): Caddy + native systemd on one EC2 instance, weekday hours, S3 backups, SNS alerts |
 | Training API | training routes in `pinny/viewer/` or `pinny/site/` | `training-site-train-api` | not started (Step 7a) |
 | Training pages | `web/` training pages, Playwright tests | `training-site-train-ui` | not started (Step 7b) |
 

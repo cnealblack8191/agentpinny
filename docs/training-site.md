@@ -9,8 +9,10 @@ three users, backups to S3. Anything here that contradicts `docs/contracts.md` s
 reviews.
 
 Implementation status is marked per section: **built** (on
-`claude/beautiful-brahmagupta-vqz21o`), or **planned** (Step 5
-deployment, Step 7 training pages).
+`claude/beautiful-brahmagupta-vqz21o`), or **planned** (Step 7 training
+pages). The deployment (Step 5) is `deploy/`, run as described in
+`docs/deployment.md`: Caddy and native systemd services on one instance
+that runs on weekdays 07:00-19:00 New York time.
 
 ## 1. Identity and roles (built)
 
@@ -213,13 +215,21 @@ detail in the job's log.
 to run (`sandbox_unavailable`) unless it has no network interface but
 loopback. Ubuntu 24.04 restricts unprivileged user namespaces through
 AppArmor, so on the EC2 instance the workers run as their own systemd
-services with `PrivateNetwork=yes` (`PINNY_JOBS=external`, Step 5), and
-the child's check passes whether or not its own `unshare` works.
+services with `PrivateNetwork=yes` (`PINNY_JOBS=external`;
+`pinny-worker-<pool>@<profile>` in `deploy/systemd/`), and the child's
+check passes whether or not its own `unshare` works. There the queue file
+`$PINNY_DATA_DIR/jobs.sqlite3` is a link to `jobs/jobs.sqlite3`, so the
+workers can write the queue without write access to the data directory
+itself (SQLite follows the link and keeps `-wal`/`-shm` next to the target).
 
 **Crash recovery.** A running job whose heartbeat is older than 30 s lost
 its worker. Any worker requeues it (once), then fails it with
 `worker_lost`. With `PINNY_JOBS=sandbox` the web process requeues
-immediately on startup, since its own workers are the only ones.
+immediately on startup, since its own workers are the only ones. The
+deployment stops worker services with SIGKILL (the instance is stopped
+every evening), so an interrupted job is left `running` and requeued when
+the workers start again, instead of being recorded as failed by the
+worker's SIGTERM handling.
 
 **Still in the web process:** decoding the PNG page images the jobs wrote
 (for training crops and for the two learned-model scan modes, which also
@@ -294,10 +304,14 @@ deletion is complete everywhere after 30 days.
 
 Residual risks for this deployment: a member's email account being taken
 over (mitigate with MFA on those mailboxes); a PDF parser exploit inside
-a child can still read and write what the worker's Unix user can, so Step
-5 runs the workers as their own user with write access only to
-`documents/` and `tmp/`; the single EC2 instance as a single point of
-failure (mitigated by nightly backups and weekly snapshots).
+a child can still read and write what the worker's Unix user can, so the
+deployment runs the interactive and scan workers as their own user
+(`pinny-<profile>-worker`) with write access only to `documents/`, `tmp/`
+and the job queue (`jobs/`), and no read access to `site.sqlite3`,
+`pinny.sqlite3`, `crops/`, `exports/` or `models/`; the training worker
+needs the labels and models, so it runs as the web user (still without
+network); the single EC2 instance as a single point of failure (mitigated
+by daily weekday backups and weekly snapshots).
 
 ## 9. Seam between web and workers
 
@@ -330,4 +344,8 @@ class RenderClient(Protocol):
 | `PINNY_JOBS` | `inprocess` (default) | `sandbox` (default) or `external`; `inprocess` is refused |
 | Bind address | `127.0.0.1` only | `127.0.0.1`, behind Caddy on the same instance |
 
-Production refuses to start if any required variable is missing.
+Production refuses to start if any required variable is missing. The
+deployment keeps these in `/etc/pinny/<profile>.env` (plus `PINNY_PORT`,
+the port the web unit listens on behind Caddy: 8001 production, 8002
+staging) and writes `PINNY_VERSION` (`git:` and 12 hex digits) per
+release (`docs/deployment.md`).

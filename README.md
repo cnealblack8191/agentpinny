@@ -9,6 +9,7 @@ internet-facing training site.
 
 * Contracts: `docs/contracts.md`
 * Training site plan (security baseline, architecture, steps): `docs/training-site-plan.md`
+* Running it on AWS (setup, deploy, backups, alerts): `docs/deployment.md`
 * Viewer: `docs/viewer.md`
 * Phase 2 (learning models): `docs/phase2-contracts.md`, `docs/phase2-ownership.md`
 * Detection: `docs/detection.md`, vector matcher `docs/vector-matching.md`
