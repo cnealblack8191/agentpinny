@@ -153,7 +153,7 @@ The site is one origin, `PINNY_ORIGIN` (for example
 | `GET /api/training/datasets` | admin | | `{datasets [{dataset_id, created_at, synthetic, split, counts, documents, gate {test_documents, test_points, ok}}], gate}` |
 | `POST /api/training/datasets` | admin | `{}` | 202, a `build_dataset` job; the same build already queued or running is returned instead |
 | `POST /api/training/train` | admin | `{kind: verifier or detector, dataset_id, epochs?, tiles_per_epoch? (detector)}` | 202, a `train_verifier` / `train_detector` job; epochs 1-200 |
-| `POST /api/training/benchmarks` | admin | `{model_id, dataset_id?}` | 202, a `benchmark` job; the dataset defaults to the model's own |
+| `POST /api/training/benchmarks` | admin | `{model_id, dataset_id?, template_threshold?}` | 202, a `benchmark` job; the dataset defaults to the model's own; the template threshold (default: the detector's) applies to the baseline and the candidate alike |
 | `GET /api/training/jobs?limit=` | admin | | training jobs, newest first: `{jobs [{job_id, kind, status, progress, requested_by, created_at, started_at, finished_at, error, payload, result, cancel_requested}]}` |
 | `GET /api/training/jobs/{job_id}` | admin | | one job, plus `log_tail` (the job's own log, never its stderr) |
 | `POST /api/training/jobs/{job_id}/cancel` | admin | `{}` | queued: cancelled now; running: stopped at the next heartbeat |
@@ -213,7 +213,7 @@ result:
 | `build_dataset` | train | export the learning store and build a `pinny.dataset` v1 under `datasets/` | `{}` (whole store) |
 | `train_verifier` | train | train a verifier on a dataset, save it in the registry | `dataset_id`, `epochs?`, `seed?` |
 | `train_detector` | train | train the point detector | `dataset_id`, `epochs?`, `tiles_per_epoch?`, `seed?` |
-| `benchmark` | train | template vs the model's mode on the dataset's test split; writes `benchmarks/<job_id>/summary.json` and the gate's `promotion.json` | `model_id`, `dataset_id` |
+| `benchmark` | train | template vs the model's mode on the dataset's test split; writes `benchmarks/<job_id>/summary.json` and the gate's `promotion.json` | `model_id`, `dataset_id`, `template_threshold?` |
 
 `refresh_template_bank` is not a job: the learning loop has no stored
 template bank to refresh yet (docs/learning-loop.md builds it per scan).

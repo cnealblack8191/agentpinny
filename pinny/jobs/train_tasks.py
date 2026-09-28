@@ -12,6 +12,10 @@ directory:
     benchmarks/<job_id>/summary.json  pinny.benchmark v1
     benchmarks/<job_id>/promotion.json   pinny.promotion v1 (the promotion evidence)
 
+``benchmark`` takes an optional ``template_threshold``: the template
+baseline and the candidate's template stage both use it, as with
+``python -m pinny.benchmark run --template-threshold``.
+
 Results are small JSON summaries without server paths.
 """
 
@@ -172,6 +176,10 @@ def benchmark(p: Dict[str, Any], data_dir: Path, progress: Progress, job_id: str
     model_id = p.get("model_id")
     if not isinstance(model_id, str) or not MODEL_ID_RE.match(model_id):
         raise TaskError("invalid_job", "Bad model id.")
+    threshold = p.get("template_threshold")
+    if threshold is not None and (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+                                  or not -1 <= threshold <= 1):
+        raise TaskError("invalid_job", "template_threshold must be a number from -1 to 1.")
     reg = ModelRegistry(data_dir)
     meta = reg.get(model_id)  # 404 unknown_model
     kind = meta["kind"]
@@ -187,7 +195,8 @@ def benchmark(p: Dict[str, Any], data_dir: Path, progress: Progress, job_id: str
         models = {"detector": PointDetector.load(model_dir), "detector_meta": meta}
     progress.update(0.05, f"scoring template and {mode} on the test split of dataset {d.name[:12]}")
     out = benchmark_dir(data_dir, job_id)
-    summary = run_benchmark(d, ["template", mode], out, overwrite=True, **models)
+    summary = run_benchmark(d, ["template", mode], out, overwrite=True,
+                            template_threshold=None if threshold is None else float(threshold), **models)
     raw = (out / "summary.json").read_bytes()
     progress.update(0.9, f"{summary['page_count']} test pages, {summary['document_count']} documents, "
                     f"{summary['reference_points']} reference points ({summary['label']})")

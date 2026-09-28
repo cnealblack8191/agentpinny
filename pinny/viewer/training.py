@@ -309,7 +309,12 @@ class TrainingService:
         if dataset_id is None:
             dataset_id = meta.get("dataset_id")  # the model's own dataset: its test split was never tuned on
         payload = {"model_id": meta["model_id"], "dataset_id": self._dataset(dataset_id)}
-        return self._submit("benchmark", payload, requested_by, f"benchmark:{payload['model_id']}:{payload['dataset_id']}")
+        t = body.get("template_threshold")
+        if t is not None:
+            if isinstance(t, bool) or not isinstance(t, (int, float)) or not -1 <= t <= 1:
+                raise ViewerError("invalid_setting", "template_threshold must be a number from -1 to 1.")
+            payload["template_threshold"] = t
+        return self._submit("benchmark", payload, requested_by, f"benchmark:{json.dumps(payload, sort_keys=True)}")
 
     def _train_job(self, job_id: str) -> Job:
         if not isinstance(job_id, str) or not _UUID_RE.match(job_id):
@@ -351,7 +356,7 @@ class TrainingService:
         for k in KINDS:
             e = self.registry.active_entry(k)
             active[k] = None if e is None else {key: e.get(key) for key in (
-                "model_id", "kind", "promoted_at", "evidence_sha256", "dataset_id", "benchmark_job_id")}
+                "model_id", "kind", "promoted_at", "evidence_sha256", "dataset_id")}
         models = []
         for m in reversed(self.registry.list_models()):  # newest first
             models.append({

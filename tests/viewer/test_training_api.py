@@ -198,6 +198,9 @@ def test_training_requests_are_validated(site):
     m = make_model(s.settings.data_dir, "verifier")
     c, out = post(base, "/api/training/benchmarks", {"model_id": m, "dataset_id": "b" * 64})
     assert (c, out["error"]["code"]) == (404, "dataset_not_found")
+    for t in (2, "0.5", True):
+        c, out = post(base, "/api/training/benchmarks", {"model_id": m, "dataset_id": ds, "template_threshold": t})
+        assert (c, out["error"]["code"]) == (400, "invalid_setting"), t
     for path in ("/api/training/jobs/not-a-uuid", f"/api/training/jobs/{uuid.uuid4()}",
                  f"/api/training/jobs/{str(uuid.uuid4()).upper()}"):
         c, out = get(base, path)
