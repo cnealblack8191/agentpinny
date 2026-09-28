@@ -9,6 +9,9 @@
 <body>
   <aside id="panel">
     <h1>Pinny</h1>
+    <nav class="site-nav" aria-label="Pages"><a href="index.html" aria-current="page">Viewer</a>
+      <a href="training.html#dashboard">Dashboard</a> <a href="training.html#queue">Label queue</a>
+      <a href="training.html#models">Models</a></nav>
     <p id="user-bar" class="muted"></p>
     <div id="stub-banner" class="banner" hidden>
       Stub render service: page images are synthetic stand-ins, not the PDF content.
@@ -80,6 +83,8 @@
       </div>
       <label><input type="checkbox" id="show-hidden"> Show rejected and removed pins</label>
       <p><a id="report-link" class="disabled" aria-disabled="true">Export report (JSON)</a></p>
+      <p><button id="mark-reviewed-btn" title="Every receptacle on this page is pinned and every pin reviewed">Mark page fully reviewed</button></p>
+      <p id="mark-reviewed-status" class="status" role="status"></p>
       <table id="pin-table"><thead><tr><th>Pin</th><th>Score</th><th>State</th></tr></thead><tbody></tbody></table>
     </section>
 
@@ -134,5 +139,6 @@
     </div>
   </main>
   <script type="module" src="app.js"></script>
+  <script type="module" src="train/viewer-hook.js"></script>
 </body>
 </html>
