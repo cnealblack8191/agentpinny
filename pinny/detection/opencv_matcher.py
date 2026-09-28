@@ -1,8 +1,8 @@
 """Conventional OpenCV template matching for receptacle symbols.
 
-Scope of this phase: one page, one symbol type, exact scale, quarter-turn
-rotations only. No scale search, arbitrary-angle search, OCR or learned
-models.
+Scope of this phase: one page, one symbol type, a discrete set of template
+scales, quarter-turn rotations only. No arbitrary-angle search, OCR or
+learned models.
 """
 
 from __future__ import annotations
@@ -89,39 +89,49 @@ class OpenCVTemplateDetector:
         page_gray = _to_gray(page[region.y : region.y2, region.x : region.x2])
         template_gray = _to_gray(template_image)
         _validate_template(template_gray, region, settings)
-
         warnings: List[str] = []
+        scaled_templates = _distinct_scaled_templates(template_gray, settings.scales, warnings)
+        for scale, scaled in scaled_templates:
+            if scale != 1.0:
+                _validate_template(scaled, region, settings, scale=scale)
+        scales = tuple(scale for scale, _ in scaled_templates)
+
         truncated = False
         all_boxes: List[np.ndarray] = []
         all_scores: List[np.ndarray] = []
         all_rotations: List[np.ndarray] = []
+        all_scales: List[np.ndarray] = []
 
-        for rotation in settings.rotations:
-            rotated = template_gray if rotation == 0 else cv2.rotate(template_gray, _CV_ROTATE[rotation])
-            th, tw = rotated.shape
-            ys, xs, scores, hit_cap, bad = _match_one_rotation(page_gray, rotated, settings)
-            truncated |= hit_cap
-            if bad:
-                warnings.append(
-                    f"rotation {rotation}: ignored {bad} non-finite or out-of-range score(s)."
-                )
-            if len(scores):
-                boxes = np.empty((len(scores), 4), dtype=np.int64)
-                # Map back from the search-region crop to canonical page space.
-                boxes[:, 0] = xs + region.x
-                boxes[:, 1] = ys + region.y
-                boxes[:, 2] = tw
-                boxes[:, 3] = th
-                all_boxes.append(boxes)
-                all_scores.append(scores)
-                all_rotations.append(np.full(len(scores), rotation, dtype=np.int64))
-            self._check_deadline(start, settings, f"after rotation {rotation}")
+        for scale, scaled in scaled_templates:
+            for rotation in settings.rotations:
+                rotated = scaled if rotation == 0 else cv2.rotate(scaled, _CV_ROTATE[rotation])
+                th, tw = rotated.shape
+                ys, xs, scores, hit_cap, bad = _match_one_rotation(page_gray, rotated, settings)
+                truncated |= hit_cap
+                if bad:
+                    warnings.append(
+                        f"{_pass_label(scale, rotation)}: ignored {bad} non-finite or "
+                        "out-of-range score(s)."
+                    )
+                if len(scores):
+                    boxes = np.empty((len(scores), 4), dtype=np.int64)
+                    # Map back from the search-region crop to canonical page space.
+                    boxes[:, 0] = xs + region.x
+                    boxes[:, 1] = ys + region.y
+                    boxes[:, 2] = tw
+                    boxes[:, 3] = th
+                    all_boxes.append(boxes)
+                    all_scores.append(scores)
+                    all_rotations.append(np.full(len(scores), rotation, dtype=np.int64))
+                    all_scales.append(np.full(len(scores), scale, dtype=np.float64))
+                self._check_deadline(start, settings, f"after {_pass_label(scale, rotation)}")
 
         candidates: Tuple[Candidate, ...] = ()
         if all_scores:
             boxes = np.concatenate(all_boxes)
             scores = np.concatenate(all_scores)
             rotations = np.concatenate(all_rotations)
+            match_scales = np.concatenate(all_scales)
             keep = suppress_duplicates(
                 boxes,
                 scores,
@@ -137,6 +147,7 @@ class OpenCVTemplateDetector:
                     score=float(scores[i]),
                     box=BoundingBox(*(int(v) for v in boxes[i])),
                     rotation=int(rotations[i]),
+                    scale=float(match_scales[i]),
                 )
                 for i in keep
             )
@@ -151,6 +162,7 @@ class OpenCVTemplateDetector:
             detector=self.name,
             threshold=float(settings.threshold),
             rotations_searched=tuple(int(r) for r in settings.rotations),
+            scales_searched=scales,
             truncated=truncated,
             elapsed_seconds=self._clock() - start,
             warnings=tuple(warnings),
@@ -162,7 +174,7 @@ class OpenCVTemplateDetector:
             raise DetectionTimeout(
                 f"Scan exceeded max_runtime_seconds={settings.max_runtime_seconds} "
                 f"({elapsed:.2f}s {stage}). Use a smaller search_region, fewer rotations, "
-                "a smaller template, or a lower-resolution page."
+                "fewer scales, a smaller template, or a lower-resolution page."
             )
 
 
@@ -249,38 +261,84 @@ def _validate_region(region: BoundingBox, page: np.ndarray) -> None:
 
 
 def _validate_template(
-    template_gray: np.ndarray, region: BoundingBox, settings: ScanSettings
+    template_gray: np.ndarray,
+    region: BoundingBox,
+    settings: ScanSettings,
+    scale: Optional[float] = None,
 ) -> None:
+    """Check one template size. ``scale`` is set when validating a rescaled
+    copy, so messages name the scale that failed."""
     th, tw = template_gray.shape
+    what = "Template" if scale is None else f"Template scaled by {scale:g}"
+    scale_hint = "" if scale is None else " or drop that scale"
     if min(th, tw) < settings.min_template_side:
         raise DetectionError(
             "template_too_small",
-            f"Template is {tw}x{th} pixels; its shorter side must be at least "
-            f"{settings.min_template_side}. Select a larger region around the symbol.",
+            f"{what} is {tw}x{th} pixels; its shorter side must be at least "
+            f"{settings.min_template_side}. Select a larger region around the "
+            f"symbol{scale_hint}.",
         )
     if max(th, tw) > settings.max_template_side:
         raise DetectionError(
             "template_too_large",
-            f"Template is {tw}x{th} pixels; its longer side must be at most "
-            f"{settings.max_template_side}. Crop tightly around a single symbol.",
+            f"{what} is {tw}x{th} pixels; its longer side must be at most "
+            f"{settings.max_template_side}. Crop tightly around a single "
+            f"symbol{scale_hint}.",
         )
     for rotation in settings.rotations:
         rw, rh = (th, tw) if rotation in (90, 270) else (tw, th)
         if rw > region.width or rh > region.height:
             raise DetectionError(
                 "template_too_large",
-                f"Template rotated {rotation} degrees is {rw}x{rh}, which does not fit "
+                f"{what}, rotated {rotation} degrees, is {rw}x{rh}, which does not fit "
                 f"in the {region.width}x{region.height} search area. Crop a smaller "
-                "template, enlarge search_region, or drop that rotation.",
+                f"template, enlarge search_region, or drop that rotation{scale_hint}.",
             )
     std = float(np.std(template_gray))
     if not np.isfinite(std) or std < settings.min_template_stddev:
         raise DetectionError(
             "template_blank",
-            f"Template is blank or near-uniform (grayscale std {std:.2f} < "
+            f"{what} is blank or near-uniform (grayscale std {std:.2f} < "
             f"{settings.min_template_stddev}). Select a region containing the symbol's "
-            "line work.",
+            f"line work{scale_hint}.",
         )
+
+
+def _scale_template(template_gray: np.ndarray, scale: float) -> np.ndarray:
+    """Resize the template by ``scale`` (each side rounded, at least 1 px).
+    Area averaging when shrinking avoids aliasing thin line work; bilinear
+    when enlarging. The page is never resized, so match coordinates stay in
+    canonical page space."""
+    if scale == 1.0:
+        return template_gray
+    th, tw = template_gray.shape
+    size = (max(1, int(round(tw * scale))), max(1, int(round(th * scale))))
+    interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    return np.ascontiguousarray(cv2.resize(template_gray, size, interpolation=interpolation))
+
+
+def _distinct_scaled_templates(
+    template_gray: np.ndarray, scales, warnings: List[str]
+) -> List[Tuple[float, np.ndarray]]:
+    """Scaled templates in ascending scale order, one per distinct pixel size.
+    Scales that round to the same size would repeat a pass and tie on score;
+    of those, the one closest to 1.0 is kept."""
+    by_size = {}
+    for scale in sorted((float(s) for s in scales), key=lambda s: (abs(np.log(s)), s)):
+        scaled = _scale_template(template_gray, scale)
+        by_size.setdefault(scaled.shape, (scale, scaled))
+    kept = sorted(by_size.values(), key=lambda item: item[0])
+    if len(kept) < len(scales):
+        dropped = sorted(set(float(s) for s in scales) - {s for s, _ in kept})
+        warnings.append(
+            "Scales " + ", ".join(f"{s:g}" for s in dropped) + " give the same template "
+            "size as a scale closer to 1 and were not searched separately."
+        )
+    return kept
+
+
+def _pass_label(scale: float, rotation: int) -> str:
+    return f"rotation {rotation}" if scale == 1.0 else f"scale {scale:g} rotation {rotation}"
 
 
 def _to_gray(image: np.ndarray) -> np.ndarray:

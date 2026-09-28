@@ -29,6 +29,16 @@ ALLOWED_ROTATIONS: Tuple[int, ...] = (0, 90, 180, 270)
 #: calibrated operating point.
 DEFAULT_SCORE_THRESHOLD = 0.80
 
+#: Bounds on a template scale factor (see ``ScanSettings.scales``).
+MIN_SCALE = 0.25
+MAX_SCALE = 4.0
+
+#: Default ratio between neighbouring scales in :func:`scale_range`. On
+#: synthetic line-art symbols a 5% size mismatch still scores above the
+#: default threshold while 10% does not, so neighbouring steps of about 4%
+#: keep every size within ~2% of a searched scale.
+DEFAULT_SCALE_STEP = 1.04
+
 
 class DetectionError(ValueError):
     """Invalid input or an unusable result. ``code`` is a stable identifier;
@@ -135,6 +145,10 @@ class ScanSettings:
     #: normalized cross-correlation in [-1, 1]; it is *not* a probability.
     threshold: float = DEFAULT_SCORE_THRESHOLD
     rotations: Tuple[int, ...] = ALLOWED_ROTATIONS
+    #: Template scale factors to search: 1.0 is the template as cropped, 1.1
+    #: finds symbols drawn 10% larger. Each scale costs a full pass per
+    #: rotation. Build a range with :func:`scale_range`.
+    scales: Tuple[float, ...] = (1.0,)
     #: Restrict the search to this page-space region; results stay in page
     #: coordinates. ``None`` searches the whole page.
     search_region: Optional[BoundingBox] = None
@@ -149,6 +163,7 @@ class ScanSettings:
 
     # Resource bounds.
     max_candidates: int = 500
+    #: Applies to each (scale, rotation) pass separately.
     max_candidates_per_rotation: int = 2000
     max_page_pixels: int = 60_000_000
     min_template_side: int = 8
@@ -175,6 +190,13 @@ class ScanSettings:
                 )
         if len(set(self.rotations)) != len(self.rotations):
             fail(f"rotations contains duplicates: {tuple(self.rotations)}.")
+        if not isinstance(self.scales, (tuple, list)) or not self.scales:
+            fail("scales must be a non-empty sequence of template scale factors.")
+        for s in self.scales:
+            if not _finite_number(s) or not (MIN_SCALE <= s <= MAX_SCALE):
+                fail(f"Unsupported scale {s!r}. Scales must be numbers in [{MIN_SCALE}, {MAX_SCALE}].")
+        if len(set(float(s) for s in self.scales)) != len(self.scales):
+            fail(f"scales contains duplicates: {tuple(self.scales)}.")
         if self.search_region is not None and not isinstance(self.search_region, BoundingBox):
             fail("search_region must be a BoundingBox or None.")
         if not _finite_number(self.nms_iou_threshold) or not (0.0 <= self.nms_iou_threshold < 1.0):
@@ -212,6 +234,8 @@ class Candidate:
     score: float
     box: BoundingBox
     rotation: int
+    #: Template scale factor that produced the match (1.0 = as cropped).
+    scale: float = 1.0
 
     @property
     def center(self) -> Tuple[float, float]:
@@ -224,6 +248,7 @@ class Candidate:
             "box": self.box.to_dict(),
             "center": {"x": cx, "y": cy},
             "rotation": self.rotation,
+            "scale": self.scale,
         }
 
 
@@ -238,6 +263,7 @@ class DetectionResult:
     truncated: bool = False
     elapsed_seconds: float = 0.0
     warnings: Tuple[str, ...] = field(default_factory=tuple)
+    scales_searched: Tuple[float, ...] = (1.0,)
 
     def to_dict(self) -> dict:
         return {
@@ -245,10 +271,42 @@ class DetectionResult:
             "detector": self.detector,
             "threshold": self.threshold,
             "rotations_searched": list(self.rotations_searched),
+            "scales_searched": list(self.scales_searched),
             "truncated": self.truncated,
             "elapsed_seconds": self.elapsed_seconds,
             "warnings": list(self.warnings),
         }
+
+
+def scale_range(
+    low: float, high: float, step: float = DEFAULT_SCALE_STEP
+) -> Tuple[float, ...]:
+    """Geometric scale factors from ``low`` to ``high`` inclusive, always
+    containing 1.0 when it is in range. Each side of 1.0 is split into equal
+    ratios no larger than ``step`` (1.04 = at most 4% apart). Values are
+    rounded to 4 decimals."""
+    for name, value in (("low", low), ("high", high), ("step", step)):
+        if not _finite_number(value):
+            raise DetectionError("invalid_settings", f"scale_range {name} must be a finite number.")
+    if not (MIN_SCALE <= low <= high <= MAX_SCALE):
+        raise DetectionError(
+            "invalid_settings",
+            f"scale_range needs {MIN_SCALE} <= low <= high <= {MAX_SCALE}, got {low}, {high}.",
+        )
+    if not (1.001 <= step <= 2.0):
+        raise DetectionError("invalid_settings", f"scale_range step must be in [1.001, 2], got {step}.")
+
+    def spaced(a: float, b: float) -> list:
+        # Equal ratios from a to b (a <= b), each at most `step`.
+        n = max(1, math.ceil(math.log(b / a) / math.log(step) - 1e-9))
+        return [a * (b / a) ** (i / n) for i in range(n + 1)]
+
+    if high <= 1.0 or low >= 1.0:
+        points = spaced(low, high) if low < high else [low]
+    else:
+        # Anchor at 1.0 so the template's own size is always searched exactly.
+        points = spaced(low, 1.0) + spaced(1.0, high)
+    return tuple(sorted({round(float(v), 4) for v in points}))
 
 
 def _finite_number(value: object) -> bool:
