@@ -1,0 +1,137 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Ec2InUsEast1",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:Describe*",
+        "ec2:RunInstances",
+        "ec2:CreateTags",
+        "ec2:CreateSecurityGroup",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:AllocateAddress",
+        "ec2:AssociateAddress",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:RebootInstances"
+      ],
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }
+    },
+    {
+      "Sid": "UbuntuAmiLookup",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:us-east-1::parameter/aws/service/canonical/*"
+    },
+    {
+      "Sid": "RunSetupOnTheServer",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:SendCommand",
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations",
+        "ssm:ListCommands",
+        "ssm:DescribeInstanceInformation",
+        "ssm:CancelCommand"
+      ],
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }
+    },
+    {
+      "Sid": "PinnyRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:GetRole",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:AttachRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:PassRole",
+        "iam:TagRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::ACCOUNT_ID:role/pinny-*",
+        "arn:aws:iam::ACCOUNT_ID:role/AWSDataLifecycleManagerDefaultRole"
+      ]
+    },
+    {
+      "Sid": "PinnyInstanceProfile",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateInstanceProfile",
+        "iam:GetInstanceProfile",
+        "iam:AddRoleToInstanceProfile"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:instance-profile/pinny-*"
+    },
+    {
+      "Sid": "BackupBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:ListBucket",
+        "s3:GetBucket*",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration",
+        "s3:GetEncryptionConfiguration",
+        "s3:PutBucketPolicy",
+        "s3:PutLifecycleConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:PutBucketOwnershipControls",
+        "s3:PutBucketTagging"
+      ],
+      "Resource": "arn:aws:s3:::pinny-backups-ACCOUNT_ID"
+    },
+    {
+      "Sid": "CheckBackupsArrive",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::pinny-backups-ACCOUNT_ID/*"
+    },
+    {
+      "Sid": "AlertTopic",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:GetTopicAttributes",
+        "sns:Subscribe",
+        "sns:ListSubscriptionsByTopic",
+        "sns:Publish"
+      ],
+      "Resource": "arn:aws:sns:us-east-1:ACCOUNT_ID:pinny-alerts"
+    },
+    {
+      "Sid": "StartStopSchedules",
+      "Effect": "Allow",
+      "Action": [
+        "scheduler:CreateSchedule",
+        "scheduler:GetSchedule",
+        "scheduler:UpdateSchedule",
+        "scheduler:ListSchedules"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "WeeklySnapshots",
+      "Effect": "Allow",
+      "Action": [
+        "dlm:CreateLifecyclePolicy",
+        "dlm:GetLifecyclePolicies",
+        "dlm:GetLifecyclePolicy",
+        "dlm:TagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "WhoAmI",
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    }
+  ]
+}
