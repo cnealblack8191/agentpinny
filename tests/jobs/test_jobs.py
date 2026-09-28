@@ -241,3 +241,23 @@ def test_prune_removes_old_finished_jobs(q):
     assert q.get(live).status == "queued"
     with pytest.raises(KeyError):
         q.get(old)
+
+
+def test_queue_files_are_group_writable(tmp_path):
+    """Web and workers share the queue through a group (docs/deployment.md)."""
+    import os
+    import stat
+    old = os.umask(0o007)
+    try:
+        q = JobQueue(tmp_path)
+        q.submit("selftest", {"action": "ok"})
+    finally:
+        os.umask(old)
+    for suffix in ("", "-wal", "-shm"):
+        f = tmp_path / ("jobs.sqlite3" + suffix)
+        if f.exists():
+            assert stat.S_IMODE(f.stat().st_mode) & 0o060 == 0o060, (f, oct(f.stat().st_mode))
+    # An old 0640 queue is repaired by its owner.
+    os.chmod(tmp_path / "jobs.sqlite3", 0o640)
+    JobQueue(tmp_path)
+    assert stat.S_IMODE((tmp_path / "jobs.sqlite3").stat().st_mode) & 0o060 == 0o060

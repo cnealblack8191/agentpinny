@@ -131,7 +131,28 @@ class JobQueue:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._clock = clock
+        self._share_files()
         self._migrate()
+
+    def _share_files(self) -> None:
+        """The web process and the workers run as different users sharing a
+        group (docs/deployment.md), so the queue must be group-writable.
+        SQLite creates databases 0644 (0640 under umask 0007) and gives the
+        -wal and -shm files the database's mode, so create the database
+        0660 ourselves, and repair files we own that an older release made."""
+        try:
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o660)
+            os.close(fd)
+        except FileExistsError:
+            pass
+        for suffix in ("", "-wal", "-shm"):
+            f = Path(str(self.path) + suffix)
+            try:
+                st = f.stat()
+                if st.st_uid == os.getuid() and not st.st_mode & 0o020:
+                    os.chmod(f, (st.st_mode & 0o777) | 0o060)
+            except OSError:
+                pass
 
     def _db(self) -> sqlite3.Connection:
         db = getattr(self._local, "db", None)
