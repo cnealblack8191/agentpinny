@@ -94,13 +94,12 @@ the week, a Savings Plan or reserved instance does not pay off.
 
 ## 2. AWS setup (once)
 
-Pick one region for everything (for example `us-east-1`) and use it in
-every step. Replace these placeholders wherever they appear, in the
-commands below and in the files in `deploy/aws/`:
+Everything runs in **`us-east-1`** (N. Virginia); the commands and the
+files in `deploy/aws/` already say so. Replace these placeholders
+wherever they appear:
 
 | Placeholder | Example | Where you find it |
 |---|---|---|
-| `REGION` | `us-east-1` | your choice |
 | `ACCOUNT_ID` | `123456789012` | console, top right menu |
 | `BUCKET_NAME` | `pinny-backups-123456789012` | step 2.1 (bucket names are global, so add your account id) |
 | `INSTANCE_ID` | `i-0abc...` | step 2.5 |
@@ -128,8 +127,7 @@ Console: S3 → Create bucket.
 CLI (the same):
 
 ```sh
-aws s3api create-bucket --bucket BUCKET_NAME --region REGION \
-  --create-bucket-configuration LocationConstraint=REGION   # leave this line out in us-east-1
+aws s3api create-bucket --bucket BUCKET_NAME --region us-east-1
 aws s3api put-public-access-block --bucket BUCKET_NAME --public-access-block-configuration \
   BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 aws s3api put-bucket-versioning --bucket BUCKET_NAME --versioning-configuration Status=Enabled
@@ -153,9 +151,9 @@ not delivered until you do). Add more subscriptions for anyone else who
 should get alerts.
 
 ```sh
-aws sns create-topic --name pinny-alerts --region REGION
-aws sns subscribe --topic-arn arn:aws:sns:REGION:ACCOUNT_ID:pinny-alerts \
-  --protocol email --notification-endpoint YOUR_EMAIL --region REGION
+aws sns create-topic --name pinny-alerts --region us-east-1
+aws sns subscribe --topic-arn arn:aws:sns:us-east-1:ACCOUNT_ID:pinny-alerts \
+  --protocol email --notification-endpoint YOUR_EMAIL --region us-east-1
 ```
 
 ### 2.3 Instance role (IAM)
@@ -218,8 +216,8 @@ Console: EC2 → Elastic IPs → Allocate → then Actions → Associate → the
 starts, so DNS keeps working while it is off.
 
 ```sh
-aws ec2 allocate-address --domain vpc --region REGION              # note AllocationId and PublicIp
-aws ec2 associate-address --allocation-id eipalloc-... --instance-id INSTANCE_ID --region REGION
+aws ec2 allocate-address --domain vpc --region us-east-1              # note AllocationId and PublicIp
+aws ec2 associate-address --allocation-id eipalloc-... --instance-id INSTANCE_ID --region us-east-1
 ```
 
 ### 2.7 DNS
@@ -232,12 +230,24 @@ Create two **A records** pointing at the Elastic IP, with a short TTL
 | `pinny.ecinc.us` | A | the Elastic IP |
 | `staging.pinny.ecinc.us` | A | the Elastic IP |
 
-At any DNS provider (the one that hosts `ecinc.us`): add the two records
-in its DNS settings. If `ecinc.us` is on **Route 53**: Route 53 → Hosted
-zones → `ecinc.us` → Create record → name `pinny`, type A, value the
-Elastic IP; again with name `staging.pinny`. Check from your computer:
-`nslookup pinny.ecinc.us` must answer the Elastic IP. Caddy can only get
-certificates once both names resolve.
+`ecinc.us` is on **Bluehost**. Sign in at bluehost.com → **Domains** →
+`ecinc.us` → **Manage** (or the gear) → **DNS** tab → **DNS Records** →
+**Add Record**:
+
+1. Type **A**, Host Record **`pinny`**, Points To the Elastic IP, TTL
+   the shortest offered (for example 1 hour). Save.
+2. Again with Host Record **`staging.pinny`**.
+
+Leave every other record alone. In particular the MX and other email
+records stay as they are, so company email is not affected. If the DNS
+page lists a **CAA** record, it must allow `letsencrypt.org` (most
+domains have none, which is fine). If Bluehost says the domain uses
+other nameservers, add the records wherever those nameservers are
+managed instead.
+
+Check from your computer after a few minutes: `nslookup pinny.ecinc.us`
+and `nslookup staging.pinny.ecinc.us` must both answer the Elastic IP.
+Caddy can only get certificates once both names resolve.
 
 ### 2.8 Weekly disk snapshots (Data Lifecycle Manager)
 
@@ -253,8 +263,8 @@ policy → target resource type Volume, target tag `pinny-snapshots` =
 `cron(30 21 ? * FRI *)`, retention **count 4** → Create.
 
 ```sh
-aws dlm create-default-role --resource-type snapshot --region REGION
-aws dlm create-lifecycle-policy --region REGION --state ENABLED \
+aws dlm create-default-role --resource-type snapshot --region us-east-1
+aws dlm create-lifecycle-policy --region us-east-1 --state ENABLED \
   --description "Pinny weekly snapshots" \
   --execution-role-arn arn:aws:iam::ACCOUNT_ID:role/AWSDataLifecycleManagerDefaultRole \
   --policy-details file://deploy/aws/dlm-weekly-snapshots.json
@@ -272,7 +282,7 @@ Console:
 1. IAM → Roles → Create role → Custom trust policy → paste
    `deploy/aws/scheduler-role-trust.json` (with `ACCOUNT_ID`). Name it
    `pinny-scheduler`. Add an inline policy from
-   `deploy/aws/scheduler-role-policy.json` (with `REGION`, `ACCOUNT_ID`,
+   `deploy/aws/scheduler-role-policy.json` (with `ACCOUNT_ID`,
    `INSTANCE_ID`).
 2. Amazon EventBridge → Scheduler → Schedules → Create schedule:
    name `pinny-start-weekdays`; recurring, cron-based,
@@ -283,15 +293,15 @@ Console:
 3. The same again: `pinny-stop-weekdays`, `0 19 ? * MON-FRI *`,
    America/New_York, target EC2 **StopInstances**, same input and role.
 
-CLI (edit `ACCOUNT_ID`, `REGION` and `INSTANCE_ID` in the four files first):
+CLI (edit `ACCOUNT_ID` and `INSTANCE_ID` in the four files first):
 
 ```sh
 aws iam create-role --role-name pinny-scheduler \
   --assume-role-policy-document file://deploy/aws/scheduler-role-trust.json
 aws iam put-role-policy --role-name pinny-scheduler --policy-name start-stop-pinny \
   --policy-document file://deploy/aws/scheduler-role-policy.json
-aws scheduler create-schedule --region REGION --cli-input-json file://deploy/aws/scheduler-start.json
-aws scheduler create-schedule --region REGION --cli-input-json file://deploy/aws/scheduler-stop.json
+aws scheduler create-schedule --region us-east-1 --cli-input-json file://deploy/aws/scheduler-start.json
+aws scheduler create-schedule --region us-east-1 --cli-input-json file://deploy/aws/scheduler-stop.json
 ```
 
 Check: EventBridge → Scheduler shows both schedules with their next run
@@ -306,7 +316,7 @@ shell as `ssm-user`, who can use `sudo`. (Ubuntu 24.04 images come with the
 SSM agent; the `AmazonSSMManagedInstanceCore` policy from step 2.3 lets it
 register. If "Connect" is greyed out, wait five minutes after the first
 boot.) From a terminal with the AWS CLI and the Session Manager plugin:
-`aws ssm start-session --target INSTANCE_ID --region REGION`.
+`aws ssm start-session --target INSTANCE_ID --region us-east-1`.
 
 **Alternative: SSH**, only with the temporary port 22 rule from step 2.4
 and a key pair chosen at launch: `ssh -i key.pem ubuntu@<Elastic IP>`.
@@ -323,8 +333,10 @@ sudo git clone https://github.com/cnealblack8191/agentpinny.git /usr/local/src/a
 sudo git -C /usr/local/src/agentpinny checkout training-site
 ```
 
-If the repository is private, give the server a read-only deploy key
-instead:
+The repository is currently **public**, so the server clones it over
+HTTPS with no key. (Drawings, databases and settings are never in the
+repository, only code.) If you make it private later, give the server a
+read-only deploy key instead:
 
 ```sh
 sudo ssh-keygen -t ed25519 -N "" -C pinny-server -f /root/.ssh/pinny_deploy
@@ -631,13 +643,13 @@ expire, during the hours the server runs.
 EC2 → Instances → `pinny` → Instance state → **Start**; or
 
 ```sh
-aws ec2 start-instances --instance-ids INSTANCE_ID --region REGION
+aws ec2 start-instances --instance-ids INSTANCE_ID --region us-east-1
 ```
 
 It is ready about two minutes later. The 19:00 schedule stops it again on
 weekdays; at a weekend, stop it yourself when done (Instance state →
 **Stop**, or `aws ec2 stop-instances --instance-ids INSTANCE_ID --region
-REGION`). A missed backup runs a few minutes after a start.
+us-east-1`). A missed backup runs a few minutes after a start.
 
 **What a stop does to Pinny.** The web process shuts down cleanly. Each
 worker stops its running job and hands it back: an upload, page or scan
@@ -727,7 +739,8 @@ Before you invite anyone (plan Step 9):
 
 ## 18. Decisions still open
 
-* **DNS provider** for `ecinc.us`: add the two A records there (step 2.7).
 * **Alert email address(es)** for the SNS subscription (step 2.2).
-* **Region**, bucket name and whether the repository stays private (deploy
-  key, step 4.1).
+* **Bucket name** (step 2.1).
+* Whether the repository stays public (step 4.1).
+
+Settled: DNS at Bluehost (step 2.7), region `us-east-1`.

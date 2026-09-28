@@ -27,7 +27,7 @@
       "Sid": "SendPinnyAlerts",
       "Effect": "Allow",
       "Action": "sns:Publish",
-      "Resource": "arn:aws:sns:REGION:ACCOUNT_ID:pinny-alerts"
+      "Resource": "arn:aws:sns:us-east-1:ACCOUNT_ID:pinny-alerts"
     }
   ]
 }
