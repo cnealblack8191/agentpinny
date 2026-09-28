@@ -137,7 +137,7 @@ class Settings:
         """Development has no sign-in, so it may only listen on loopback."""
         if not self.production and not is_loopback(host):
             raise ConfigError(f"Development mode has no sign-in and may only listen on 127.0.0.1, "
-                              f"not {host!r}. Set PINNY_ENV=production behind Cloudflare Access.")
+                              f"not {host!r}. Set PINNY_ENV=production behind the sign-in gate.")
 
 
 def _os_user() -> str:
