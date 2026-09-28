@@ -150,7 +150,8 @@ def upload(base, who=ADMIN, pdf=None, name="plan.pdf"):
 
 def _fill(path):
     return (path.replace("{v}", "sha256:" + "0" * 64).replace("{i:int}", "0")
-            .replace("{s}", str(uuid.uuid4())).replace("{b}", str(uuid.uuid4())))
+            .replace("{s}", str(uuid.uuid4())).replace("{b}", str(uuid.uuid4()))
+            .replace("{j}", str(uuid.uuid4())))
 
 
 def test_authorization_matrix(site):
