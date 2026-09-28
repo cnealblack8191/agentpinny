@@ -282,6 +282,33 @@ class JobQueue:
                         (log_tail or "")[-4000:], self._clock(), status, job_id))
 
     # ---------------------------------------------------- cancel and recover
+    INTERRUPTED_MESSAGE = ("The job was interrupted because the server stopped (for example the nightly "
+                           "shutdown); start it again.")
+
+    def interrupt(self, job_id: str, worker_id: str) -> str:
+        """The worker is shutting down and stopped this job: requeue it if it
+        has attempts left, else fail it as ``interrupted``. A job whose
+        cancel was requested is cancelled. Returns the new status."""
+        with self._tx() as db:
+            r = db.execute("SELECT status, worker_id, attempts, max_attempts, cancel_requested FROM jobs"
+                           " WHERE job_id=?", (job_id,)).fetchone()
+            if r is None or r["status"] != RUNNING or r["worker_id"] != worker_id:
+                return r["status"] if r is not None else ""
+            now = self._clock()
+            if r["cancel_requested"]:
+                db.execute("UPDATE jobs SET status='cancelled', error_code='cancelled',"
+                           " error_message='The job was cancelled.', error_status=409, finished_at=?"
+                           " WHERE job_id=?", (now, job_id))
+                return CANCELLED
+            if r["attempts"] < r["max_attempts"]:
+                db.execute("UPDATE jobs SET status='queued', worker_id=NULL, started_at=NULL,"
+                           " heartbeat_at=NULL WHERE job_id=?", (job_id,))
+                return QUEUED
+            db.execute("UPDATE jobs SET status='failed', error_code='interrupted', error_message=?,"
+                       " error_status=503, finished_at=? WHERE job_id=?",
+                       (self.INTERRUPTED_MESSAGE, now, job_id))
+            return FAILED
+
     def cancel(self, job_id: str) -> Job:
         """Queued: cancelled now. Running: the worker kills it at its next
         heartbeat. Finished: unchanged."""
@@ -310,7 +337,8 @@ class JobQueue:
                     out["requeued"] += 1
                 else:
                     db.execute("UPDATE jobs SET status='failed', error_code='worker_lost',"
-                               " error_message='The job stopped unexpectedly; try again.', finished_at=?"
+                               " error_message='The job stopped unexpectedly, for example because the"
+                               " server restarted; try again.', finished_at=?"
                                " WHERE job_id=?", (self._clock(), r["job_id"]))
                     out["failed"] += 1
         return out

@@ -77,6 +77,10 @@ class TrainingService:
         if viewer.jobs is None and jobs is None:
             from pinny.jobs.inprocess import InProcessRunner
             self._runner = InProcessRunner(self.jobs, "train", self.data_dir)
+            # Jobs a stopped development server left behind: the runner
+            # recovers stale ones and runs what is queued.
+            if self.jobs.list("queued", 1, pool="train") or self.jobs.list("running", 1, pool="train"):
+                self._runner.start()
         self._lock = threading.Lock()
 
     def close(self) -> None:

@@ -27,6 +27,7 @@ from .queue import Job, JobQueue
 _log = logging.getLogger("pinny.jobs")
 
 TICK_S = 0.5
+RECOVER_EVERY_S = 10.0
 
 
 class InProcessRunner:
@@ -59,12 +60,16 @@ class InProcessRunner:
             self._thread.join(timeout)
 
     def _serve(self) -> None:
-        # Our own jobs from before a restart can only be ours: requeue them.
-        try:
-            self.queue.recover()
-        except Exception:  # noqa: BLE001
-            _log.exception("job recovery failed")
+        last_recover = 0.0
         while not self._stop.is_set():
+            # A job left running by a stopped server has a stale heartbeat:
+            # requeue it, or fail it (training jobs) with a clear reason.
+            if time.monotonic() - last_recover > RECOVER_EVERY_S:
+                try:
+                    self.queue.recover()
+                except Exception:  # noqa: BLE001
+                    _log.exception("job recovery failed")
+                last_recover = time.monotonic()
             try:
                 job = self.queue.claim(self.pool, self.worker_id)
             except Exception:  # noqa: BLE001

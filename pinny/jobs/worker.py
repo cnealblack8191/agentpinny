@@ -63,10 +63,13 @@ class Worker:
         self.python = python
         self.worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}:{pool}:{uuid.uuid4().hex[:6]}"
         self.child: Optional[subprocess.Popen] = None
+        self.stopping = False  # set by interrupt(): the service is shutting down
 
     # ------------------------------------------------------------------ run
     def run_once(self) -> bool:
         """Claim and run one job. False when the pool is empty."""
+        if self.stopping:
+            return False
         job = self.queue.claim(self.pool, self.worker_id)
         if job is None:
             return False
@@ -110,6 +113,12 @@ class Worker:
         self.child = None
         self._sync_progress(job)
         log_tail = err.decode("utf-8", "replace")[-4000:]
+        if self.stopping and _last_json(out) is None:
+            # Killed because the worker is stopping (a restart, the nightly
+            # shutdown): not the job's fault. Requeue it, or fail it clearly.
+            status = self.queue.interrupt(job.job_id, self.worker_id)
+            _log.warning("job %s (%s) interrupted by shutdown: now %s", job.job_id, job.kind, status)
+            return
         if stop_reason == "timeout":
             self.queue.fail(job.job_id, self.worker_id, "timeout",
                             f"The job took longer than {lim.wall_s} s and was stopped.", 504, log_tail)
@@ -182,6 +191,11 @@ class Worker:
         if self.child is not None:
             self._kill(self.child)
 
+    def interrupt(self) -> None:
+        """Shutting down: stop the running job and hand it back (``JobQueue.interrupt``)."""
+        self.stopping = True
+        self.kill_child()
+
 
 def _last_json(out: bytes) -> Optional[dict]:
     for line in reversed(out.decode("utf-8", "replace").strip().splitlines()):
@@ -217,7 +231,7 @@ class WorkerPool:
     def stop(self, timeout: float = 10) -> None:
         self.stop_event.set()
         for w in self.workers:
-            w.kill_child()  # a killed job is recovered by the next worker
+            w.interrupt()  # its job is requeued, or failed as interrupted
         for t in self.threads:
             t.join(timeout)
 

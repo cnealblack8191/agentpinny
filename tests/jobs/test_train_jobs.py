@@ -10,7 +10,7 @@ import time
 import pytest
 
 from pinny.jobs import JobQueue, limits
-from pinny.jobs.worker import POOL_NAMES, Worker, child_env, main as worker_main
+from pinny.jobs.worker import POOL_NAMES, Worker, WorkerPool, child_env, main as worker_main
 
 HAS_TORCH = importlib.util.find_spec("torch") is not None
 
@@ -60,3 +60,55 @@ def test_training_in_a_child_reports_progress_and_can_be_cancelled(tmp_path):
     j = q.get(job_id)
     assert j.status == "cancelled"
     assert not (tmp_path / "models").exists() or not any((tmp_path / "models").iterdir())
+
+
+# ------------------------------------------------ shutdown and restart
+def test_a_stopping_worker_hands_its_job_back(tmp_path):
+    """Nightly shutdown: a worker that stops mid-job requeues a job with
+    attempts left (here an interactive one) instead of blaming the job."""
+    q = JobQueue(tmp_path)
+    pool = WorkerPool(q, tmp_path, sizes={"interactive": 1}).start()
+    job_id = q.submit("selftest", {"action": "sleep", "seconds": 60})
+    deadline = time.time() + 20
+    while time.time() < deadline and q.get(job_id).status != "running":
+        time.sleep(0.05)
+    time.sleep(0.5)  # the child is inside its task
+    pool.stop()
+    j = q.get(job_id)
+    assert (j.status, j.error_code, j.worker_id) == ("queued", None, None)
+
+
+def test_interrupted_and_lost_training_jobs_fail_with_a_clear_reason(tmp_path):
+    q = JobQueue(tmp_path)
+    a = q.submit("train_verifier", {"dataset_id": "a" * 64})
+    q.claim("train", "w")
+    assert q.interrupt(a, "w") == "failed"  # one attempt: never silently rerun a long job
+    j = q.get(a)
+    assert j.error_code == "interrupted" and "server stopped" in j.error_message and j.finished
+    assert q.interrupt(a, "w") == "failed"  # no longer running: unchanged
+    b = q.submit("benchmark", {})
+    q.claim("train", "w")
+    q.cancel(b)
+    assert q.interrupt(b, "w") == "cancelled"
+    # A worker that died without stopping (power off, kill -9): the next
+    # worker's recovery fails the job instead of leaving it running.
+    c = q.submit("train_detector", {"dataset_id": "a" * 64})
+    q.claim("train", "gone")
+    assert q.recover(stale_after=0) == {"requeued": 0, "failed": 1}
+    j = q.get(c)
+    assert j.status == "failed" and j.error_code == "worker_lost" and "restarted" in j.error_message
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch is not installed")
+def test_stopping_the_train_worker_fails_its_run_as_interrupted(tmp_path):
+    from pinny.training.synthetic import synthesize_dataset
+    res = synthesize_dataset(tmp_path / "datasets", documents=6, pages_per_document=2, seed=0)
+    q = JobQueue(tmp_path)
+    pool = WorkerPool(q, tmp_path, sizes={"train": 1}).start()
+    job_id = q.submit("train_verifier", {"dataset_id": res.dataset_id, "epochs": 200})
+    deadline = time.time() + 120
+    while time.time() < deadline and "epoch 1:" not in (q.get(job_id).progress_log or ""):
+        time.sleep(0.2)
+    pool.stop()
+    j = q.get(job_id)
+    assert (j.status, j.error_code) == ("failed", "interrupted"), j
