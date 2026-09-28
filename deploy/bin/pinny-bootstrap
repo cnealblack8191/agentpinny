@@ -230,13 +230,13 @@ CHANGED=no
 install_file "$DEPLOY_DIR/caddy/Caddyfile" /etc/caddy/Caddyfile 0644
 run install -d -o caddy -g caddy -m 0750 /var/log/caddy
 if [ "$DRY" = no ]; then
+  # Repair logs left owned by root by an earlier run.
+  find /var/log/caddy -maxdepth 1 -name 'pinny-*.log*' ! -user caddy -exec chown caddy:caddy {} + 2>/dev/null || true
   # As the caddy user: validating opens the log files, and files it creates
   # as root would lock the real Caddy out of them.
   runuser -u caddy -- env HOME=/var/lib/caddy caddy validate --config /etc/caddy/Caddyfile \
     --adapter caddyfile >/dev/null 2>&1 ||
     die "caddy validate failed: run 'sudo -u caddy caddy validate --config /etc/caddy/Caddyfile' to see why"
-  # Repair logs left owned by root by an earlier run.
-  find /var/log/caddy -maxdepth 1 -name 'pinny-*.log*' ! -user caddy -exec chown caddy:caddy {} + 2>/dev/null || true
 fi
 run systemctl enable --quiet caddy
 if [ "$CHANGED" = yes ]; then run systemctl reload-or-restart caddy; else run systemctl start caddy; fi
