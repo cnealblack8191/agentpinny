@@ -98,7 +98,7 @@ def test_recover_requeues_then_gives_up(q):
 
 # --------------------------------------------------------------- sandbox
 def test_child_runs_a_job_with_a_clean_environment(q, tmp_path, monkeypatch):
-    monkeypatch.setenv("PINNY_CF_AUD", "secret-aud")
+    monkeypatch.setenv("PINNY_ALB_ARN", "secret-arn")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
     job = run(q, tmp_path, {"action": "env"})
     assert job.status == "done", job.log_tail

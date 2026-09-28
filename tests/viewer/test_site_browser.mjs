@@ -3,8 +3,8 @@
 //   node tests/viewer/test_site_browser.mjs
 //
 // Runs the real server in production mode with a throwaway signing key in
-// place of Cloudflare's, and gives each browser context its own
-// Cf-Access-Jwt-Assertion header, as Cloudflare Access would. Checks: the
+// place of the AWS load balancer's, and gives each browser context its own
+// x-amzn-oidc-data header, as the ALB does after Cognito sign-in. Checks: the
 // user bar and sign-out link, the admin-only Members panel, reviewers
 // cannot delete someone else's drawing but can delete their own, a
 // non-member is turned away, the page runs under the CSP, and unsaved
@@ -44,13 +44,13 @@ const work = mkdtempSync(join(tmpdir(), 'pinny-site-'));
 // Serve in production mode; print the base URL and a token per user.
 function startServer() {
   const code = `
-import json, socket, sys, time, jwt
+import json, socket, sys
 sys.path.insert(0, 'tests/viewer')
 from pathlib import Path
-from cryptography.hazmat.primitives.asymmetric import rsa
 from pdfgen import make_pdf
 from pinny.viewer import ViewerService
-from pinny.viewer.auth import Authenticator, CloudflareAccessVerifier
+from pinny.viewer.auth import Authenticator
+from tests.viewer.test_alb_gate import ARN, ISS, alb_token, verifier
 from pinny.viewer.server import Site, SiteServer
 from pinny.viewer.settings import Settings
 from pinny.viewer.sitedb import SiteDB
@@ -59,18 +59,15 @@ open(Path(${JSON.stringify(work)}) / "a.pdf", "wb").write(make_pdf(tag="a"))
 open(Path(${JSON.stringify(work)}) / "b.pdf", "wb").write(make_pdf(tag="b"))
 s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
 origin = "http://127.0.0.1:%d" % port
-settings = Settings(env="production", data_dir=data, origin=origin, cf_team_domain="t.cloudflareaccess.com",
-                    cf_aud="aud", admin_emails=(${JSON.stringify(ADMIN)},), version="e2e")
-key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-ver = CloudflareAccessVerifier("t.cloudflareaccess.com", "aud", key_for=lambda kid: key.public_key())
+settings = Settings(env="production", data_dir=data, origin=origin, alb_arn=ARN, oidc_issuer=ISS,
+                    admin_emails=(${JSON.stringify(ADMIN)},), version="e2e")
+ver = verifier()
 svc = ViewerService(data)
 db = SiteDB(data); db.ensure_admins(settings.admin_emails)
 site = Site(svc, settings, Authenticator(settings, db, ver))
 site.sitedb.put_member(${JSON.stringify(REVIEWER)}, "reviewer", actor="setup")
 def tok(email):
-    now = int(time.time())
-    return jwt.encode({"email": email, "aud": ["aud"], "iss": "https://t.cloudflareaccess.com",
-                       "iat": now, "exp": now + 3600}, key, algorithm="RS256", headers={"kid": "k"})
+    return alb_token(email, exp_in=3600)
 httpd = SiteServer(site, "127.0.0.1", port)
 print(json.dumps({"base": origin, "tokens": {e: tok(e) for e in (${JSON.stringify(ADMIN)},
       ${JSON.stringify(REVIEWER)}, ${JSON.stringify(OUTSIDER)})}}), flush=True)
@@ -103,7 +100,7 @@ try {
   const cspErrors = [];
   async function open(email) {
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 },
-      extraHTTPHeaders: { 'Cf-Access-Jwt-Assertion': server.tokens[email] } });
+      extraHTTPHeaders: { 'x-amzn-oidc-data': server.tokens[email] } });
     const page = await ctx.newPage();
     page.on('dialog', (d) => d.accept());
     page.on('pageerror', (e) => check(`${email}: no page errors`, false, e.message));
@@ -118,8 +115,8 @@ try {
   await waitFor(page, () => document.getElementById('user-bar').textContent.includes('Signed in'));
   const bar = await page.locator('#user-bar').textContent();
   check('user bar names the admin', bar.includes(ADMIN) && bar.includes('(admin)'), bar);
-  check('sign-out link goes to Cloudflare Access',
-    (await page.locator('#user-bar a').getAttribute('href')) === '/cdn-cgi/access/logout');
+  check('sign-out link ends the load-balancer session',
+    (await page.locator('#user-bar a').getAttribute('href')) === '/logout');
   await waitFor(page, () => document.querySelectorAll('#members-table tbody tr').length === 2);
   check('admin sees the Members panel', await page.locator('#members-section').isVisible());
   await page.locator('#member-email').fill('draftsman@example.com');

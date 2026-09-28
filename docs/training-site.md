@@ -15,9 +15,7 @@ deployment, Step 7 training pages).
 ## 1. Identity and roles (built)
 
 **Sign-in happens at the gate, never in Pinny.** Pinny never sees a
-password. The gate is chosen with `PINNY_GATE`.
-
-**`alb` (the deployment's gate).** An AWS Application Load Balancer at
+password. The gate is AWS: an Application Load Balancer at
 `pinny.ecinc.us` terminates HTTPS (ACM certificate) and runs an
 `authenticate-cognito` rule in front of every path. The Cognito user pool
 is invite-only (admins create users; self sign-up is off) and signs people
@@ -44,13 +42,8 @@ security group**; nothing else can reach Pinny to present a header.
 `GET /logout` expires the ALB session cookies (`AWSELBAuthSessionCookie-0`
 to `-3`) and redirects to the Cognito logout page (`PINNY_SIGN_OUT_URL`).
 
-**`cloudflare` (alternative).** Cloudflare Access adds
-`Cf-Access-Jwt-Assertion` (RS256, key by `kid` from the team JWKS, `aud` =
-`PINNY_CF_AUD`, `iss` = `https://<PINNY_CF_TEAM_DOMAIN>`, `exp`, `email`).
-Sign-out is Cloudflare's `/cdn-cgi/access/logout`.
-
-With either gate, a request with no token, or a token that fails any
-check, gets `401 unauthenticated`. Only the gate's header is read, never a
+A request with no token, or a token that fails any check, gets
+`401 unauthenticated`. Only the load balancer's header is read, never a
 cookie.
 
 **Members.** Passing the gate is not enough. Pinny keeps its own members
@@ -320,12 +313,9 @@ class RenderClient(Protocol):
 | `PINNY_ENV` | `development` (default) | `production` |
 | `PINNY_DATA_DIR` | optional | required |
 | `PINNY_ORIGIN` | derived from the host | required, `https://...` |
-| `PINNY_GATE` | unused | `alb` (default) or `cloudflare` |
-| `PINNY_ALB_ARN` | unused | required with `alb`: the load balancer's ARN |
-| `PINNY_OIDC_ISSUER` | unused | recommended with `alb`: `https://cognito-idp.<region>.amazonaws.com/<pool id>` |
-| `PINNY_SIGN_OUT_URL` | unused | with `alb`: the Cognito `/logout?client_id=...&logout_uri=...` URL |
-| `PINNY_CF_TEAM_DOMAIN` | unused | required with `cloudflare`, e.g. `acme.cloudflareaccess.com` |
-| `PINNY_CF_AUD` | unused | required with `cloudflare` (the Access application's AUD tag) |
+| `PINNY_ALB_ARN` | unused | required: the load balancer's ARN |
+| `PINNY_OIDC_ISSUER` | unused | recommended: `https://cognito-idp.<region>.amazonaws.com/<pool id>` |
+| `PINNY_SIGN_OUT_URL` | unused | the Cognito `/logout?client_id=...&logout_uri=...` URL |
 | `PINNY_ADMIN_EMAILS` | optional | required for first start |
 | `PINNY_VERSION` | from git | required (build-time) |
 | `PINNY_JOBS` | `inprocess` (default) | `sandbox` (default) or `external`; `inprocess` is refused |

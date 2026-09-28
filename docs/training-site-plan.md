@@ -118,6 +118,11 @@ UI escapes server text, and the lock file pins hashes.
 
 ## 4. Target architecture
 
+> **Decision (2026-09-28):** the owner chose AWS services only. The gate is
+> an Application Load Balancer with Amazon Cognito sign-in at
+> `pinny.ecinc.us`; Cloudflare is not used. `docs/training-site.md` is the
+> contract. The options below are kept as the original analysis.
+
 ```
  Internet
     |  HTTPS only

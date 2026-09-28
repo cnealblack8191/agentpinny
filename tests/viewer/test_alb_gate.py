@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 from pinny.viewer import ViewerService
-from pinny.viewer.auth import ALB_HEADER, CF_HEADER, AlbOidcVerifier, Authenticator
+from pinny.viewer.auth import ALB_HEADER, AlbOidcVerifier, Authenticator
 from pinny.viewer.server import Site, SiteServer
 from pinny.viewer.settings import ConfigError, Settings
 from pinny.viewer.sitedb import SiteDB
@@ -118,7 +118,7 @@ def test_alb_settings(tmp_path):
     with pytest.raises(ConfigError, match="https"):
         Settings.from_env(dict(base, PINNY_ALB_ARN=ARN, PINNY_SIGN_OUT_URL="http://x"))
     s = Settings.from_env(dict(base, PINNY_ALB_ARN=ARN, PINNY_OIDC_ISSUER=ISS + "/"))
-    assert (s.gate, s.alb_region, s.oidc_issuer) == ("alb", "us-east-1", ISS)
+    assert (s.alb_region, s.oidc_issuer) == ("us-east-1", ISS)
     a = Authenticator(s, SiteDB(tmp_path))
     assert isinstance(a.verifier, AlbOidcVerifier) and a.sign_out_url == "/logout"
 
@@ -127,7 +127,7 @@ def test_alb_settings(tmp_path):
 def site(tmp_path):
     svc = ViewerService(tmp_path)
     settings = Settings(env="production", data_dir=Path(tmp_path), origin="https://pinny.ecinc.us",
-                        gate="alb", alb_arn=ARN, oidc_issuer=ISS, admin_emails=("charles@ecinc.us",),
+                        alb_arn=ARN, oidc_issuer=ISS, admin_emails=("charles@ecinc.us",),
                         sign_out_url="https://pinny.auth.us-east-1.amazoncognito.com/logout?client_id=c"
                                      "&logout_uri=https://pinny.ecinc.us/", version="t")
     db = SiteDB(tmp_path)
@@ -160,7 +160,7 @@ def test_alb_gate_end_to_end(site):
     assert code == 200 and json.loads(raw)["email"] == "charles@ecinc.us"
     assert json.loads(raw)["sign_out_url"] == "/logout"
     assert _get(base + "/api/me")[0] == 401
-    assert _get(base + "/api/me", {CF_HEADER: alb_token()})[0] == 401  # only the ALB header counts
+    assert _get(base + "/api/me", {"Authorization": f"Bearer {alb_token()}"})[0] == 401  # only the ALB header counts
     assert _get(base + "/api/me", {ALB_HEADER: alb_token(signer=OTHER_ARN)})[0] == 401
     assert _get(base + "/api/me", {ALB_HEADER: alb_token("t.williams@ecinc.us")})[0] == 403  # not yet a member
     code, headers, _ = _get(base + "/logout")

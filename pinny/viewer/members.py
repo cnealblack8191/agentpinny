@@ -5,7 +5,7 @@
     python -m pinny.viewer.members remove EMAIL
 
 Uses ``$PINNY_DATA_DIR`` (or ``--data-dir``). People must also be on the
-Cloudflare Access allow-list to reach the site.
+Cognito user pool (invited there) to sign in at the load balancer.
 """
 
 from __future__ import annotations

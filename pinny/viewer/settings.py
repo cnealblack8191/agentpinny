@@ -25,11 +25,8 @@ JOBS_SANDBOX = "sandbox"  # worker threads in the web process, each job in a san
 JOBS_EXTERNAL = "external"  # separate `python -m pinny.jobs.worker` services
 JOBS_MODES = (JOBS_INPROCESS, JOBS_SANDBOX, JOBS_EXTERNAL)
 
-# Which sign-in gate sits in front of the site (docs/training-site.md section 1).
-GATE_ALB = "alb"  # AWS Application Load Balancer with Amazon Cognito
-GATE_CLOUDFLARE = "cloudflare"  # Cloudflare Tunnel with Cloudflare Access
-GATES = (GATE_ALB, GATE_CLOUDFLARE)
-
+# The sign-in gate is an AWS Application Load Balancer with Amazon Cognito
+# (docs/training-site.md section 1); this is the load balancer's ARN.
 _ALB_ARN_RE = re.compile(r"^arn:aws[a-z-]*:elasticloadbalancing:([a-z0-9-]+):\d{12}:loadbalancer/app/[\w-]+/[0-9a-f]+$")
 
 
@@ -61,9 +58,6 @@ class Settings:
     env: str = DEVELOPMENT
     data_dir: Path = field(default_factory=_store_default_data_dir)
     origin: Optional[str] = None  # https://pinny.example.com; None in development
-    cf_team_domain: Optional[str] = None  # acme.cloudflareaccess.com
-    cf_aud: Optional[str] = None
-    gate: str = GATE_ALB
     alb_arn: Optional[str] = None  # the load balancer that signs x-amzn-oidc-data
     oidc_issuer: Optional[str] = None  # the Cognito user pool, checked when set
     sign_out_url: Optional[str] = None  # Cognito logout URL the ALB gate redirects to
@@ -92,20 +86,12 @@ class Settings:
                                if a.strip()}))
         raw_dir = data_dir if data_dir is not None else e.get("PINNY_DATA_DIR")
         origin = (e.get("PINNY_ORIGIN") or "").strip().rstrip("/") or None
-        team = (e.get("PINNY_CF_TEAM_DOMAIN") or "").strip().lower() or None
-        if team:
-            team = team.removeprefix("https://").rstrip("/")
-        gate = (e.get("PINNY_GATE") or GATE_ALB).strip().lower()
-        if gate not in GATES:
-            raise ConfigError(f"PINNY_GATE must be one of {', '.join(GATES)}, not {gate!r}.")
         jobs = (e.get("PINNY_JOBS") or (JOBS_SANDBOX if env == PRODUCTION else JOBS_INPROCESS)).strip().lower()
         if jobs not in JOBS_MODES:
             raise ConfigError(f"PINNY_JOBS must be one of {', '.join(JOBS_MODES)}, not {jobs!r}.")
         s = cls(env=env,
                 data_dir=Path(raw_dir).resolve() if raw_dir else _store_default_data_dir(),
-                origin=origin, cf_team_domain=team,
-                cf_aud=(e.get("PINNY_CF_AUD") or "").strip() or None,
-                gate=gate, alb_arn=(e.get("PINNY_ALB_ARN") or "").strip() or None,
+                origin=origin, alb_arn=(e.get("PINNY_ALB_ARN") or "").strip() or None,
                 oidc_issuer=(e.get("PINNY_OIDC_ISSUER") or "").strip().rstrip("/") or None,
                 sign_out_url=(e.get("PINNY_SIGN_OUT_URL") or "").strip() or None,
                 admin_emails=admins,
@@ -114,14 +100,12 @@ class Settings:
                 else "",
                 jobs=jobs)
         if s.production:
-            gate_settings = ((("PINNY_ALB_ARN", s.alb_arn),) if gate == GATE_ALB else
-                             (("PINNY_CF_TEAM_DOMAIN", team), ("PINNY_CF_AUD", s.cf_aud)))
             missing = [name for name, val in (
-                ("PINNY_DATA_DIR", raw_dir), ("PINNY_ORIGIN", origin), *gate_settings,
+                ("PINNY_DATA_DIR", raw_dir), ("PINNY_ORIGIN", origin), ("PINNY_ALB_ARN", s.alb_arn),
                 ("PINNY_ADMIN_EMAILS", admins), ("PINNY_VERSION", e.get("PINNY_VERSION"))) if not val]
             if missing:
                 raise ConfigError("Production needs these settings: " + ", ".join(missing) + ".")
-            if gate == GATE_ALB and s.alb_region is None:
+            if s.alb_region is None:
                 raise ConfigError("PINNY_ALB_ARN must be an application load balancer ARN "
                                   "(arn:aws:elasticloadbalancing:<region>:<account>:loadbalancer/app/<name>/<id>).")
             if s.sign_out_url and not s.sign_out_url.startswith("https://"):

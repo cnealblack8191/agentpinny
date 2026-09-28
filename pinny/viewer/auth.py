@@ -1,15 +1,10 @@
 """Who is making a request (docs/training-site.md section 1).
 
-Production: a sign-in gate in front of the site signs in the user and adds
-a signed JWT to every request. We verify it on every request, then look
-the email up in the members table.
-
-* ``alb`` (default): an AWS Application Load Balancer with Amazon Cognito
-  adds ``x-amzn-oidc-data`` (ES256). We check the signature against the
-  region's ALB public key, that the ``signer`` is our load balancer, the
-  expiry, and the issuer when configured.
-* ``cloudflare``: Cloudflare Access adds ``Cf-Access-Jwt-Assertion``
-  (RS256, team JWKS, audience and issuer checked).
+Production: an AWS Application Load Balancer with Amazon Cognito signs the
+user in and adds a signed ``x-amzn-oidc-data`` token (ES256) to every
+request. We verify it on every request (signature against the region's ALB
+public key, ``signer`` pinned to our load balancer, expiry, and the Cognito
+issuer when configured), then look the email up in the members table.
 
 Development: every request is the local user (an admin), and the server
 refuses to listen anywhere but loopback.
@@ -26,17 +21,15 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Dict, Mapping, Optional
 
-import jwt
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 from .errors import ViewerError
-from .settings import GATE_ALB, Settings
+from .settings import Settings
 from .sitedb import ADMIN, REVIEWER, SiteDB
 
-CF_HEADER = "cf-access-jwt-assertion"
 ALB_HEADER = "x-amzn-oidc-data"
 _KID_RE = re.compile(r"^[A-Za-z0-9-]{1,128}$")
 LEEWAY_S = 60
@@ -53,41 +46,6 @@ class Identity:
 
     def allows(self, needed: str) -> bool:
         return ROLE_RANK[self.role] >= ROLE_RANK[needed]
-
-
-class CloudflareAccessVerifier:
-    """Verifies Cloudflare Access JWTs. ``key_for(kid)`` returns the public
-    key for a key id; by default the team's JWKS, fetched and cached (an
-    unknown ``kid`` refetches once). Tests pass their own."""
-
-    header = CF_HEADER
-    sign_out_path = "/cdn-cgi/access/logout"
-
-    def __init__(self, team_domain: str, audience: str,
-                 key_for: Optional[Callable[[str], object]] = None) -> None:
-        self.issuer = f"https://{team_domain}"
-        self.audience = audience
-        if key_for is None:
-            client = jwt.PyJWKClient(f"{self.issuer}/cdn-cgi/access/certs", cache_keys=True,
-                                     lifespan=3600, timeout=10)
-            key_for = lambda kid: client.get_signing_key(kid).key  # noqa: E731
-        self._key_for = key_for
-
-    def email(self, token: str) -> str:
-        try:
-            kid = jwt.get_unverified_header(token).get("kid")
-            if not kid:
-                raise jwt.InvalidTokenError("no kid")
-            claims = jwt.decode(token, self._key_for(kid), algorithms=["RS256"], audience=self.audience,
-                                issuer=self.issuer, leeway=LEEWAY_S,
-                                options={"require": ["exp", "iat", "iss", "aud"]})
-        except (jwt.PyJWTError, KeyError, ValueError) as exc:
-            raise ViewerError("unauthenticated", "Your sign-in could not be verified. Sign in again.",
-                              401) from exc
-        email = claims.get("email")
-        if not isinstance(email, str) or "@" not in email:
-            raise ViewerError("unauthenticated", "Your sign-in has no email address.", 401)
-        return email.strip().lower()
 
 
 class AlbOidcVerifier:
@@ -179,11 +137,8 @@ class Authenticator:
         self.settings = settings
         self.sitedb = sitedb
         if settings.production:
-            if verifier is None and settings.gate == GATE_ALB:
-                verifier = AlbOidcVerifier(settings.alb_arn, settings.alb_region, settings.oidc_issuer)
-            elif verifier is None:
-                verifier = CloudflareAccessVerifier(settings.cf_team_domain, settings.cf_aud)
-            self.verifier = verifier
+            self.verifier = verifier or AlbOidcVerifier(settings.alb_arn, settings.alb_region,
+                                                        settings.oidc_issuer)
         else:
             self.verifier = verifier  # tests may exercise real verification in development
 

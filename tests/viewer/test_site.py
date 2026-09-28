@@ -1,9 +1,10 @@
-"""Training-site web tier (docs/training-site.md): settings, Cloudflare
-Access verification, per-route roles, CSRF, headers, errors, streamed
-uploads, reviewer identity, deletion, members and audit.
+"""Training-site web tier (docs/training-site.md): settings, per-route
+roles, CSRF, headers, errors, streamed uploads, reviewer identity, deletion,
+members and audit.
 
-Tokens are signed with a throwaway RSA key and verified by the real
-``CloudflareAccessVerifier``; only the key lookup is replaced.
+Requests carry load-balancer tokens built the way the AWS ALB builds them
+(``tests/viewer/test_alb_gate.py``) and verified by the real
+``AlbOidcVerifier``; only the public-key lookup is replaced.
 """
 
 from __future__ import annotations
@@ -11,53 +12,41 @@ from __future__ import annotations
 import json
 import sys
 import threading
-import time
 import urllib.request
 import uuid
 from pathlib import Path
 
-import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 sys.path.insert(0, str(Path(__file__).parent))
 from pdfgen import make_pdf  # noqa: E402
 
 from pinny.viewer import ViewerService  # noqa: E402
-from pinny.viewer.auth import PUBLIC, ROLE_RANK, Authenticator, CloudflareAccessVerifier  # noqa: E402
+from pinny.viewer.auth import ALB_HEADER, PUBLIC, ROLE_RANK, Authenticator  # noqa: E402
 from pinny.viewer.server import ROUTES, Site, SiteServer  # noqa: E402
 from pinny.viewer.settings import ConfigError, Settings  # noqa: E402
+from tests.viewer.test_alb_gate import ARN, ISS, alb_token  # noqa: E402
+from tests.viewer.test_alb_gate import verifier as alb_verifier  # noqa: E402
 from tests.viewer.test_viewer_api import _template_for  # noqa: E402
 
-TEAM = "acme.cloudflareaccess.com"
-AUD = "aud-tag-123"
 ORIGIN = "https://pinny.test"
 ADMIN = "boss@example.com"
 REVIEWER = "assistant@example.com"
 DRAFTSMAN = "draftsman@example.com"
 OUTSIDER = "stranger@example.com"
 
-KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-OTHER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
-
-def token(email=ADMIN, *, aud=AUD, iss=f"https://{TEAM}", exp_in=300, key=KEY, kid="k1", **extra):
-    now = int(time.time())
-    claims = {"aud": [aud], "iss": iss, "iat": now, "nbf": now, "exp": now + exp_in, "sub": "x", **extra}
-    if email is not None:
-        claims["email"] = email
-    headers = {"kid": kid} if kid else {}
-    return jwt.encode(claims, key, algorithm="RS256", headers=headers)
+def token(email=ADMIN):
+    return alb_token(email)
 
 
 def verifier():
-    keys = {"k1": KEY.public_key()}
-    return CloudflareAccessVerifier(TEAM, AUD, key_for=lambda kid: keys[kid])
+    return alb_verifier()
 
 
 def prod_settings(data_dir):
-    return Settings(env="production", data_dir=Path(data_dir), origin=ORIGIN, cf_team_domain=TEAM,
-                    cf_aud=AUD, admin_emails=(ADMIN,), version="test-1.0")
+    return Settings(env="production", data_dir=Path(data_dir), origin=ORIGIN, alb_arn=ARN, oidc_issuer=ISS,
+                    admin_emails=(ADMIN,), version="test-1.0")
 
 
 # --------------------------------------------------------------- settings
@@ -66,19 +55,14 @@ def test_production_refuses_to_start_without_its_settings(tmp_path):
         Settings.from_env({"PINNY_ENV": "production"})
     for name in ("PINNY_DATA_DIR", "PINNY_ORIGIN", "PINNY_ALB_ARN", "PINNY_ADMIN_EMAILS", "PINNY_VERSION"):
         assert name in str(e.value)
-    with pytest.raises(ConfigError) as e:
-        Settings.from_env({"PINNY_ENV": "production", "PINNY_GATE": "cloudflare"})
-    assert "PINNY_CF_TEAM_DOMAIN" in str(e.value) and "PINNY_CF_AUD" in str(e.value)
-    env = {"PINNY_ENV": "production", "PINNY_GATE": "cloudflare", "PINNY_DATA_DIR": str(tmp_path),
-           "PINNY_ORIGIN": "http://x",
-           "PINNY_CF_TEAM_DOMAIN": TEAM, "PINNY_CF_AUD": AUD, "PINNY_ADMIN_EMAILS": ADMIN,
-           "PINNY_VERSION": "v1"}
+    env = {"PINNY_ENV": "production", "PINNY_DATA_DIR": str(tmp_path), "PINNY_ORIGIN": "http://x",
+           "PINNY_ALB_ARN": ARN, "PINNY_ADMIN_EMAILS": ADMIN, "PINNY_VERSION": "v1"}
     with pytest.raises(ConfigError, match="https"):
         Settings.from_env(env)
     s = Settings.from_env(dict(env, PINNY_ORIGIN="https://pinny.test/",
                                PINNY_ADMIN_EMAILS=" Boss@Example.com , x@y.z"))
     assert s.production and s.origin == ORIGIN and s.admin_emails == (ADMIN, "x@y.z")
-    s.check_bind("0.0.0.0")  # production may listen anywhere (cloudflared is local anyway)
+    s.check_bind("0.0.0.0")  # production listens for the load balancer (security group: ALB only)
     with pytest.raises(ConfigError):
         Settings.from_env({"PINNY_ENV": "staging"})
 
@@ -92,19 +76,7 @@ def test_development_only_listens_on_loopback(tmp_path):
         s.check_bind("0.0.0.0")
 
 
-# ------------------------------------------------------------------ tokens
-def test_cloudflare_tokens_are_verified():
-    v = verifier()
-    assert v.email(token("Boss@Example.com")) == ADMIN
-    for bad in (token(aud="other"), token(iss="https://evil.cloudflareaccess.com"), token(exp_in=-120),
-                token(key=OTHER_KEY), token(email=None), token(kid=None), "not-a-jwt",
-                jwt.encode({"email": ADMIN, "aud": AUD}, "s" * 32, algorithm="HS256",
-                           headers={"kid": "k1"})):
-        with pytest.raises(Exception) as e:
-            v.email(bad)
-        assert getattr(e.value, "code", None) == "unauthenticated" and e.value.status == 401
-
-
+# ------------------------------------------------------------------ routes
 def test_every_route_declares_a_role_and_body():
     names = set()
     for method, path, name, role, body in ROUTES:
@@ -148,7 +120,7 @@ def _sitedb_for(settings):
 def call(base, method, path, *, who=ADMIN, body=None, ctype=None, origin=ORIGIN, headers=None):
     h = dict(headers or {})
     if who is not None:
-        h["Cf-Access-Jwt-Assertion"] = token(who)
+        h[ALB_HEADER] = token(who)
     if origin is not None:
         h["Origin"] = origin
     data = None
@@ -269,7 +241,7 @@ def test_me_and_reviewer_identity(site):
     base, s, svc = site
     code, _, raw = call(base, "GET", "/api/me", who=REVIEWER)
     assert json.loads(raw) == {"email": REVIEWER, "role": "reviewer", "env": "production",
-                               "sign_out_url": "/cdn-cgi/access/logout", "version": "test-1.0"}
+                               "sign_out_url": "/logout", "version": "test-1.0"}
     doc = upload(base, who=REVIEWER)
     assert doc["uploaded_by"] == REVIEWER
     v = doc["document_version"]
