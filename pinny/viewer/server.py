@@ -37,6 +37,7 @@ from pinny.render.service import DEFAULT_MAX_UPLOAD_BYTES
 from .auth import PUBLIC, Authenticator, Identity
 from .errors import ViewerError
 from .service import ViewerService
+from .training import TrainingService
 from pinny.jobs.queue import JobQueue
 from pinny.jobs.worker import WorkerPool
 
@@ -49,6 +50,7 @@ WEB_ROOT = Path(__file__).resolve().parents[2] / "web"
 MAX_JSON_BYTES = 1024 * 1024
 
 _VERSION_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_JOB_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")  # job ids: lower case
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 CSP = ("default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; "
@@ -87,6 +89,21 @@ ROUTES = [
     ("POST", "/api/members/remove", "member_remove", ADMIN, "json"),
     ("POST", "/api/members/setup-link", "member_setup_link", ADMIN, "json"),
     ("GET", "/api/audit", "audit", ADMIN, None),
+    # Training site (docs/training-site.md section 3): labelling progress for
+    # reviewers; datasets, training, benchmarks and models for admins.
+    ("GET", "/api/training/dashboard", "training_dashboard", REVIEWER, None),
+    ("GET", "/api/training/queue", "training_queue", REVIEWER, None),
+    ("POST", "/api/training/pages/complete", "training_page_complete", REVIEWER, "json"),
+    ("GET", "/api/training/models", "training_models", REVIEWER, None),
+    ("GET", "/api/training/datasets", "training_datasets", ADMIN, None),
+    ("POST", "/api/training/datasets", "training_build_dataset", ADMIN, "json"),
+    ("POST", "/api/training/train", "training_train", ADMIN, "json"),
+    ("POST", "/api/training/benchmarks", "training_benchmark", ADMIN, "json"),
+    ("GET", "/api/training/jobs", "training_jobs", ADMIN, None),
+    ("GET", "/api/training/jobs/{j}", "training_job", ADMIN, None),
+    ("POST", "/api/training/jobs/{j}/cancel", "training_cancel", ADMIN, "json"),
+    ("POST", "/api/training/promote", "training_promote", ADMIN, "json"),
+    ("POST", "/api/training/deactivate", "training_deactivate", ADMIN, "json"),
     ("GET", "/{path:path}", "static", PUBLIC, None),
 ]
 
@@ -135,6 +152,7 @@ class Site:
         self.sitedb.ensure_admins(settings.admin_emails)
         self.auth = authenticator or Authenticator(settings, self.sitedb)
         self.web_root = web_root
+        self.training = TrainingService(service)
         self.app = Starlette(
             routes=[Route(path, self._endpoint(method, name, role, body), methods=[method], name=name)
                     for method, path, name, role, body in ROUTES],
@@ -186,6 +204,8 @@ class Site:
             raise ViewerError("unknown_scan", "That scan does not exist.", 404)
         if "b" in params and not _UUID_RE.match(params["b"]):
             raise ViewerError("unknown_batch", "That batch does not exist.", 404)
+        if "j" in params and not _JOB_RE.match(params["j"]):
+            raise ViewerError("unknown_job", "That job does not exist.", 404)
 
     @staticmethod
     async def _read_limited(request: Request, limit: int, code: str, message: str) -> bytes:
@@ -471,6 +491,67 @@ class Site:
         if not limit.isdigit():
             raise ViewerError("invalid_limit", "limit must be a non-negative integer.")
         return self._json({"events": self.sitedb.audit_log(min(int(limit), 1000))})
+
+    # --------------------------------------------------------------- training
+    @staticmethod
+    def _limit(request, default: int, most: int) -> int:
+        limit = request.query_params.get("limit", str(default))
+        if not limit.isdigit():
+            raise ViewerError("invalid_limit", "limit must be a non-negative integer.")
+        return min(int(limit), most)
+
+    def h_training_dashboard(self, request, ident, body):
+        return self._json(self.training.dashboard())
+
+    def h_training_queue(self, request, ident, body):
+        return self._json(self.training.review_queue(self._limit(request, 50, 500)))
+
+    def h_training_page_complete(self, request, ident: Identity, b: dict):
+        return self._json(self.training.mark_page_reviewed(b.get("document_version"), b.get("page_index"),
+                                                           reviewer=ident.email))
+
+    def h_training_models(self, request, ident, body):
+        return self._json(self.training.models())
+
+    def h_training_datasets(self, request, ident, body):
+        return self._json(self.training.datasets())
+
+    def _started(self, ident: Identity, action: str, job: dict) -> JSONResponse:
+        self.sitedb.audit(ident.email, action, job["job_id"], {"kind": job["kind"], "payload": job["payload"]})
+        return self._json(job, 202)
+
+    def h_training_build_dataset(self, request, ident: Identity, b: dict):
+        return self._started(ident, "dataset_build_started", self.training.build_dataset(ident.email))
+
+    def h_training_train(self, request, ident: Identity, b: dict):
+        return self._started(ident, "training_started", self.training.train(b, ident.email))
+
+    def h_training_benchmark(self, request, ident: Identity, b: dict):
+        return self._started(ident, "benchmark_started", self.training.benchmark(b, ident.email))
+
+    def h_training_jobs(self, request, ident, body):
+        return self._json(self.training.list_jobs(self._limit(request, 50, 500)))
+
+    def h_training_job(self, request, ident, body):
+        return self._json(self.training.job(request.path_params["j"]))
+
+    def h_training_cancel(self, request, ident: Identity, b: dict):
+        out = self.training.cancel(request.path_params["j"])
+        self.sitedb.audit(ident.email, "training_cancelled", out["job_id"], {"kind": out["kind"]})
+        return self._json(out)
+
+    def h_training_promote(self, request, ident: Identity, b: dict):
+        out = self.training.promote(b, ident.email)
+        self.sitedb.audit(ident.email, "model_promoted", out["model_id"],
+                          {"kind": out["kind"], "benchmark_job_id": out["benchmark_job_id"],
+                           "evidence_sha256": out["evidence_sha256"]})
+        return self._json(out)
+
+    def h_training_deactivate(self, request, ident: Identity, b: dict):
+        out = self.training.deactivate(b)
+        if out["deactivated"]:
+            self.sitedb.audit(ident.email, "model_deactivated", out["deactivated"], {"kind": out["kind"]})
+        return self._json(out)
 
     def h_static(self, request, ident, body):
         path = request.path_params.get("path", "")

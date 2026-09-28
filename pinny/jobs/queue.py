@@ -8,6 +8,11 @@ fails it with ``worker_lost`` once it has used its attempts.
 
 Payloads are ids and small settings only, never file paths from a client.
 One connection per thread; SQLite coordinates processes.
+
+Long jobs (the ``train`` pool) also report ``progress`` (0..1) and
+``progress_log``, the tail of the job's own log, which is written for the
+admin who started it (``pinny.jobs.progress``). ``log_tail`` stays the
+child's stderr, for the server log only.
 """
 
 from __future__ import annotations
@@ -61,6 +66,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_dedupe ON jobs(dedupe_key)
     WHERE dedupe_key IS NOT NULL AND status IN ('queued','running');
 """
 
+# Columns added after the first release, with their types. Added in place
+# (ALTER TABLE) to a jobs.sqlite3 created by an older version.
+_ADDED_COLUMNS = (("progress", "REAL"), ("progress_log", "TEXT"))
+PROGRESS_LOG_CHARS = 4000
+
 
 class JobError(Exception):
     """A job ended without a result. ``code`` is stable; ``message`` is safe
@@ -95,6 +105,8 @@ class Job:
     started_at: Optional[float]
     heartbeat_at: Optional[float]
     finished_at: Optional[float]
+    progress: Optional[float] = None
+    progress_log: Optional[str] = None
 
     @property
     def finished(self) -> bool:
@@ -119,7 +131,7 @@ class JobQueue:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._clock = clock
-        self._db().executescript(_SCHEMA)
+        self._migrate()
 
     def _db(self) -> sqlite3.Connection:
         db = getattr(self._local, "db", None)
@@ -130,6 +142,15 @@ class JobQueue:
             db.execute("PRAGMA synchronous = NORMAL")
             self._local.db = db
         return db
+
+    def _migrate(self) -> None:
+        db = self._db()
+        db.executescript(_SCHEMA)
+        with self._tx() as tx:
+            have = {r["name"] for r in tx.execute("PRAGMA table_info(jobs)")}
+            for name, sqltype in _ADDED_COLUMNS:
+                if name not in have:
+                    tx.execute(f"ALTER TABLE jobs ADD COLUMN {name} {sqltype}")
 
     def _tx(self):
         db = self._db()
@@ -171,12 +192,16 @@ class JobQueue:
             raise KeyError(job_id)
         return self._job(r)
 
-    def list(self, status: Optional[str] = None, limit: int = 100) -> List[Job]:
-        q, args = "SELECT * FROM jobs", []
-        if status:
-            q += " WHERE status=?"
-            args.append(status)
-        return [self._job(r) for r in self._db().execute(q + " ORDER BY created_at DESC LIMIT ?",
+    def list(self, status: Optional[str] = None, limit: int = 100, *, pool: Optional[str] = None,
+             kind: Optional[str] = None) -> List[Job]:
+        """Newest first, optionally narrowed by status, pool and kind."""
+        where, args = [], []
+        for col, val in (("status", status), ("pool", pool), ("kind", kind)):
+            if val:
+                where.append(f"{col}=?")
+                args.append(val)
+        q = "SELECT * FROM jobs" + (" WHERE " + " AND ".join(where) if where else "")
+        return [self._job(r) for r in self._db().execute(q + " ORDER BY created_at DESC, rowid DESC LIMIT ?",
                                                         (*args, int(limit)))]
 
     def wait(self, job_id: str, timeout: float) -> Any:
@@ -224,6 +249,16 @@ class JobQueue:
         r = db.execute("SELECT status, worker_id, cancel_requested FROM jobs WHERE job_id=?", (job_id,)).fetchone()
         return bool(r and r["status"] == RUNNING and r["worker_id"] == worker_id and not r["cancel_requested"])
 
+    def set_progress(self, job_id: str, worker_id: str, progress: Optional[float],
+                     progress_log: Optional[str]) -> None:
+        """Record a running job's progress (0..1) and the tail of its own log."""
+        if progress is not None:
+            progress = min(1.0, max(0.0, float(progress)))
+        self._db().execute("UPDATE jobs SET progress=COALESCE(?, progress), progress_log=COALESCE(?, progress_log)"
+                           " WHERE job_id=? AND worker_id=? AND status='running'",
+                           (progress, None if progress_log is None else progress_log[-PROGRESS_LOG_CHARS:],
+                            job_id, worker_id))
+
     def finish(self, job_id: str, worker_id: str, result: Any, log_tail: str = "") -> None:
         self._end(job_id, worker_id, DONE, result=result, log_tail=log_tail)
 
@@ -241,11 +276,39 @@ class JobQueue:
             if r["cancel_requested"] and status != DONE:
                 status, code, message, http_status = CANCELLED, "cancelled", "The job was cancelled.", 409
             db.execute("UPDATE jobs SET status=?, result=?, error_code=?, error_message=?, error_status=?,"
-                       " log_tail=?, finished_at=? WHERE job_id=?",
+                       " log_tail=?, finished_at=?, progress=CASE WHEN ?='done' THEN 1.0 ELSE progress END"
+                       " WHERE job_id=?",
                        (status, json.dumps(result) if status == DONE else None, code, message, http_status,
-                        (log_tail or "")[-4000:], self._clock(), job_id))
+                        (log_tail or "")[-4000:], self._clock(), status, job_id))
 
     # ---------------------------------------------------- cancel and recover
+    INTERRUPTED_MESSAGE = ("The job was interrupted because the server stopped (for example the nightly "
+                           "shutdown); start it again.")
+
+    def interrupt(self, job_id: str, worker_id: str) -> str:
+        """The worker is shutting down and stopped this job: requeue it if it
+        has attempts left, else fail it as ``interrupted``. A job whose
+        cancel was requested is cancelled. Returns the new status."""
+        with self._tx() as db:
+            r = db.execute("SELECT status, worker_id, attempts, max_attempts, cancel_requested FROM jobs"
+                           " WHERE job_id=?", (job_id,)).fetchone()
+            if r is None or r["status"] != RUNNING or r["worker_id"] != worker_id:
+                return r["status"] if r is not None else ""
+            now = self._clock()
+            if r["cancel_requested"]:
+                db.execute("UPDATE jobs SET status='cancelled', error_code='cancelled',"
+                           " error_message='The job was cancelled.', error_status=409, finished_at=?"
+                           " WHERE job_id=?", (now, job_id))
+                return CANCELLED
+            if r["attempts"] < r["max_attempts"]:
+                db.execute("UPDATE jobs SET status='queued', worker_id=NULL, started_at=NULL,"
+                           " heartbeat_at=NULL WHERE job_id=?", (job_id,))
+                return QUEUED
+            db.execute("UPDATE jobs SET status='failed', error_code='interrupted', error_message=?,"
+                       " error_status=503, finished_at=? WHERE job_id=?",
+                       (self.INTERRUPTED_MESSAGE, now, job_id))
+            return FAILED
+
     def cancel(self, job_id: str) -> Job:
         """Queued: cancelled now. Running: the worker kills it at its next
         heartbeat. Finished: unchanged."""
@@ -274,16 +337,19 @@ class JobQueue:
                     out["requeued"] += 1
                 else:
                     db.execute("UPDATE jobs SET status='failed', error_code='worker_lost',"
-                               " error_message='The job stopped unexpectedly; try again.', finished_at=?"
+                               " error_message='The job stopped unexpectedly, for example because the"
+                               " server restarted; try again.', finished_at=?"
                                " WHERE job_id=?", (self._clock(), r["job_id"]))
                     out["failed"] += 1
         return out
 
     def prune(self, older_than_days: float = 7) -> int:
-        """Delete finished jobs older than the cutoff."""
+        """Delete finished jobs older than the cutoff. Training jobs are kept:
+        they are the history of datasets, models and benchmarks, and a
+        promotion names its benchmark job."""
         cutoff = self._clock() - older_than_days * 86400
         cur = self._db().execute("DELETE FROM jobs WHERE status IN ('done','failed','cancelled')"
-                                 " AND finished_at < ?", (cutoff,))
+                                 " AND finished_at < ? AND pool != 'train'", (cutoff,))
         return cur.rowcount
 
     @staticmethod
@@ -296,5 +362,5 @@ class JobQueue:
                    attempts=r["attempts"], max_attempts=r["max_attempts"], worker_id=r["worker_id"],
                    cancel_requested=bool(r["cancel_requested"]), requested_by=r["requested_by"],
                    created_at=r["created_at"], started_at=r["started_at"], heartbeat_at=r["heartbeat_at"],
-                   finished_at=r["finished_at"])
+                   finished_at=r["finished_at"], progress=r["progress"], progress_log=r["progress_log"])
 

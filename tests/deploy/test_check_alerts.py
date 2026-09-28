@@ -36,7 +36,8 @@ def test_5xx_counts_only_new_lines_and_survives_log_rotation(tmp_path):
 def test_failed_jobs_server_side_only(tmp_path):
     q = JobQueue(tmp_path)
     since = time.time() - 1
-    for code, status in (("job_crashed", 500), ("timeout", 504), ("invalid_template_box", 400)):
+    for code, status in (("job_crashed", 500), ("timeout", 504), ("invalid_template_box", 400),
+                         ("interrupted", 503)):  # the evening shutdown: expected, not alerted
         job_id = q.submit("selftest", {"action": "ok"})
         job = q.claim("interactive", "w1")
         assert job.job_id == job_id

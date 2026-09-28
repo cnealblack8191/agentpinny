@@ -12,7 +12,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request(method, path, { json, body, headers } = {}) {
+export async function request(method, path, { json, body, headers } = {}) {
   let res;
   try {
     res = await fetch(path, {

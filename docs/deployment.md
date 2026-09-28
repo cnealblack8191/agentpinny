@@ -439,8 +439,9 @@ reports the new version and a test job has gone through a worker's
 sandbox. If any of that fails after the switch, it switches back to the
 previous release by itself and says so. It keeps the newest 5 releases.
 
-Restarting the workers interrupts a running job; it is requeued and runs
-again a few seconds later (section 13).
+Restarting the workers interrupts a running job. A scan or page job is
+requeued and runs again a few seconds later; a training run is marked
+`interrupted` and an admin starts it again (section 13).
 
 ## 7. Roll back
 
@@ -638,13 +639,14 @@ weekdays; at a weekend, stop it yourself when done (Instance state →
 **Stop**, or `aws ec2 stop-instances --instance-ids INSTANCE_ID --region
 REGION`). A missed backup runs a few minutes after a start.
 
-**What a stop does to Pinny.** The web process shuts down cleanly. The
-workers are stopped at once; a job that was running stays marked
-"running", and the next morning's workers requeue it and run it again
-from the start (Pinny's crash recovery). A job gets one such retry: if it
-is interrupted a second time it fails with `worker_lost`. So **start long
-training runs early in the day**, so they finish before 19:00; a training
-run still going at 19:00 starts over the next morning.
+**What a stop does to Pinny.** The web process shuts down cleanly. Each
+worker stops its running job and hands it back: an upload, page or scan
+job is requeued and runs the next morning; a training, dataset or
+benchmark run is marked `interrupted` and is **not** rerun by itself, so
+a several-hour run never restarts unnoticed. The Training runs page shows
+it, and an admin starts it again. So **start long training runs early in
+the day**, so they finish before 19:00. (If the machine dies outright
+instead, the job is failed as `worker_lost` at the next start.)
 
 A backup running at 19:00 is cut off (section 8). To skip a day's
 shutdown, disable the stop schedule in EventBridge → Scheduler (and
@@ -666,7 +668,7 @@ that continues is repeated every 6 hours; when it clears you get one
 | **.../healthz fails from outside, but Pinny answers locally** | Caddy or HTTPS: `sudo systemctl status caddy`, `sudo journalctl -u caddy -n 100`. Certificate errors mean DNS does not point at the Elastic IP or ports 80/443 are closed (security group). Check the Elastic IP is still associated. |
 | **pinny-...@... is not running** | `sudo systemctl status <unit>` and `sudo journalctl -u <unit> -n 100`, then `sudo systemctl restart <unit>`. A worker that says `sandbox_unavailable` is not isolated from the network: its unit must have `PrivateNetwork=yes` (reinstall with the bootstrap). |
 | **N server error response(s) (5xx)** | `sudo journalctl -u pinny-web@production --since -30min`: look for `request <id> failed` and the error under it. Users see the same request id in the error message, so they can tell you which one was theirs. One-offs after a restart are harmless (502 while Pinny starts). |
-| **N job(s) failed on the server** | `sudo journalctl -u 'pinny-worker-*@production' --since -30min`. `timeout` or `cpu_limit`: a very large or unusual PDF; `job_crashed` or `job_failed`: a bug, keep the log for a fix; `worker_lost`: the job was interrupted twice (restarts or shutdowns). Failures caused by a user's input (a bad PDF) are not alerted. |
+| **N job(s) failed on the server** | `sudo journalctl -u 'pinny-worker-*@production' --since -30min`. `timeout` or `cpu_limit`: a very large or unusual PDF; `job_crashed` or `job_failed`: a bug, keep the log for a fix; `interrupted`: stopped by a restart or the evening shutdown, start it again; `worker_lost`: the machine or worker died mid-job. Failures caused by a user's input (a bad PDF) are not alerted. |
 | **Unit pinny-backup@... failed** / **no successful backup for N hours** | `sudo journalctl -u pinny-backup@production -n 50`. Usual causes: `ops.env` bucket or region wrong, the instance role lacks the policy (step 2.3), or not enough disk space (the archive is built on the local disk first). Fix, then `sudo systemctl start pinny-backup@production`. |
 | **Unit pinny-restore-test@... failed** | The newest backup could not be restored or verified. `sudo journalctl -u pinny-restore-test@production -n 50`. Run a backup now and the restore test again; if it still fails, keep the older backups (they expire after 30 days) and get help. |
 | **cannot read the job queue** | `ls -l /srv/pinny/production/jobs/`: the files must belong to group `pinny-production-jobs` with mode `rw-rw----`. The bootstrap sets this up. |

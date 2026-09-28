@@ -67,3 +67,7 @@ body.auth { display: block; background: #f4f4f4; }
 .auth-box label { display: block; margin: 8px 0 2px; }
 .auth-box input { width: 100%; padding: 6px; font: inherit; }
 .auth-box button { margin-top: 12px; padding: 6px 14px; font: inherit; }
+/* Links between the viewer and the training pages (web/training.html). */
+.site-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; font-size: 13px; }
+.site-nav a { color: #2a6df4; }
+.site-nav a[aria-current=page] { color: #111; font-weight: bold; text-decoration: none; }

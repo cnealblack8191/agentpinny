@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pinny training</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="training.css">
+</head>
+<body class="training">
+  <header class="topnav">
+    <strong class="brand">Pinny</strong>
+    <nav id="nav" aria-label="Training pages">
+      <a href="index.html">Viewer</a>
+      <a href="#dashboard" data-nav="dashboard">Dashboard</a>
+      <a href="#queue" data-nav="queue">Label queue</a>
+      <a href="#datasets" data-nav="datasets" class="admin-only" hidden>Datasets</a>
+      <a href="#runs" data-nav="runs" class="admin-only" hidden>Training runs</a>
+      <a href="#models" data-nav="models">Models</a>
+    </nav>
+    <span id="user-bar" class="muted"></span>
+  </header>
+  <p id="status" class="status" role="status"></p>
+
+  <main id="pages">
+    <section id="page-dashboard" data-page="dashboard" hidden>
+      <h1>Dashboard</h1>
+      <div id="dash-tiles" class="tiles"></div>
+      <h2>Readiness</h2>
+      <p class="muted">Guidance before training; an admin may train earlier. Promotion always needs the
+        benchmark gate: at least 3 test documents and 100 reference points on real drawings.</p>
+      <div id="dash-readiness" class="columns"></div>
+      <h2>Active models</h2>
+      <div id="dash-active"></div>
+    </section>
+
+    <section id="page-queue" data-page="queue" hidden>
+      <h1>Label queue</h1>
+      <p class="muted">Pages with the most uncertain pins first. Review opens the viewer on that pin; mark a
+        page fully reviewed once every receptacle on it is pinned and no pin is left unreviewed.</p>
+      <table id="queue-pages" class="grid">
+        <thead><tr><th>Drawing</th><th>Page</th><th>Unreviewed</th><th>Most uncertain</th><th>Status</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="queue-empty" class="muted" hidden>Nothing left to review. Scan more pages in the viewer.</p>
+      <h2>Most uncertain pins</h2>
+      <table id="queue-pins" class="grid">
+        <thead><tr><th>Drawing</th><th>Page</th><th>Score</th><th>Distance from threshold</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="page-datasets" data-page="datasets" hidden>
+      <h1>Datasets</h1>
+      <p class="muted">A dataset is a snapshot of the reviewed pins and fully reviewed pages, split by drawing
+        into train, val and test.</p>
+      <div class="actions admin-only" hidden>
+        <button id="build-dataset-btn">Build dataset from current reviews</button>
+        <label>Epochs <input id="train-epochs" type="number" min="1" max="200" value="30"></label>
+      </div>
+      <p id="datasets-status" class="status" role="status"></p>
+      <table id="datasets-table" class="grid">
+        <thead><tr><th>Dataset</th><th>Created</th><th>Verifier crops (+/-)</th><th>Detector pages (points)</th>
+          <th>Test split</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="datasets-empty" class="muted" hidden>No datasets yet.</p>
+    </section>
+
+    <section id="page-runs" data-page="runs" hidden>
+      <h1>Training runs</h1>
+      <p id="runs-shutdown-note" class="banner">The server shuts down at 7 PM Eastern on weekdays and over the
+        weekend. A run still going then is interrupted and has to be started again, so start long runs in the
+        morning.</p>
+      <table id="runs-table" class="grid">
+        <thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>Progress</th><th>Started by</th><th>Created</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="runs-empty" class="muted" hidden>No training jobs yet.</p>
+      <div id="run-detail" hidden>
+        <h2 id="run-title"></h2>
+        <p id="run-summary"></p>
+        <progress id="run-progress" max="1" value="0"></progress>
+        <div class="actions admin-only" hidden><button id="run-cancel-btn">Cancel</button></div>
+        <h3>Log</h3>
+        <pre id="run-log" class="log"></pre>
+      </div>
+    </section>
+
+    <section id="page-models" data-page="models" hidden>
+      <h1>Models</h1>
+      <div id="models-active" class="columns"></div>
+      <p id="models-status" class="status" role="status"></p>
+      <div id="models-list"></div>
+      <p id="models-empty" class="muted" hidden>No models yet. Train one from a dataset.</p>
+    </section>
+  </main>
+  <script type="module" src="training.js"></script>
+</body>
+</html>

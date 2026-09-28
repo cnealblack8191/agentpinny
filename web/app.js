@@ -636,7 +636,8 @@ function readHash() {
   const view = ['z', 'r', 'x', 'y'].every((k) => num(k) !== null)
     ? { zoom: T.clampZoom(num('z')), rotation: T.normRotation(num('r')), panX: num('x'), panY: num('y') }
     : null;
-  return { version: q.get('v'), page: num('p'), scanId: q.get('s'), batchId: q.get('b'), view };
+  // pin: select one pin once its scan is shown (links from the training Label queue).
+  return { version: q.get('v'), page: num('p'), scanId: q.get('s'), batchId: q.get('b'), view, pinId: q.get('pin') };
 }
 
 // ------------------------------------------------------------- loading
@@ -731,6 +732,8 @@ async function selectPage(i, restore = null) {
     const pick = want ? want.scan_id : (scans.length ? scans[scans.length - 1].scan_id : null);
     if (pick) await loadScan(pick);
     else render();
+    if (pick && restore && restore.pinId && token === S.seq.page
+        && S.serverPins.some((p) => p.pin_id === restore.pinId)) selectPin(restore.pinId, true);
   } catch (err) {
     if (token !== S.seq.page) return;
     setViewMessage(err.message, true);

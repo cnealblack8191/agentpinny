@@ -35,15 +35,15 @@ RestartSec=3
 RestartPreventExitStatus=2
 # Stopping (a deploy, or the evening shutdown of the instance) must not
 # lose the running job. pinny.jobs.worker answers SIGTERM by killing its
-# job's child and recording the job as failed, so the unit is stopped with
-# SIGKILL instead: worker and child die at once, the job stays "running"
-# in jobs.sqlite3, and crash recovery requeues it when a worker starts
-# again (its heartbeat is then stale). A job is retried once this way
-# (max_attempts 2); a job interrupted twice fails with worker_lost.
+# job's child and handing the job back to the queue: requeued while it has
+# attempts left, otherwise failed as "interrupted" (training jobs have one
+# attempt, so a long run is never silently rerun). KillMode=mixed sends
+# SIGTERM to the worker only, so it can do that; anything still alive after
+# TimeoutStopSec is killed, and crash recovery handles the job next boot.
 # SQLite rolls back an interrupted write, and pages are written atomically.
-KillMode=control-group
-KillSignal=SIGKILL
-TimeoutStopSec=15
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
 UMask=0007
 
 # Defaults; the pool drop-ins set MemoryMax and CPUQuota.

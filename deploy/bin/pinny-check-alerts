@@ -10,7 +10,8 @@ profile in $PINNY_PROFILES it checks:
 * the web and worker units that are enabled are running;
 * 5xx responses in Caddy's access log since the last run;
 * failed jobs in jobs.sqlite3 since the last run (server-side failures only:
-  error status 5xx or none; 4xx failures are the user's input, like a bad PDF);
+  error status 5xx or none; 4xx failures are the user's input, like a bad PDF,
+  and jobs interrupted by a shutdown are expected);
 * the last successful backup is less than 80 hours old (weekday backups only).
 
 New problems are emailed through the SNS topic $PINNY_ALERT_TOPIC_ARN in
@@ -208,6 +209,9 @@ def check_jobs(profile: str, db_path: Path, since: float) -> List[Alert]:
         try:
             rows = db.execute("SELECT kind, error_code, COUNT(*) FROM jobs WHERE status='failed' AND finished_at > ?"
                               " AND (error_status IS NULL OR error_status >= 500)"
+                              # Stopped by a restart or the evening shutdown: expected,
+                              # and shown on the Training runs page.
+                              " AND COALESCE(error_code, '') <> 'interrupted'"
                               " GROUP BY kind, error_code ORDER BY 3 DESC", (since,)).fetchall()
         finally:
             db.close()

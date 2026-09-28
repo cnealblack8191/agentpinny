@@ -1,0 +1,44 @@
+/* Training pages (web/training.html). Loaded after style.css. */
+body.training { display: block; height: auto; min-height: 100%; }
+body.training [hidden] { display: none !important; }
+.topnav { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; padding: 8px 16px; border-bottom: 1px solid #ccc; background: #fafafa; }
+.topnav .brand { font-size: 16px; }
+.topnav nav { display: flex; flex-wrap: wrap; gap: 12px; }
+.topnav nav a { color: #2a6df4; text-decoration: none; padding: 2px 4px; }
+.topnav nav a[aria-current=page] { color: #111; font-weight: bold; border-bottom: 2px solid #111; }
+.topnav #user-bar { margin-left: auto; font-size: 13px; }
+body.training > .status { margin: 4px 16px; }
+#pages { padding: 0 16px 32px; max-width: 1200px; }
+#pages h1 { font-size: 20px; margin: 12px 0 8px; }
+#pages h2 { font-size: 16px; margin: 18px 0 6px; }
+#pages h3 { font-size: 14px; margin: 12px 0 4px; }
+.tiles { display: flex; flex-wrap: wrap; gap: 10px; }
+.tile { border: 1px solid #ddd; border-radius: 4px; padding: 8px 12px; min-width: 150px; }
+.tile .value { font-size: 22px; font-weight: bold; }
+.tile .label { color: #666; font-size: 13px; }
+.columns { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.card { border: 1px solid #ddd; border-radius: 4px; padding: 8px 12px; min-width: 280px; flex: 1; }
+.card h3 { margin-top: 0; }
+table.grid { border-collapse: collapse; font-size: 13px; margin: 6px 0; width: 100%; }
+table.grid th, table.grid td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #eee; vertical-align: top; }
+table.grid tr.selected { background: #e6f0ff; }
+table.grid tr[data-job] { cursor: pointer; }
+.ok { color: #1b6e20; }
+.bad { color: #b00020; }
+.badge { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 12px; background: #eee; }
+.badge.ok { background: #e3f4e4; }
+.badge.bad { background: #fbe5e8; }
+.badge.warn { background: #fff3cd; color: #6b5300; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.actions input[type=number] { width: 5em; }
+td .actions { margin: 0; }
+progress { width: 160px; }
+#run-progress { width: 100%; max-width: 480px; }
+pre.log { background: #f6f6f6; border: 1px solid #ddd; padding: 8px; max-height: 360px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
+.model { border: 1px solid #ddd; border-radius: 4px; padding: 8px 12px; margin: 10px 0; }
+.model.active { border-color: #1b6e20; }
+.model h3 { margin: 0 0 4px; font-family: ui-monospace, monospace; font-size: 13px; }
+.mono { font-family: ui-monospace, monospace; font-size: 12px; }
+table.compare td.num, table.compare th.num { text-align: right; }
+ul.conditions { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+.nowrap { white-space: nowrap; }

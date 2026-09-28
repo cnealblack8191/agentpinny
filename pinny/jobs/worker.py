@@ -7,6 +7,7 @@ service in production::
 
     python -m pinny.jobs.worker --pool interactive
     python -m pinny.jobs.worker --pool scan
+    python -m pinny.jobs.worker --pool train     # datasets, training, benchmarks; one at a time
 
 or let the web process start them in threads (``PINNY_JOBS=sandbox``);
 either way each job still runs in its own locked-down child process.
@@ -28,21 +29,24 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from . import progress as _progress
 from .limits import HEARTBEAT_S, LIMITS
 from .queue import Job, JobQueue
 
 _log = logging.getLogger("pinny.jobs")
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[2])
-POOL_NAMES = ("interactive", "scan")
+POOL_NAMES = ("interactive", "scan", "train")
 
 
-def child_env() -> Dict[str, str]:
-    """A minimal environment: no secrets, one thread per numeric library."""
+def child_env(threads: int = 1) -> Dict[str, str]:
+    """A minimal environment: no secrets, ``threads`` per numeric library
+    (one, except for training jobs)."""
+    n = str(max(1, int(threads)))
     env = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "LANG": "C.UTF-8",
            "PYTHONPATH": _REPO_ROOT, "PYTHONDONTWRITEBYTECODE": "1",
-           "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
-           "OPENCV_FOR_THREADS_NUM": "1"}
+           "OMP_NUM_THREADS": n, "OPENBLAS_NUM_THREADS": n, "MKL_NUM_THREADS": n,
+           "OPENCV_FOR_THREADS_NUM": n}
     return env
 
 
@@ -59,10 +63,13 @@ class Worker:
         self.python = python
         self.worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}:{pool}:{uuid.uuid4().hex[:6]}"
         self.child: Optional[subprocess.Popen] = None
+        self.stopping = False  # set by interrupt(): the service is shutting down
 
     # ------------------------------------------------------------------ run
     def run_once(self) -> bool:
         """Claim and run one job. False when the pool is empty."""
+        if self.stopping:
+            return False
         job = self.queue.claim(self.pool, self.worker_id)
         if job is None:
             return False
@@ -72,13 +79,13 @@ class Worker:
     def run_job(self, job: Job) -> None:
         lim = LIMITS[job.kind]
         request = json.dumps({"kind": job.kind, "payload": job.payload, "data_dir": self.data_dir,
-                              "require_isolation": self.require_isolation,
+                              "require_isolation": self.require_isolation, "job_id": job.job_id,
                               "parent_pid": os.getpid()}).encode()
         started = time.monotonic()
         try:
             proc = subprocess.Popen([self.python, "-m", "pinny.jobs.child"], stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.data_dir,
-                                    env=child_env(), start_new_session=True, close_fds=True)
+                                    env=child_env(lim.threads), start_new_session=True, close_fds=True)
         except OSError as exc:
             _log.exception("could not start a job child")
             self.queue.fail(job.job_id, self.worker_id, "sandbox_unavailable",
@@ -94,6 +101,7 @@ class Worker:
                 break
             except subprocess.TimeoutExpired:
                 pending_input = None  # already written; communicate keeps its state
+                self._sync_progress(job)
                 if time.monotonic() - started > lim.wall_s:
                     stop_reason = "timeout"
                 elif not self.queue.heartbeat(job.job_id, self.worker_id):
@@ -103,7 +111,14 @@ class Worker:
                     out, err = proc.communicate()
                     break
         self.child = None
+        self._sync_progress(job)
         log_tail = err.decode("utf-8", "replace")[-4000:]
+        if self.stopping and _last_json(out) is None:
+            # Killed because the worker is stopping (a restart, the nightly
+            # shutdown): not the job's fault. Requeue it, or fail it clearly.
+            status = self.queue.interrupt(job.job_id, self.worker_id)
+            _log.warning("job %s (%s) interrupted by shutdown: now %s", job.job_id, job.kind, status)
+            return
         if stop_reason == "timeout":
             self.queue.fail(job.job_id, self.worker_id, "timeout",
                             f"The job took longer than {lim.wall_s} s and was stopped.", 504, log_tail)
@@ -128,6 +143,15 @@ class Worker:
             self.queue.fail(job.job_id, self.worker_id, str(answer.get("code") or "job_failed"),
                             str(answer.get("message") or "The job failed."),
                             int(answer.get("status") or 500), log_tail)
+
+    def _sync_progress(self, job: Job) -> None:
+        """Copy a job's progress file and log tail into its record."""
+        fraction, tail = _progress.read(self.data_dir, job.job_id)
+        if fraction is not None or tail is not None:
+            try:
+                self.queue.set_progress(job.job_id, self.worker_id, fraction, tail)
+            except Exception:  # noqa: BLE001 - progress is best effort
+                _log.exception("could not record progress of job %s", job.job_id)
 
     @staticmethod
     def _kill(proc: subprocess.Popen) -> None:
@@ -167,6 +191,11 @@ class Worker:
         if self.child is not None:
             self._kill(self.child)
 
+    def interrupt(self) -> None:
+        """Shutting down: stop the running job and hand it back (``JobQueue.interrupt``)."""
+        self.stopping = True
+        self.kill_child()
+
 
 def _last_json(out: bytes) -> Optional[dict]:
     for line in reversed(out.decode("utf-8", "replace").strip().splitlines()):
@@ -188,7 +217,7 @@ class WorkerPool:
         self.stop_event = threading.Event()
         self.workers: List[Worker] = []
         self.threads: List[threading.Thread] = []
-        for pool, n in (sizes or {"interactive": 1, "scan": 1}).items():
+        for pool, n in (sizes or {"interactive": 1, "scan": 1, "train": 1}).items():
             for _ in range(n):
                 self.workers.append(Worker(queue, pool, data_dir, require_isolation=require_isolation))
 
@@ -202,7 +231,7 @@ class WorkerPool:
     def stop(self, timeout: float = 10) -> None:
         self.stop_event.set()
         for w in self.workers:
-            w.kill_child()  # a killed job is recovered by the next worker
+            w.interrupt()  # its job is requeued, or failed as interrupted
         for t in self.threads:
             t.join(timeout)
 
