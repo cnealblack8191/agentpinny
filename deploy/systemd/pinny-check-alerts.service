@@ -1,0 +1,36 @@
+# Every 5 minutes (pinny-check-alerts.timer): disk space, /healthz, units
+# running, 5xx responses in Caddy's access logs, failed jobs, backup age.
+# New problems are emailed through the SNS topic; repeats are rate-limited.
+[Unit]
+Description=Pinny health and alert check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# pinny-ops is in the caddy group (access logs) and the pinny-<profile>-jobs
+# groups (jobs.sqlite3, read-only queries).
+User=pinny-ops
+Group=pinny-ops
+EnvironmentFile=/etc/pinny/ops.env
+StateDirectory=pinny-alerts
+Environment=HOME=/var/lib/pinny-alerts
+ExecStart=/usr/local/sbin/pinny-check-alerts
+TimeoutStartSec=2min
+MemoryMax=256M
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+# SQLite keeps the queue's -shm file next to it, even for read-only queries.
+ReadWritePaths=-/srv/pinny/production/jobs -/srv/pinny/staging/jobs
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

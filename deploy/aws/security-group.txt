@@ -1,0 +1,19 @@
+Security group "pinny-web" for the Pinny EC2 instance
+======================================================
+
+Inbound rules
+  TCP 443  from 0.0.0.0/0 and ::/0   HTTPS (Caddy)
+  TCP 80   from 0.0.0.0/0 and ::/0   HTTP: Let's Encrypt certificate checks and
+                                     the redirect to HTTPS (Caddy)
+  Nothing else. Recommended: no SSH rule at all; connect with AWS Systems
+  Manager Session Manager instead (docs/deployment.md, "Connect to the server").
+  If you must use SSH: TCP 22 from YOUR.IP.ADDRESS/32 only, never 0.0.0.0/0.
+
+Outbound rules
+  All traffic (the default). The instance fetches code from GitHub, packages
+  from Ubuntu, PyPI and the Caddy repository, certificates from Let's Encrypt,
+  and talks to S3, SNS and the EC2 instance metadata service.
+
+Never open
+  8001, 8002 (Pinny web, production and staging) and anything else: Pinny
+  listens on 127.0.0.1 only, and its workers have no network at all.

@@ -1,0 +1,356 @@
+#!/usr/bin/python3
+"""pinny-check-alerts: Pinny's 5-minute health check (docs/deployment.md, "Alerts").
+
+Run by pinny-check-alerts.timer as user pinny-ops. For every deployed
+profile in $PINNY_PROFILES it checks:
+
+* disk space: any filesystem holding / or /srv/pinny above 80 % used;
+* /healthz on 127.0.0.1 (Pinny itself) and on the public https:// origin
+  (Caddy and the certificate);
+* the web and worker units that are enabled are running;
+* 5xx responses in Caddy's access log since the last run;
+* failed jobs in jobs.sqlite3 since the last run (server-side failures only:
+  error status 5xx or none; 4xx failures are the user's input, like a bad PDF);
+* the last successful backup is less than 80 hours old (weekday backups only).
+
+New problems are emailed through the SNS topic $PINNY_ALERT_TOPIC_ARN in
+one message per run. A problem that continues is repeated at most every
+6 hours; a problem that clears sends one "resolved" line. Without a topic
+the message is only printed (to the journal). State: $STATE_DIRECTORY/state.json.
+Standard library only (system python3).
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Tuple
+
+DISK_LIMIT_PCT = 80.0
+REPEAT_S = 6 * 3600  # an ongoing problem is repeated this often
+EVENT_REPEAT_S = 3600  # 5xx and failed-job alerts: at most one email per hour each
+# Backups run on weekdays only (the instance is off at night and at weekends),
+# so Friday's backup must last until Monday: 72 h plus a margin. A backup that
+# fails sends its own alert at once (OnFailure=); this catches one that never ran.
+BACKUP_MAX_AGE_S = 80 * 3600
+# After a boot, give a missed backup (Persistent=true) time to catch up first.
+BOOT_GRACE_S = 45 * 60
+FIRST_LOOKBACK_S = 600
+
+
+@dataclass
+class Alert:
+    key: str
+    message: str
+    event: bool = False  # events (5xx, failed jobs) never "resolve"
+
+
+# ------------------------------------------------------------------ helpers
+def read_env_file(path: Path) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    try:
+        text = path.read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
+
+
+def http_json(url: str, host: Optional[str] = None, timeout: float = 10.0) -> Tuple[int, Optional[dict]]:
+    headers = {"User-Agent": "pinny-check-alerts"}
+    if host:
+        headers["Host"] = host
+        headers["X-Forwarded-Proto"] = "https"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read(65536)
+            try:
+                return r.status, json.loads(body)
+            except ValueError:
+                return r.status, None
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0, None
+
+
+def uptime_s() -> float:
+    try:
+        return float(Path("/proc/uptime").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 1e9
+
+
+def unit_state(unit: str) -> str:
+    try:
+        return subprocess.run(["systemctl", "show", "-p", "ActiveState", "--value", unit],
+                              capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return ""
+
+
+def systemctl(*args: str) -> int:
+    try:
+        return subprocess.run(["systemctl", *args], capture_output=True).returncode
+    except OSError:
+        return 1
+
+
+# ------------------------------------------------------------------ checks
+def check_disk(paths: List[str], limit: float = DISK_LIMIT_PCT) -> List[Alert]:
+    seen, out = set(), []
+    for p in paths:
+        try:
+            st = os.statvfs(p)
+            dev = os.stat(p).st_dev
+        except OSError:
+            continue
+        if dev in seen or st.f_blocks == 0:
+            continue
+        seen.add(dev)
+        used = 100.0 * (1 - st.f_bavail / st.f_blocks)
+        if used > limit:
+            free_gb = st.f_bavail * st.f_frsize / 1e9
+            out.append(Alert(f"disk:{p}", f"Disk {p} is {used:.0f}% full ({free_gb:.1f} GB free)."))
+    return out
+
+
+def check_health(profile: str, env: Dict[str, str], get=http_json) -> List[Alert]:
+    port = env.get("PINNY_PORT")
+    origin = (env.get("PINNY_ORIGIN") or "").rstrip("/")
+    host = origin.split("://", 1)[-1] if origin else None
+    out = []
+    local_ok = True
+    if port:
+        status, body = get(f"http://127.0.0.1:{port}/healthz", host)
+        local_ok = status == 200 and bool(body and body.get("ok"))
+        if not local_ok:
+            out.append(Alert(f"health:{profile}:local",
+                             f"{profile}: Pinny is not answering /healthz on 127.0.0.1:{port} "
+                             f"(status {status or 'no answer'})."))
+    if origin and local_ok:
+        status, body = get(f"{origin}/healthz")
+        if not (status == 200 and body and body.get("ok")):
+            out.append(Alert(f"health:{profile}:public",
+                             f"{profile}: {origin}/healthz fails from outside (status {status or 'no answer'}), "
+                             "but Pinny answers locally: check Caddy and the HTTPS certificate."))
+    return out
+
+
+UNITS = ("pinny-web", "pinny-worker-interactive", "pinny-worker-scan", "pinny-worker-train")
+
+
+def check_units(profile: str, run=systemctl) -> List[Alert]:
+    out = []
+    for u in UNITS:
+        name = f"{u}@{profile}.service"
+        if run("is-enabled", "--quiet", name) == 0 and run("is-active", "--quiet", name) != 0:
+            out.append(Alert(f"unit:{name}", f"{profile}: {name} is not running."))
+    return out
+
+
+def check_5xx(profile: str, log_path: Path, state: Dict) -> List[Alert]:
+    """5xx responses in Caddy's JSON access log since the last run."""
+    pos = state.setdefault("logs", {}).get(str(log_path), {})
+    try:
+        st = log_path.stat()
+    except OSError:
+        return []
+    offset = pos.get("offset", 0) if pos.get("inode") == st.st_ino and pos.get("offset", 0) <= st.st_size else 0
+    if not pos:  # first run: start at the end, do not alert on old history
+        offset = st.st_size
+    count, samples = 0, []
+    with open(log_path, "rb") as f:
+        f.seek(offset)
+        for raw in f:
+            if not raw.endswith(b"\n"):
+                break  # partial line: read it next time
+            offset += len(raw)
+            try:
+                entry = json.loads(raw)
+            except ValueError:
+                continue
+            status = entry.get("status")
+            if isinstance(status, int) and status >= 500:
+                count += 1
+                if len(samples) < 5:
+                    req = entry.get("request") or {}
+                    samples.append(f"{status} {req.get('method', '?')} {(req.get('uri') or '?').split('?')[0]}")
+    state["logs"][str(log_path)] = {"inode": st.st_ino, "offset": offset}
+    if not count:
+        return []
+    return [Alert(f"5xx:{profile}", f"{profile}: {count} server error response(s) (5xx) in the last "
+                  f"check interval, e.g. {'; '.join(samples)}. Details: "
+                  f"sudo journalctl -u pinny-web@{profile} --since -15min", event=True)]
+
+
+def check_jobs(profile: str, db_path: Path, since: float) -> List[Alert]:
+    if not db_path.exists():
+        return []
+    try:
+        db = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        try:
+            rows = db.execute("SELECT kind, error_code, COUNT(*) FROM jobs WHERE status='failed' AND finished_at > ?"
+                              " AND (error_status IS NULL OR error_status >= 500)"
+                              " GROUP BY kind, error_code ORDER BY 3 DESC", (since,)).fetchall()
+        finally:
+            db.close()
+    except sqlite3.Error as exc:
+        return [Alert(f"jobsdb:{profile}", f"{profile}: cannot read the job queue ({exc}).")]
+    if not rows:
+        return []
+    total = sum(r[2] for r in rows)
+    detail = ", ".join(f"{n} x {kind} ({code})" for kind, code, n in rows[:5])
+    return [Alert(f"jobs:{profile}", f"{profile}: {total} job(s) failed on the server: {detail}. Details: "
+                  f"sudo journalctl -u 'pinny-worker-*@{profile}' --since -15min", event=True)]
+
+
+def check_backup(profile: str, status_path: Path, state: Dict, now: float, run=systemctl) -> List[Alert]:
+    timer = f"pinny-backup@{profile}.timer"
+    if run("is-enabled", "--quiet", timer) != 0:
+        return []
+    if uptime_s() < BOOT_GRACE_S or run("is-active", "--quiet", f"pinny-backup@{profile}.service") == 0 \
+            or unit_state(f"pinny-backup@{profile}.service") == "activating":
+        return []  # just booted (a missed run is catching up), or a backup is running now
+    first = state.setdefault("backup_timer_seen", {}).setdefault(profile, now)
+    try:
+        last = json.loads(status_path.read_text())["last_success"]
+        age = now - _dt.datetime.fromisoformat(last).timestamp()
+    except (OSError, ValueError, KeyError, TypeError):
+        age = now - first  # never succeeded: count from when we first saw the timer
+    if age > BACKUP_MAX_AGE_S:
+        return [Alert(f"backup:{profile}", f"{profile}: no successful backup for {age / 3600:.0f} hours. "
+                      f"Check: sudo journalctl -u pinny-backup@{profile} -n 50")]
+    return []
+
+
+# ------------------------------------------------------------------ decide
+def decide(alerts: List[Alert], state: Dict, now: float) -> Tuple[List[str], List[str]]:
+    """Rate-limit: returns (lines to send about problems, 'resolved' lines).
+    Updates state['alerts'] in place, assuming the message will be sent."""
+    known = state.setdefault("alerts", {})
+    send, resolved = [], []
+    active = {a.key for a in alerts}
+    for a in alerts:
+        rec = known.get(a.key)
+        repeat = EVENT_REPEAT_S if a.event else REPEAT_S
+        if rec is None or now - rec["last_sent"] >= repeat:
+            suppressed = rec.get("suppressed", 0) if rec else 0
+            extra = f" (and {suppressed} similar since the last email)" if suppressed and a.event else ""
+            send.append(("STILL: " if rec and not a.event else "") + a.message + extra)
+            known[a.key] = {"since": rec["since"] if rec else now, "last_sent": now, "event": a.event,
+                            "suppressed": 0}
+        else:
+            rec["suppressed"] = rec.get("suppressed", 0) + 1
+    for key in list(known):
+        if key in active:
+            continue
+        rec = known[key]
+        if rec.get("event"):
+            if now - rec["last_sent"] >= EVENT_REPEAT_S:
+                del known[key]
+        else:
+            resolved.append(f"Resolved: {key}")
+            del known[key]
+    return send, resolved
+
+
+def compose(send: List[str], resolved: List[str], host: str) -> Optional[Tuple[str, str]]:
+    if not send and not resolved:
+        return None
+    if send:
+        subject = f"Pinny alert on {host}: {send[0]}"
+    else:
+        subject = f"Pinny on {host}: problem resolved"
+    subject = subject[:99]
+    body = "\n".join([*(f"- {s}" for s in send), *(f"- {r}" for r in resolved), "",
+                      "What to do: docs/deployment.md, section 'Alerts'."])
+    return subject, body
+
+
+def publish_sns(subject: str, body: str) -> bool:
+    topic = (os.environ.get("PINNY_ALERT_TOPIC_ARN") or "").strip()
+    print(f"{subject}\n{body}", flush=True)
+    if not topic or "CHANGE_ME" in topic:
+        print("(no PINNY_ALERT_TOPIC_ARN set: not emailed)", flush=True)
+        return True
+    r = subprocess.run(["aws", "sns", "publish", "--topic-arn", topic, "--subject", subject,
+                        "--message", body], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"SNS publish failed: {r.stderr.strip()}", file=sys.stderr)
+        return False
+    return True
+
+
+# ------------------------------------------------------------------ main
+def run_checks(state: Dict, now: float, *, profiles: List[str], etc: Path, opt: Path, srv: Path,
+               caddy_logs: Path, backup_state: Path, get=http_json, unit_run=systemctl) -> List[Alert]:
+    alerts = check_disk(["/", str(srv)])
+    last = state.get("last_run", now - FIRST_LOOKBACK_S)
+    for p in profiles:
+        if not (opt / p / "current").exists():
+            continue  # not deployed yet
+        env = read_env_file(etc / f"{p}.env")
+        alerts += check_health(p, env, get)
+        alerts += check_units(p, unit_run)
+        alerts += check_5xx(p, caddy_logs / f"pinny-{p}.log", state)
+        alerts += check_jobs(p, Path(env.get("PINNY_DATA_DIR") or srv / p) / "jobs.sqlite3", last)
+        alerts += check_backup(p, backup_state / p / "status.json", state, now, unit_run)
+    return alerts
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="pinny-check-alerts", description=__doc__.split("\n\n")[0])
+    ap.add_argument("--state", default=os.path.join(
+        (os.environ.get("STATE_DIRECTORY") or "/var/lib/pinny-alerts").split(":")[0], "state.json"))
+    ap.add_argument("--dry-run", action="store_true", help="print what would be sent; change no state")
+    args = ap.parse_args(argv)
+    state_path = Path(args.state)
+    try:
+        state = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        state = {}
+    now = time.time()
+    profiles = (os.environ.get("PINNY_PROFILES") or "production staging").split()
+    alerts = run_checks(state, now, profiles=profiles, etc=Path("/etc/pinny"), opt=Path("/opt/pinny"),
+                        srv=Path("/srv/pinny"), caddy_logs=Path("/var/log/caddy"),
+                        backup_state=Path("/var/lib/pinny-backup"))
+    before = json.dumps(state.get("alerts", {}))
+    send, resolved = decide(alerts, state, now)
+    msg = compose(send, resolved, os.uname().nodename)
+    if args.dry_run:
+        print(msg or "No new problems.")
+        return 0
+    if msg and not publish_sns(*msg):
+        state["alerts"] = json.loads(before)  # not sent: try again next run
+        rc = 1
+    else:
+        rc = 0
+    if not alerts:
+        print("All checks passed.", flush=True)
+    state["last_run"] = now
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = state_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=1, sort_keys=True))
+    os.replace(tmp, state_path)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

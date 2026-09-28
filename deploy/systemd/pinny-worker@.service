@@ -1,0 +1,90 @@
+# Pinny job worker for one profile and one pool.
+#
+# pinny-bootstrap installs this file once per pool, under the pool's name:
+#   /etc/systemd/system/pinny-worker-interactive@.service
+#   /etc/systemd/system/pinny-worker-scan@.service
+#   /etc/systemd/system/pinny-worker-train@.service
+# In a unit name, %j (the last dash-separated part before "@") is the pool
+# and %i (after "@") is the profile, so pinny-worker-scan@production.service
+# runs "python -m pinny.jobs.worker --pool scan" for production.
+# pinny-deploy enables only the pools that the release's pinny.jobs.worker
+# knows (POOL_NAMES). Per-pool limits: pinny-worker-<pool>@.service.d/.
+#
+# Each job runs in a child process that refuses to work unless it sees no
+# network interface but loopback (docs/training-site.md section 4).
+# PrivateNetwork=yes provides that, because Ubuntu 24.04's AppArmor blocks
+# the child's own unprivileged namespaces.
+[Unit]
+Description=Pinny %j worker (%i)
+PartOf=pinny@%i.target
+After=network.target
+
+[Service]
+Type=simple
+User=pinny-%i-worker
+Group=pinny-%i-worker
+SupplementaryGroups=pinny-%i-jobs
+EnvironmentFile=/etc/pinny/%i.env
+EnvironmentFile=/opt/pinny/%i/current/release.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HOME=/nonexistent
+WorkingDirectory=/srv/pinny/%i
+ExecStart=/opt/pinny/%i/current/venv/bin/python -m pinny.jobs.worker --pool %j --data-dir ${PINNY_DATA_DIR}
+Restart=on-failure
+RestartSec=3
+# Exit 2 means bad arguments, for example a pool this release does not have.
+RestartPreventExitStatus=2
+# Stopping (a deploy, or the evening shutdown of the instance) must not
+# lose the running job. pinny.jobs.worker answers SIGTERM by killing its
+# job's child and recording the job as failed, so the unit is stopped with
+# SIGKILL instead: worker and child die at once, the job stays "running"
+# in jobs.sqlite3, and crash recovery requeues it when a worker starts
+# again (its heartbeat is then stale). A job is retried once this way
+# (max_attempts 2); a job interrupted twice fails with worker_lost.
+# SQLite rolls back an interrupted write, and pages are written atomically.
+KillMode=control-group
+KillSignal=SIGKILL
+TimeoutStopSec=15
+UMask=0007
+
+# Defaults; the pool drop-ins set MemoryMax and CPUQuota.
+MemoryMax=2G
+CPUQuota=100%
+TasksMax=64
+
+# Sandbox. The worker can write only the job queue (jobs/), the documents
+# and the upload staging area (tmp/). Unix permissions keep it out of
+# site.sqlite3 (sign-in data), pinny.sqlite3 (labels), crops/, exports/ and
+# models/.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/srv/pinny/%i/documents /srv/pinny/%i/tmp /srv/pinny/%i/jobs
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+# The child's own unshare() then fails with EPERM, which it tolerates; its
+# isolation check passes because PrivateNetwork=yes left only "lo".
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# AF_UNIX for local sockets; AF_NETLINK because the child lists the network
+# interfaces (if_nameindex) to prove it has none.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+
+[Install]
+WantedBy=pinny@%i.target

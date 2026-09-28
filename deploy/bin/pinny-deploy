@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# pinny-deploy: build a release of Pinny from git and switch a profile to it.
+#
+#   sudo pinny-deploy staging training-site              a branch
+#   sudo pinny-deploy production v1.2.0                  a tag
+#   sudo pinny-deploy production 3f2a9c1d0b7e            a commit
+#   sudo pinny-deploy staging training-site --run-tests  also run the test suite first
+#   sudo pinny-deploy production v1.2.0 --train          also install torch (CPU) for training
+#
+# Steps: fetch the repository into /opt/pinny/git; export the commit into
+# a new /opt/pinny/<profile>/releases/<time>-<sha>/src; build a fresh venv
+# there from requirements.lock.txt (--require-hashes); write release.env
+# with PINNY_VERSION=git:<12 hex>; check that Pinny accepts the settings;
+# snapshot the databases; point /opt/pinny/<profile>/current at the new
+# release; restart the units; wait until /healthz reports the new version
+# and a test job passes the worker sandbox. If anything after the switch
+# fails, it switches back to the previous release and restarts that.
+#
+# Training: torch and torchvision are not in the lock file. --train
+# installs the versions pinned in pyproject.toml's "train" extra, CPU-only
+# wheels from https://download.pytorch.org/whl/cpu. Once a release has
+# them, later deploys of that profile include them too, unless --no-train.
+set -Eeuo pipefail
+
+# shellcheck source=pinny-common.sh
+. "$(dirname "$(readlink -f "$0")")/pinny-common.sh"
+
+TORCH_INDEX=https://download.pytorch.org/whl/cpu
+KEEP_RELEASES=5
+
+usage() {
+  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+}
+
+[ $# -ge 2 ] || usage
+PROFILE=$1
+REF=$2
+shift 2
+RUN_TESTS=no
+TRAIN=auto
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --run-tests) RUN_TESTS=yes ;;
+    --train) TRAIN=yes ;;
+    --no-train) TRAIN=no ;;
+    -h|--help) usage ;;
+    *) die "unknown option $1" ;;
+  esac
+  shift
+done
+
+need_root "$PROFILE" "$REF"
+check_profile "$PROFILE"
+ENV_FILE="$PINNY_ETC/$PROFILE.env"
+[ -f "$ENV_FILE" ] || die "$ENV_FILE is missing: run pinny-bootstrap first"
+if grep -q CHANGE_ME "$ENV_FILE"; then
+  die "edit $ENV_FILE first (replace every CHANGE_ME)"
+fi
+GIT_URL=$(env_value "$PINNY_ETC/ops.env" PINNY_GIT_URL) || GIT_URL=https://github.com/cnealblack8191/agentpinny.git
+
+exec 9>"/run/lock/pinny-deploy-$PROFILE.lock"
+flock -n 9 || die "another pinny-deploy or pinny-rollback of $PROFILE is running"
+
+BASE="$PINNY_OPT/$PROFILE"
+MIRROR="$PINNY_OPT/git"
+
+# ---------------------------------------------------------------- fetch
+if [ -d "$MIRROR" ]; then
+  run git -C "$MIRROR" remote set-url origin "$GIT_URL"
+  run git -C "$MIRROR" fetch --prune --tags --quiet origin
+else
+  run git clone --mirror --quiet "$GIT_URL" "$MIRROR"
+fi
+SHA=$(git -C "$MIRROR" rev-parse --verify --quiet "$REF^{commit}") || die "unknown git ref '$REF'"
+SHORT=${SHA:0:12}
+VERSION="git:$SHORT"
+REL="$BASE/releases/$(date -u +%Y%m%dT%H%M%SZ)-$SHORT"
+PREVIOUS=$(current_release "$PROFILE")
+[ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ] || PREVIOUS=""
+
+if [ "$TRAIN" = auto ]; then
+  if [ -n "$PREVIOUS" ] && [ -e "$PREVIOUS/TRAIN" ]; then TRAIN=yes; else TRAIN=no; fi
+fi
+
+# ---------------------------------------------------------------- build
+# shellcheck disable=SC2317  # called by the ERR trap
+cleanup_failed_build() {
+  warn "the build failed; removing $REL (nothing was switched)"
+  rm -rf -- "$REL"
+}
+trap cleanup_failed_build ERR
+
+say "Building $VERSION ($REF) for $PROFILE in $REL"
+run install -d -m 0755 "$BASE/releases" "$REL/src"
+printf '+ git archive %s | tar -x -C %s\n' "$SHORT" "$REL/src"
+git -C "$MIRROR" archive --format=tar "$SHA" | tar -x -C "$REL/src"
+
+export PIP_CACHE_DIR=/var/cache/pinny/pip PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1
+run python3.12 -m venv "$REL/venv"
+run "$REL/venv/bin/pip" install --quiet --require-hashes --no-deps -r "$REL/src/requirements.lock.txt"
+if [ "$TRAIN" = yes ]; then
+  mapfile -t TRAIN_PINS < <(python3 - "$REL/src/pyproject.toml" <<'PY'
+import sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    extra = tomllib.load(f)["project"]["optional-dependencies"].get("train", [])
+print("\n".join(extra))
+PY
+)
+  [ "${#TRAIN_PINS[@]}" -gt 0 ] || die "pyproject.toml has no 'train' extra"
+  run "$REL/venv/bin/pip" install --quiet --index-url "$TORCH_INDEX" "${TRAIN_PINS[@]}"
+  touch "$REL/TRAIN"
+fi
+# The code runs from src/ (web/ is found next to pinny/), like an editable install.
+SITE=$("$REL/venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+printf '%s\n' "$REL/src" >"$SITE/pinny-src.pth"
+"$REL/venv/bin/python" -m compileall -q "$REL/src/pinny" >/dev/null
+printf 'PINNY_VERSION=%s\n' "$VERSION" >"$REL/release.env"
+printf '%s\n' "$REF" >"$REL/GIT_REF"
+printf '%s\n' "$SHA" >"$REL/GIT_SHA"
+chown -R root:root "$REL"
+chmod -R u+rwX,go+rX,go-w "$REL"
+
+say "Checking the release"
+"$REL/venv/bin/python" -c 'import pinny.viewer.server, pinny.jobs.worker'
+run_as_web "$PROFILE" "$REL" "$REL/venv/bin/python" -c '
+from pinny.viewer.settings import Settings
+s = Settings.from_env()
+print("settings ok:", s.env, s.origin, "jobs:", s.jobs, "version:", s.version)'
+
+if [ "$RUN_TESTS" = yes ]; then
+  say "Running the test suite (as user nobody)"
+  TEST_TMP=$(mktemp -d)
+  chown nobody:nogroup "$TEST_TMP"
+  # shellcheck disable=SC2016  # $1 and $2 expand in the inner bash
+  runuser -u nobody -- env -i PATH=/usr/bin:/bin HOME="$TEST_TMP" TMPDIR="$TEST_TMP" LANG=C.UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1 bash -c 'cd "$1" && "$2" -m pytest -q -p no:cacheprovider tests evaluation/tests' \
+    _ "$REL/src" "$REL/venv/bin/python"
+  rm -rf -- "$TEST_TMP"
+fi
+trap - ERR
+
+# ---------------------------------------------------------------- switch
+LAST_SNAPSHOT=""
+snapshot_dbs "$PROFILE"
+switch_current "$PROFILE" "$REL"
+if [ -n "$PREVIOUS" ]; then
+  run ln -sfn "$PREVIOUS" "$BASE/previous"
+fi
+if enable_units "$PROFILE" "$REL" && restart_units "$PROFILE" && verify_release "$PROFILE" "$VERSION"; then
+  say "Deployed $VERSION to $PROFILE."
+  # Keep the newest releases, and always current and previous.
+  keep_prev=$(readlink -f "$BASE/previous" 2>/dev/null || true)
+  n=0
+  while IFS= read -r dir; do
+    n=$((n + 1))
+    if [ "$n" -gt "$KEEP_RELEASES" ] && [ "$dir" != "$REL" ] && [ "$dir" != "$keep_prev" ]; then
+      run rm -rf -- "$dir"
+    fi
+  done < <(find "$BASE/releases" -mindepth 1 -maxdepth 1 -type d | sort -r)
+  exit 0
+fi
+
+show_recent_logs "$PROFILE"
+if [ -z "$PREVIOUS" ]; then
+  run systemctl stop "pinny@$PROFILE.target"
+  die "the new release failed its checks and there is no previous release to go back to (see the logs above)"
+fi
+warn "the new release failed its checks: switching $PROFILE back to $PREVIOUS"
+switch_current "$PROFILE" "$PREVIOUS"
+run ln -sfn "$REL" "$BASE/previous"
+OLD_VERSION=$(release_version "$PREVIOUS")
+if enable_units "$PROFILE" "$PREVIOUS" && restart_units "$PROFILE" && verify_release "$PROFILE" "$OLD_VERSION"; then
+  if [ -n "$LAST_SNAPSHOT" ]; then
+    warn "if the new release changed a database schema, restore the databases from $LAST_SNAPSHOT (docs/deployment.md, 'Roll back')"
+  fi
+  die "deploy of $VERSION failed; $PROFILE is back on $OLD_VERSION"
+fi
+die "deploy of $VERSION failed, and the previous release $OLD_VERSION is not healthy either (see docs/deployment.md, 'Alerts')"

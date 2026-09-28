@@ -1,0 +1,22 @@
+{
+  "PolicyType": "EBS_SNAPSHOT_MANAGEMENT",
+  "ResourceTypes": ["VOLUME"],
+  "TargetTags": [
+    {
+      "Key": "pinny-snapshots",
+      "Value": "weekly"
+    }
+  ],
+  "Schedules": [
+    {
+      "Name": "weekly-friday-2130-utc",
+      "CopyTags": true,
+      "CreateRule": {
+        "CronExpression": "cron(30 21 ? * FRI *)"
+      },
+      "RetainRule": {
+        "Count": 4
+      }
+    }
+  ]
+}

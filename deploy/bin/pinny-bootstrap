@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# pinny-bootstrap: prepare an Ubuntu 24.04 EC2 instance for Pinny
+# (docs/deployment.md, "First-time setup"). Run as root from a checkout of
+# the repository. Safe to run again: it only changes what is missing or
+# different, and never touches data, settings you edited, or releases.
+#
+#   sudo deploy/bin/pinny-bootstrap                      both profiles
+#   sudo deploy/bin/pinny-bootstrap --profiles staging   staging only (add production later)
+#   sudo deploy/bin/pinny-bootstrap --dry-run            only print what it would change
+#
+# Every command that changes the system is printed with a leading "+".
+set -Eeuo pipefail
+
+DEPLOY_DIR=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+# shellcheck source=pinny-common.sh
+. "$DEPLOY_DIR/bin/pinny-common.sh"
+
+# Signing keys, checked by fingerprint before anything they sign is trusted.
+CADDY_KEY_FPR=65760C51EDEA2017CEA2CA15155B6D79CA56EA34   # Caddy Web Server <contact@caddyserver.com>
+AWSCLI_KEY_FPR=FB5DB77FD5C118B80511ADA8A6310ACC4672475C  # AWS CLI Team <aws-cli@amazon.com>
+POOLS="interactive scan train"
+SCRIPTS="pinny-deploy pinny-rollback pinny-backup pinny-restore pinny-check-alerts pinny-notify pinny-members"
+
+DRY=no
+PROFILES=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY=yes ;;
+    --profiles) PROFILES=${2:?--profiles needs a value, e.g. "staging" or "production staging"}; shift ;;
+    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown option $1" ;;
+  esac
+  shift
+done
+if [ -z "$PROFILES" ]; then
+  PROFILES=$(env_value "$PINNY_ETC/ops.env" PINNY_PROFILES 2>/dev/null || echo "production staging")
+fi
+for p in $PROFILES; do check_profile "$p"; done
+
+if [ "$DRY" = yes ]; then
+  run() { printf '+ %s\n' "$*"; }
+  say "Dry run: nothing is changed."
+fi
+need_root "$@"
+
+# install_file SRC DEST MODE [OWNER:GROUP]: copy when missing or different.
+CHANGED=no
+install_file() {
+  local src=$1 dest=$2 mode=$3 owner=${4:-root:root}
+  if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
+    return 0
+  fi
+  run install -D -m "$mode" -o "${owner%%:*}" -g "${owner##*:}" "$src" "$dest"
+  CHANGED=yes
+}
+
+ensure_group() {
+  getent group "$1" >/dev/null || run groupadd --system "$1"
+}
+
+# ensure_user NAME PRIMARY_GROUP [SUPPLEMENTARY_GROUP...]
+ensure_user() {
+  local name=$1 primary=$2 g
+  shift 2
+  if ! getent passwd "$name" >/dev/null; then
+    run useradd --system --gid "$primary" --home-dir /nonexistent --no-create-home \
+      --shell /usr/sbin/nologin "$name"
+  fi
+  for g in "$@"; do
+    if ! id -nG "$name" 2>/dev/null | tr ' ' '\n' | grep -qx "$g"; then
+      run usermod -a -G "$g" "$name"
+    fi
+  done
+}
+
+# ---------------------------------------------------------------- checks
+say "Checking the machine"
+# shellcheck disable=SC1091
+. /etc/os-release
+if [ "${ID:-}" != ubuntu ] || [ "${VERSION_ID:-}" != 24.04 ]; then
+  warn "this is ${PRETTY_NAME:-unknown}; Pinny's deployment is written for Ubuntu 24.04 LTS"
+fi
+case "$(uname -m)" in
+  x86_64|aarch64) ARCH=$(uname -m) ;;
+  *) die "unsupported CPU architecture $(uname -m)" ;;
+esac
+
+# ---------------------------------------------------------------- packages
+say "Installing Ubuntu packages"
+run apt-get update -q
+run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q ca-certificates curl gnupg git unzip \
+  python3.12 python3.12-venv sqlite3 debian-keyring debian-archive-keyring apt-transport-https
+
+if ! command -v caddy >/dev/null 2>&1; then
+  say "Installing Caddy from its official apt repository"
+  tmp=$(mktemp -d)
+  curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key -o "$tmp/caddy.asc"
+  fpr=$(gpg --show-keys --with-colons "$tmp/caddy.asc" 2>/dev/null | grep '^fpr:' | head -n 1 | cut -d: -f10)
+  [ "$fpr" = "$CADDY_KEY_FPR" ] || die "the Caddy signing key has fingerprint '$fpr', expected $CADDY_KEY_FPR"
+  run gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg "$tmp/caddy.asc"
+  printf '%s\n' "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" >"$tmp/caddy-stable.list"
+  install_file "$tmp/caddy-stable.list" /etc/apt/sources.list.d/caddy-stable.list 0644
+  run apt-get update -q
+  run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q caddy
+  rm -rf -- "$tmp"
+fi
+
+if ! aws --version 2>/dev/null | grep -q '^aws-cli/2'; then
+  say "Installing AWS CLI v2 (signature checked)"
+  tmp=$(mktemp -d)
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH.zip" -o "$tmp/awscliv2.zip"
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH.zip.sig" -o "$tmp/awscliv2.sig"
+  export GNUPGHOME="$tmp/gnupg"
+  install -d -m 0700 "$GNUPGHOME"
+  # The key may come from anywhere: the VALIDSIG check below pins its fingerprint.
+  curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x$AWSCLI_KEY_FPR" -o "$tmp/awscli.asc"
+  gpg --batch --quiet --import "$tmp/awscli.asc"
+  # VALIDSIG ends with the primary key's fingerprint. (gpg may add that the key has expired;
+  # AWS renews its expiry date, and the fingerprint is what proves who signed.)
+  if ! gpg --batch --status-fd 1 --verify "$tmp/awscliv2.sig" "$tmp/awscliv2.zip" 2>/dev/null |
+    grep -Eq "^\[GNUPG:\] VALIDSIG .* $AWSCLI_KEY_FPR\$"; then
+    die "the AWS CLI download's signature did not verify"
+  fi
+  unset GNUPGHOME
+  unzip -q "$tmp/awscliv2.zip" -d "$tmp"
+  run "$tmp/aws/install" --update
+  rm -rf -- "$tmp"
+fi
+
+# ---------------------------------------------------------------- users
+say "Users and groups"
+ensure_group pinny-ops
+for p in $PROFILES; do
+  ensure_group "pinny-$p"
+  ensure_group "pinny-$p-jobs"
+  ensure_group "pinny-$p-worker"
+  ensure_user "pinny-$p" "pinny-$p" "pinny-$p-jobs"
+  ensure_user "pinny-$p-worker" "pinny-$p-worker" "pinny-$p-jobs"
+done
+ops_groups=(caddy)
+for p in $PROFILES; do ops_groups+=("pinny-$p-jobs"); done
+ensure_user pinny-ops pinny-ops "${ops_groups[@]}"
+
+# ---------------------------------------------------------------- directories
+say "Directories"
+run install -d -m 0755 "$PINNY_OPT" "$PINNY_SRV" "$PINNY_ETC" /var/cache/pinny /var/cache/pinny/pip "$PINNY_BACKUP_STATE"
+for p in $PROFILES; do
+  d="$PINNY_SRV/$p"
+  run install -d -m 0755 "$PINNY_OPT/$p" "$PINNY_OPT/$p/releases"
+  # The data directory: the web user owns it; workers may pass through it
+  # (to documents/, tmp/ and jobs/) but not list or read it.
+  run install -d -o "pinny-$p" -g "pinny-$p-jobs" -m 0710 "$d"
+  for sub in documents tmp jobs; do
+    run install -d -o "pinny-$p" -g "pinny-$p-jobs" -m 2770 "$d/$sub"
+  done
+  for sub in crops exports models; do
+    run install -d -o "pinny-$p" -g "pinny-$p" -m 0770 "$d/$sub"
+  done
+  # The job queue lives in jobs/ (writable by the workers); Pinny opens
+  # $PINNY_DATA_DIR/jobs.sqlite3, which points there. SQLite follows the link
+  # and keeps its -wal/-shm files in jobs/ as well.
+  if [ -L "$d/jobs.sqlite3" ]; then
+    :
+  elif [ -e "$d/jobs.sqlite3" ]; then
+    if systemctl is-active --quiet "pinny-web@$p.service" 2>/dev/null; then
+      die "$d/jobs.sqlite3 is a plain file: stop Pinny first (systemctl stop pinny@$p.target), then run this again"
+    fi
+    for f in "$d"/jobs.sqlite3 "$d"/jobs.sqlite3-wal "$d"/jobs.sqlite3-shm; do
+      if [ -e "$f" ]; then run mv "$f" "$d/jobs/"; fi
+    done
+    run chown "pinny-$p:pinny-$p-jobs" "$d"/jobs/jobs.sqlite3*
+    run chmod 0660 "$d"/jobs/jobs.sqlite3*
+    run ln -s jobs/jobs.sqlite3 "$d/jobs.sqlite3"
+  else
+    run ln -s jobs/jobs.sqlite3 "$d/jobs.sqlite3"
+  fi
+  run chown -h "pinny-$p:pinny-$p-jobs" "$d/jobs.sqlite3"
+  run install -d -o "pinny-$p" -g "pinny-$p" -m 0755 "$PINNY_BACKUP_STATE/$p"
+done
+
+# ---------------------------------------------------------------- settings
+say "Settings files in $PINNY_ETC"
+for p in $PROFILES; do
+  if [ ! -e "$PINNY_ETC/$p.env" ]; then
+    run install -m 0640 -o root -g pinny-ops "$DEPLOY_DIR/env/$p.env.example" "$PINNY_ETC/$p.env"
+  fi
+done
+if [ ! -e "$PINNY_ETC/ops.env" ]; then
+  run install -m 0600 -o root -g root "$DEPLOY_DIR/env/ops.env.example" "$PINNY_ETC/ops.env"
+fi
+
+# ---------------------------------------------------------------- scripts
+say "Scripts in /usr/local/sbin"
+for s in $SCRIPTS; do
+  install_file "$DEPLOY_DIR/bin/$s" "/usr/local/sbin/$s" 0755
+done
+install_file "$DEPLOY_DIR/bin/pinny-common.sh" /usr/local/sbin/pinny-common.sh 0644
+
+# ---------------------------------------------------------------- systemd
+say "systemd units in $UNIT_DIR"
+CHANGED=no
+for f in pinny@.target pinny-web@.service pinny-backup@.service pinny-backup@.timer \
+  pinny-restore-test@.service pinny-restore-test@.timer pinny-alert@.service \
+  pinny-check-alerts.service pinny-check-alerts.timer; do
+  install_file "$DEPLOY_DIR/systemd/$f" "$UNIT_DIR/$f" 0644
+done
+# One worker unit file per pool: %j in the unit name is the pool.
+for pool in $POOLS; do
+  install_file "$DEPLOY_DIR/systemd/pinny-worker@.service" "$UNIT_DIR/pinny-worker-$pool@.service" 0644
+done
+for dropin in "$DEPLOY_DIR"/systemd/*.d; do
+  for f in "$dropin"/*.conf; do
+    install_file "$f" "$UNIT_DIR/$(basename "$dropin")/$(basename "$f")" 0644
+  done
+done
+if [ "$CHANGED" = yes ]; then run systemctl daemon-reload; fi
+
+say "journald limits"
+CHANGED=no
+install_file "$DEPLOY_DIR/journald.conf.d/pinny.conf" /etc/systemd/journald.conf.d/pinny.conf 0644
+if [ "$CHANGED" = yes ]; then run systemctl restart systemd-journald; fi
+
+# ---------------------------------------------------------------- caddy
+say "Caddy"
+if [ -f /etc/caddy/Caddyfile ] && [ ! -e /etc/caddy/Caddyfile.package-default ] &&
+  ! cmp -s "$DEPLOY_DIR/caddy/Caddyfile" /etc/caddy/Caddyfile; then
+  run cp -p /etc/caddy/Caddyfile /etc/caddy/Caddyfile.package-default
+fi
+CHANGED=no
+install_file "$DEPLOY_DIR/caddy/Caddyfile" /etc/caddy/Caddyfile 0644
+run install -d -o caddy -g caddy -m 0750 /var/log/caddy
+if [ "$DRY" = no ]; then
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 ||
+    die "caddy validate failed: run 'caddy validate --config /etc/caddy/Caddyfile' to see why"
+fi
+run systemctl enable --quiet caddy
+if [ "$CHANGED" = yes ]; then run systemctl reload-or-restart caddy; else run systemctl start caddy; fi
+
+# ---------------------------------------------------------------- timers
+say "Timers"
+run systemctl enable --now --quiet pinny-check-alerts.timer
+if [ ! -f "$PINNY_ETC/ops.env" ] || grep -q CHANGE_ME "$PINNY_ETC/ops.env"; then
+  OPS_READY=no
+  warn "$PINNY_ETC/ops.env still has CHANGE_ME values: backups are not scheduled yet"
+else
+  OPS_READY=yes
+  for p in $PROFILES; do
+    run systemctl enable --now --quiet "pinny-backup@$p.timer" "pinny-restore-test@$p.timer"
+  done
+fi
+
+# ---------------------------------------------------------------- done
+say "Bootstrap finished."
+if snap services amazon-ssm-agent 2>/dev/null | grep -q active; then
+  echo "    The SSM agent is running: you can connect with Session Manager."
+fi
+cat <<EOF
+
+Next steps (docs/deployment.md):
+EOF
+n=1
+for p in $PROFILES; do
+  if grep -q CHANGE_ME "$PINNY_ETC/$p.env" 2>/dev/null; then
+    echo "  $n. Edit $PINNY_ETC/$p.env: set PINNY_ADMIN_EMAILS to your email."
+    n=$((n + 1))
+  fi
+done
+if [ "$OPS_READY" = no ]; then
+  echo "  $n. Edit $PINNY_ETC/ops.env (AWS region, bucket, alert topic), then run this script again."
+  n=$((n + 1))
+fi
+for p in $PROFILES; do
+  echo "  $n. Deploy $p:   sudo pinny-deploy $p training-site"
+  n=$((n + 1))
+done
+for p in $PROFILES; do
+  echo "  $n. First admin sign-in for $p:   sudo pinny-members $p setup-link YOUR-EMAIL"
+  n=$((n + 1))
+done

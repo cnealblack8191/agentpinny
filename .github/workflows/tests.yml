@@ -24,3 +24,35 @@ jobs:
           --manifest evaluation/fixtures/corpus_mini/manifest.json
           --baseline evaluation/fixtures/corpus_mini/baseline.json
           --max-drop 0.01
+
+  # The deployment package (deploy/, docs/deployment.md).
+  deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Known vulnerabilities in the locked dependencies (pip-audit)
+        run: |
+          python -m pip install pip-audit==2.10.1
+          pip-audit --require-hashes --disable-pip -r requirements.lock.txt
+      - name: Scripts (bash -n, shellcheck, py_compile)
+        run: deploy/ci/lint-scripts.sh
+      - name: systemd units (systemd-analyze verify)
+        run: sudo deploy/ci/verify-units.sh
+      - name: Install Caddy from its apt repository (signing key checked by fingerprint)
+        run: |
+          curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key -o caddy.asc
+          fpr=$(gpg --show-keys --with-colons caddy.asc | grep '^fpr:' | head -n 1 | cut -d: -f10)
+          test "$fpr" = 65760C51EDEA2017CEA2CA15155B6D79CA56EA34
+          sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg caddy.asc
+          echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" \
+            | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+          sudo apt-get update -q
+          sudo apt-get install -y -q caddy
+      - name: Caddyfile (caddy validate, caddy fmt)
+        run: |
+          # as root: validating opens the log files under /var/log/caddy
+          sudo caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
+          caddy fmt --diff deploy/caddy/Caddyfile

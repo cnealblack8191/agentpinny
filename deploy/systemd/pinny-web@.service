@@ -1,0 +1,70 @@
+# Pinny web process for one profile: python -m pinny.viewer on 127.0.0.1.
+# The instance name is the profile (production or staging). Only Caddy
+# talks to it. Layout (docs/deployment.md):
+#   /etc/pinny/%i.env         settings (PINNY_*), edited by the owner
+#   /opt/pinny/%i/current/    the running release: src/, venv/, release.env
+#   /srv/pinny/%i/            PINNY_DATA_DIR
+[Unit]
+Description=Pinny web (%i)
+PartOf=pinny@%i.target
+After=network.target
+
+[Service]
+Type=simple
+User=pinny-%i
+Group=pinny-%i
+SupplementaryGroups=pinny-%i-jobs
+EnvironmentFile=/etc/pinny/%i.env
+# PINNY_VERSION of the release, written by pinny-deploy.
+EnvironmentFile=/opt/pinny/%i/current/release.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HOME=/nonexistent
+# Pinny trusts X-Forwarded-For / X-Forwarded-Proto only from 127.0.0.1 (Caddy).
+WorkingDirectory=/srv/pinny/%i
+ExecStart=/opt/pinny/%i/current/venv/bin/python -m pinny.viewer --host 127.0.0.1 --port ${PINNY_PORT}
+Restart=on-failure
+RestartSec=3
+# Exit 2 means Pinny refused to start (missing or bad settings); retrying will not help.
+RestartPreventExitStatus=2
+TimeoutStopSec=20
+# Files under documents/, tmp/ and jobs/ stay usable by the workers (group
+# pinny-%i-jobs, set by the setgid directories). Files in the data directory
+# itself (site.sqlite3, pinny.sqlite3) get group pinny-%i, which the
+# workers are not in.
+UMask=0007
+
+# Resources: a 2 vCPU / 8 GB instance shared by both profiles.
+MemoryMax=1536M
+CPUQuota=100%
+TasksMax=256
+
+# Sandbox.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/srv/pinny/%i
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# The web process only answers Caddy on loopback; it never connects out.
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=pinny@%i.target

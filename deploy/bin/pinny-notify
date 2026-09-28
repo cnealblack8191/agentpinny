@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# pinny-notify SUBJECT MESSAGE: email an alert through the SNS topic
+# $PINNY_ALERT_TOPIC_ARN (from /etc/pinny/ops.env), using the instance's
+# IAM role. Used by pinny-alert@.service when a backup or restore test fails.
+#
+#   sudo bash -c 'set -a; . /etc/pinny/ops.env; pinny-notify "Pinny test" "Alerts work."'
+set -euo pipefail
+
+subject=${1:?usage: pinny-notify SUBJECT MESSAGE}
+message=${2:?usage: pinny-notify SUBJECT MESSAGE}
+topic=${PINNY_ALERT_TOPIC_ARN:-}
+
+logger -t pinny-notify -- "$subject: $message" 2>/dev/null || true
+if [ -z "$topic" ] || [[ $topic == *CHANGE_ME* ]]; then
+  echo "pinny-notify: PINNY_ALERT_TOPIC_ARN is not set; not emailed: $subject" >&2
+  exit 1
+fi
+aws sns publish --topic-arn "$topic" --subject "${subject:0:99}" --message "$message" \
+  --query MessageId --output text

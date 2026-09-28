@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# pinny-rollback: switch a profile back to an earlier release.
+#
+#   sudo pinny-rollback production              back to the previous release
+#   sudo pinny-rollback production --list       show the releases on disk
+#   sudo pinny-rollback production 20261001T101500Z-3f2a9c1d0b7e
+#                                               a specific release
+#
+# Code only: the data directory is not touched. If the release you leave
+# changed a database schema, restore the databases from the snapshot that
+# pinny-deploy took (docs/deployment.md, "Roll back").
+set -Eeuo pipefail
+
+# shellcheck source=pinny-common.sh
+. "$(dirname "$(readlink -f "$0")")/pinny-common.sh"
+
+[ $# -ge 1 ] || { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+PROFILE=$1
+need_root "$@"
+check_profile "$PROFILE"
+BASE="$PINNY_OPT/$PROFILE"
+CURRENT=$(current_release "$PROFILE")
+
+if [ "${2:-}" = --list ]; then
+  for dir in $(find "$BASE/releases" -mindepth 1 -maxdepth 1 -type d | sort -r); do
+    mark=""
+    [ "$dir" = "$CURRENT" ] && mark=" (current)"
+    [ "$dir" = "$(readlink -f "$BASE/previous" 2>/dev/null || true)" ] && mark=" (previous)"
+    printf '%s  %s  %s%s\n' "$(basename "$dir")" "$(release_version "$dir")" "$(cat "$dir/GIT_REF" 2>/dev/null || true)" "$mark"
+  done
+  exit 0
+fi
+
+if [ -n "${2:-}" ]; then
+  TARGET="$BASE/releases/$2"
+else
+  TARGET=$(readlink -f "$BASE/previous" 2>/dev/null || true)
+fi
+if [ -z "$TARGET" ] || [ ! -d "$TARGET" ]; then
+  die "no such release ('${2:-previous}'); see: pinny-rollback $PROFILE --list"
+fi
+[ "$TARGET" != "$CURRENT" ] || die "$PROFILE is already running $(basename "$TARGET")"
+
+exec 9>"/run/lock/pinny-deploy-$PROFILE.lock"
+flock -n 9 || die "another pinny-deploy or pinny-rollback of $PROFILE is running"
+
+VERSION=$(release_version "$TARGET")
+say "Rolling $PROFILE back to $(basename "$TARGET") ($VERSION)"
+switch_current "$PROFILE" "$TARGET"
+if [ -n "$CURRENT" ]; then
+  run ln -sfn "$CURRENT" "$BASE/previous"
+fi
+if ! { enable_units "$PROFILE" "$TARGET" && restart_units "$PROFILE" && verify_release "$PROFILE" "$VERSION"; }; then
+  show_recent_logs "$PROFILE"
+  die "$PROFILE now runs $VERSION but it is not healthy (see the logs above)"
+fi
+say "$PROFILE runs $VERSION."
+latest=$(find "$PINNY_BACKUP_STATE/$PROFILE/pre-deploy" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1)
+if [ -n "$latest" ]; then
+  echo "If the release you left changed the database schema, restore the databases from $latest"
+  echo "(docs/deployment.md, 'Roll back')."
+fi

@@ -1,0 +1,283 @@
+#!/usr/bin/python3
+"""pinny-restore: restore a pinny-backup archive and verify it (docs/deployment.md, "Restore").
+
+    pinny-restore latest --profile production              newest backup -> a new scratch directory
+    pinny-restore latest --profile production --cleanup    the same, then delete it (restore test)
+    pinny-restore s3://BUCKET/pinny/production/pinny-production-20261001T031000Z.tar.gz --target /var/tmp/r
+    pinny-restore /path/to/pinny-staging-....tar.gz --target /var/tmp/r
+
+By default it restores into a new scratch directory and never over live
+data. Restoring over a live data directory needs --force, every Pinny unit
+of that profile stopped, and root; the old directory is kept next to it
+as <dir>.before-restore-<time>.
+
+Verification (a failure exits 1): the archive's sha256 against its
+.sha256 file (when present), every file's size and sha256 against
+MANIFEST.json, and PRAGMA integrity_check on every database.
+
+Standard library only (system python3); S3 downloads use the AWS CLI.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import grp
+import hashlib
+import json
+import os
+import pwd
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tarfile
+import tempfile
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+
+class RestoreError(RuntimeError):
+    pass
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def integrity(path: Path) -> List[str]:
+    db = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        return [r[0] for r in db.execute("PRAGMA integrity_check").fetchall()]
+    finally:
+        db.close()
+
+
+# ------------------------------------------------------------------ sources
+def default_dest(profile: Optional[str]) -> Optional[str]:
+    if os.environ.get("PINNY_BACKUP_DEST"):
+        return os.environ["PINNY_BACKUP_DEST"]
+    bucket = (os.environ.get("PINNY_BACKUP_BUCKET") or "").strip()
+    if bucket and "CHANGE_ME" not in bucket and profile:
+        return f"s3://{bucket}/pinny/{profile}"
+    return None
+
+
+def latest_name(dest: str) -> str:
+    """Base name (without .manifest.json) of the newest complete backup at dest."""
+    if dest.startswith("s3://"):
+        out = subprocess.run(["aws", "s3", "ls", dest.rstrip("/") + "/"], check=True,
+                             capture_output=True, text=True).stdout
+        names = [line.split()[-1] for line in out.splitlines() if line.strip()]
+    elif dest.startswith("file://"):
+        d = Path(dest[len("file://"):])
+        names = [p.name for p in d.iterdir()] if d.is_dir() else []
+    else:
+        raise RestoreError(f"Unknown backup location {dest!r}.")
+    done = sorted(n[:-len(".manifest.json")] for n in names if n.endswith(".manifest.json"))
+    if not done:
+        raise RestoreError(f"No complete backup (no *.manifest.json) at {dest}.")
+    return done[-1]
+
+
+def fetch(source: str, work: Path) -> Tuple[Path, Optional[Path]]:
+    """Local paths of the archive and its .sha256 file (None if missing)."""
+    if source.startswith("s3://"):
+        archive = work / source.rsplit("/", 1)[1]
+        subprocess.run(["aws", "s3", "cp", "--only-show-errors", "--no-progress", source, str(archive)], check=True)
+        sums = work / (archive.name + ".sha256")
+        r = subprocess.run(["aws", "s3", "cp", "--only-show-errors", "--no-progress", source + ".sha256", str(sums)])
+        return archive, sums if r.returncode == 0 else None
+    path = Path(source[len("file://"):] if source.startswith("file://") else source)
+    if not path.is_file():
+        raise RestoreError(f"No such backup file: {path}")
+    sums = path.with_name(path.name + ".sha256")
+    return path, sums if sums.is_file() else None
+
+
+def check_archive_sum(archive: Path, sums: Optional[Path]) -> None:
+    if sums is None:
+        log("  no .sha256 file next to the archive; skipping the archive checksum")
+        return
+    want = sums.read_text().split()[0].lower()
+    got = sha256_file(archive)
+    if got != want:
+        raise RestoreError(f"Archive checksum mismatch: {archive.name} is {got}, expected {want}.")
+    log(f"  archive sha256 ok ({got[:16]}...)")
+
+
+# ------------------------------------------------------------------ restore
+def extract(archive: Path, into: Path) -> Dict:
+    """Extract data/ and MANIFEST.json into ``into``; returns the manifest."""
+    into.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, "r:gz") as tar:
+        members = []
+        for m in tar.getmembers():
+            if m.name != "MANIFEST.json" and not m.name.startswith("data/"):
+                raise RestoreError(f"Unexpected entry in the archive: {m.name!r}")
+            members.append(m)
+        # "data" filter: no absolute paths, no "..", no links leaving the tree, no devices.
+        tar.extractall(into, members=members, filter="data")
+    mpath = into / "MANIFEST.json"
+    if not mpath.is_file():
+        raise RestoreError("The archive has no MANIFEST.json.")
+    return json.loads(mpath.read_text())
+
+
+def verify(data: Path, manifest: Dict) -> Dict[str, int]:
+    problems: List[str] = []
+    for f in manifest.get("files", []):
+        p = data / f["path"]
+        if not p.is_file():
+            problems.append(f"missing file {f['path']}")
+        elif p.stat().st_size != f["size"] or sha256_file(p) != f["sha256"]:
+            problems.append(f"checksum mismatch {f['path']}")
+    for d in manifest.get("databases", []):
+        p = data / d["path"]
+        if not p.is_file():
+            problems.append(f"missing database {d['path']}")
+            continue
+        if sha256_file(p) != d["sha256"]:
+            problems.append(f"checksum mismatch {d['path']}")
+        result = integrity(p)
+        if result != ["ok"]:
+            problems.append(f"integrity_check failed on {d['path']}: {'; '.join(result[:3])}")
+        else:
+            log(f"  {d['path']}: integrity_check ok")
+    for s in manifest.get("symlinks", []):
+        p = data / s["path"]
+        if not p.is_symlink() or os.readlink(p) != s["target"]:
+            problems.append(f"missing symlink {s['path']}")
+    if problems:
+        raise RestoreError("Verification failed:\n  " + "\n  ".join(problems[:50]))
+    return {"files": len(manifest.get("files", [])), "databases": len(manifest.get("databases", []))}
+
+
+def units_active(profile: str) -> List[str]:
+    active = []
+    for unit in ("pinny-web", "pinny-worker-interactive", "pinny-worker-scan", "pinny-worker-train"):
+        name = f"{unit}@{profile}.service"
+        r = subprocess.run(["systemctl", "is-active", "--quiet", name], stderr=subprocess.DEVNULL)
+        if r.returncode == 0:
+            active.append(name)
+    return active
+
+
+def apply_layout(data: Path, profile: str) -> None:
+    """Ownership and modes that pinny-bootstrap gives a live data directory."""
+    web = pwd.getpwnam(f"pinny-{profile}")
+    web_gid = grp.getgrnam(f"pinny-{profile}").gr_gid
+    jobs_gid = grp.getgrnam(f"pinny-{profile}-jobs").gr_gid
+    shared = {"documents", "tmp", "jobs"}
+    for sub in shared | {"crops", "exports", "models"}:
+        (data / sub).mkdir(exist_ok=True)
+    os.chown(data, web.pw_uid, jobs_gid)
+    os.chmod(data, 0o710)
+    for root, dirs, files in os.walk(data):
+        rootp = Path(root)
+        rel = rootp.relative_to(data)
+        top = rel.parts[0] if rel.parts else None
+        for name in dirs + files:
+            p = rootp / name
+            first = top or name
+            gid = jobs_gid if first in shared else web_gid
+            os.chown(p, web.pw_uid, gid, follow_symlinks=False)
+            if p.is_symlink():
+                continue
+            if p.is_dir():
+                os.chmod(p, 0o2770 if first in shared else 0o770)
+            else:
+                os.chmod(p, 0o660)
+    link = data / "jobs.sqlite3"
+    if not link.exists() and not link.is_symlink():
+        link.symlink_to("jobs/jobs.sqlite3")
+        os.chown(link, web.pw_uid, jobs_gid, follow_symlinks=False)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="pinny-restore", description=__doc__.split("\n\n")[0])
+    ap.add_argument("source", help="'latest', s3://..., file:///... or a local .tar.gz")
+    ap.add_argument("--profile", help="with 'latest': which profile's backups; with --force: whose data dir")
+    ap.add_argument("--target", help="directory to restore into (default: a new scratch directory)")
+    ap.add_argument("--work-dir", help="where downloads go (default: a temporary directory)")
+    ap.add_argument("--force", action="store_true",
+                    help="restore over an existing, non-empty target (services must be stopped)")
+    ap.add_argument("--cleanup", action="store_true", help="delete the restored copy after verifying it")
+    args = ap.parse_args(argv)
+
+    stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = Path(args.target) if args.target else Path(tempfile.mkdtemp(prefix="pinny-restore-",
+                                                                         dir="/var/tmp")) / "data"
+    target = target.absolute()
+    live = target.exists() and any(target.iterdir())
+    if live and not args.force:
+        print(f"pinny-restore: {target} is not empty. Restore into a new directory, or add --force "
+              "(only with every Pinny unit of that profile stopped).", file=sys.stderr)
+        return 2
+    if live:
+        if os.geteuid() != 0 or not args.profile:
+            print("pinny-restore: --force over a live directory needs root and --profile.", file=sys.stderr)
+            return 2
+        running = units_active(args.profile)
+        if running:
+            print(f"pinny-restore: stop these first: sudo systemctl stop pinny@{args.profile}.target "
+                  f"({', '.join(running)} running).", file=sys.stderr)
+            return 2
+
+    work_ctx = tempfile.TemporaryDirectory(prefix="pinny-restore-dl-", dir=args.work_dir)
+    # Extract next to the target, so the final move is a rename on one filesystem.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".pinny-restore-", dir=target.parent))
+    try:
+        work = Path(work_ctx.name)
+        source = args.source
+        if source == "latest":
+            dest = default_dest(args.profile)
+            if not dest:
+                print("pinny-restore: 'latest' needs --profile and PINNY_BACKUP_BUCKET (or PINNY_BACKUP_DEST).",
+                      file=sys.stderr)
+                return 2
+            source = f"{dest.rstrip('/')}/{latest_name(dest)}.tar.gz"
+        log(f"Restoring {source}")
+        archive, sums = fetch(source, work)
+        check_archive_sum(archive, sums)
+        manifest = extract(archive, staging)
+        counts = verify(staging / "data", manifest)
+        log(f"  verified {counts['files']} file(s) and {counts['databases']} database(s) "
+            f"(backup of {manifest.get('profile')} at {manifest.get('created_at')}, "
+            f"version {manifest.get('pinny_version')})")
+        if args.cleanup:
+            log("Restore test passed; the restored copy is deleted (--cleanup).")
+            return 0
+        if live:
+            aside = target.with_name(f"{target.name}.before-restore-{stamp}")
+            os.rename(target, aside)
+            log(f"  moved the old data directory to {aside}")
+        os.rename(staging / "data", target)
+        if args.force and args.profile and os.geteuid() == 0:
+            apply_layout(target, args.profile)
+            log(f"  set owners and modes for profile {args.profile}")
+        log(f"Restored into {target}")
+        if live:
+            log(f"Start Pinny again with: sudo systemctl start pinny@{args.profile}.target")
+        return 0
+    except (RestoreError, sqlite3.Error, OSError, tarfile.TarError, subprocess.CalledProcessError) as exc:
+        print(f"pinny-restore FAILED: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        work_ctx.cleanup()
+        shutil.rmtree(staging, ignore_errors=True)
+        if args.cleanup and not args.target:
+            shutil.rmtree(target.parent, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

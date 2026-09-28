@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# pinny-members PROFILE COMMAND...: manage sign-in members on the server.
+# Runs "python -m pinny.viewer.members COMMAND..." as the profile's web
+# user, with the profile's settings (so set-password links use its address).
+#
+#   sudo pinny-members production list
+#   sudo pinny-members production add someone@ecinc.us --role reviewer
+#   sudo pinny-members production setup-link someone@ecinc.us   one-time link to choose a password
+#   sudo pinny-members production reset someone@ecinc.us        forgot password: a new link
+#   sudo pinny-members production remove someone@ecinc.us
+#   sudo pinny-members production sign-out-all                  end every session
+set -euo pipefail
+
+# shellcheck source=pinny-common.sh
+. "$(dirname "$(readlink -f "$0")")/pinny-common.sh"
+
+[ $# -ge 2 ] || { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+PROFILE=$1
+shift
+need_root "$PROFILE" "$@"
+check_profile "$PROFILE"
+REL=$(current_release "$PROFILE")
+[ -n "$REL" ] || die "no release of $PROFILE is deployed yet (run pinny-deploy first)"
+run_as_web "$PROFILE" "$REL" "$REL/venv/bin/python" -m pinny.viewer.members "$@"

@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily Pinny backup (%i)
+
+[Timer]
+# The instance runs 07:00-19:00 New York time on weekdays and is stopped
+# otherwise, so the daily backup runs at 18:15 New York time, Monday to
+# Friday (staging at 18:35, see pinny-backup@staging.timer.d/). It usually
+# takes a few minutes. Persistent=true: a run missed while the instance was
+# off happens a few minutes after the next boot.
+OnCalendar=Mon..Fri *-*-* 18:15:00 America/New_York
+RandomizedDelaySec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

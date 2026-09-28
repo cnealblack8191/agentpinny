@@ -1,0 +1,30 @@
+{
+  "Rules": [
+    {
+      "ID": "pinny-backups-30-days",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "pinny/"
+      },
+      "Expiration": {
+        "Days": 30
+      },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 30
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 7
+      }
+    },
+    {
+      "ID": "remove-expired-delete-markers",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "pinny/"
+      },
+      "Expiration": {
+        "ExpiredObjectDeleteMarker": true
+      }
+    }
+  ]
+}

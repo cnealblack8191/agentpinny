@@ -1,0 +1,362 @@
+#!/usr/bin/python3
+"""pinny-backup: back up one Pinny data directory (docs/deployment.md, "Backups").
+
+    pinny-backup --profile production                 nightly run (systemd pinny-backup@production)
+    pinny-backup --profile staging --no-upload        archive stays in the work directory
+    pinny-backup --data-dir D --dest file:///srv/x    back up to a local directory instead of S3
+    pinny-backup --profile production --dbs-only --out DIR
+                                                      databases only, into DIR (pinny-deploy runs this
+                                                      before switching releases)
+
+What goes into the archive (pinny-<profile>-<UTC time>.tar.gz):
+
+* every ``*.sqlite3`` database under the data directory, copied with
+  SQLite's online backup API (never a plain copy of a live database), then
+  checked with ``PRAGMA integrity_check``;
+* every other file (documents/, models/, crops/, exports/, ...) except
+  ``tmp/`` and SQLite's -wal/-shm/-journal files;
+* ``MANIFEST.json``: size and sha256 of every file, and each database's
+  integrity result.
+
+Next to the archive: ``<name>.tar.gz.sha256`` (sha256sum format) and
+``<name>.manifest.json``. The upload order is archive, checksum, manifest,
+so a manifest in the bucket means the backup is complete.
+
+Destination: ``--dest``, else ``$PINNY_BACKUP_DEST``, else
+``s3://$PINNY_BACKUP_BUCKET/pinny/<profile>``. S3 uploads use the AWS CLI
+with the instance's IAM role. Standard library only (system python3).
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import hashlib
+import io
+import json
+import os
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tarfile
+from pathlib import Path
+from typing import Dict, List, Optional
+
+FORMAT = 1
+DB_SUFFIX = ".sqlite3"
+SKIP_SUFFIXES = tuple(DB_SUFFIX + s for s in ("-wal", "-shm", "-journal"))
+SKIP_TOP = {"tmp"}  # upload staging: never needed after a restore
+
+
+class BackupError(RuntimeError):
+    pass
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def utc_stamp(now: Optional[_dt.datetime] = None) -> str:
+    return (now or _dt.datetime.now(_dt.timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def integrity(path: Path) -> List[str]:
+    db = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        return [r[0] for r in db.execute("PRAGMA integrity_check").fetchall()]
+    finally:
+        db.close()
+
+
+def snapshot_db(src: Path, dst: Path) -> None:
+    """Copy a live database with SQLite's online backup API into a single,
+    self-contained file (rollback journal, not WAL), then check it."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        dst.unlink()
+    # mode=rw: never create a database that is not there.
+    source = sqlite3.connect(f"{src.resolve().as_uri()}?mode=rw", uri=True, timeout=60)
+    try:
+        target = sqlite3.connect(dst)
+        try:
+            source.backup(target)
+            target.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            target.close()
+    finally:
+        source.close()
+    result = integrity(dst)
+    if result != ["ok"]:
+        raise BackupError(f"{src}: PRAGMA integrity_check failed on the copy: {'; '.join(result[:5])}")
+
+
+def is_db(path: Path) -> bool:
+    return path.name.endswith(DB_SUFFIX) and path.is_file() and not path.is_symlink()
+
+
+def walk(data_dir: Path):
+    """(path, relative path) for every directory and file to back up, sorted."""
+    for root, dirs, files in os.walk(data_dir):
+        rootp = Path(root)
+        rel_root = rootp.relative_to(data_dir)
+        if rel_root == Path("."):
+            dirs[:] = [d for d in dirs if d not in SKIP_TOP]
+        dirs.sort()
+        for d in dirs:
+            yield rootp / d, rel_root / d
+        for name in sorted(files):
+            if name.endswith(SKIP_SUFFIXES):
+                continue
+            yield rootp / name, rel_root / name
+
+
+class HashingReader:
+    def __init__(self, f) -> None:
+        self.f = f
+        self.h = hashlib.sha256()
+
+    def read(self, size: int = -1) -> bytes:
+        b = self.f.read(size)
+        self.h.update(b)
+        return b
+
+
+def data_size(data_dir: Path) -> int:
+    total = 0
+    for path, _ in walk(data_dir):
+        try:
+            if path.is_file() and not path.is_symlink():
+                total += path.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def check_space(work_dir: Path, needed: int) -> None:
+    st = os.statvfs(work_dir)
+    free = st.f_bavail * st.f_frsize
+    want = int(needed * 1.1) + 512 * 1024 * 1024
+    if free < want:
+        raise BackupError(f"Not enough free space in {work_dir}: {free // 2**20} MiB free, "
+                          f"about {want // 2**20} MiB needed.")
+
+
+def build_archive(data_dir: Path, work_dir: Path, name: str, meta: Dict) -> Dict:
+    """Write <work_dir>/<name>.tar.gz and return the manifest."""
+    data_dir = data_dir.resolve()
+    snaps = work_dir / f"{name}.dbs"
+    archive = work_dir / f"{name}.tar.gz"
+    manifest: Dict = dict(meta, format=FORMAT, name=name, databases=[], files=[], symlinks=[], skipped=[])
+    try:
+        with tarfile.open(archive, "w:gz", compresslevel=6) as tar:
+            for path, rel in walk(data_dir):
+                arc = f"data/{rel.as_posix()}"
+                try:
+                    if path.is_symlink():
+                        target = os.readlink(path)
+                        resolved = (path.parent / target).resolve()
+                        if os.path.isabs(target) or data_dir not in resolved.parents:
+                            manifest["skipped"].append({"path": rel.as_posix(), "reason": "symlink outside data dir"})
+                            continue
+                        tar.add(path, arcname=arc, recursive=False)
+                        manifest["symlinks"].append({"path": rel.as_posix(), "target": target})
+                    elif path.is_dir():
+                        tar.add(path, arcname=arc, recursive=False)
+                    elif is_db(path):
+                        snap = snaps / rel
+                        snapshot_db(path, snap)
+                        digest = _add_file(tar, snap, arc)
+                        manifest["databases"].append({"path": rel.as_posix(), "size": snap.stat().st_size,
+                                                      "sha256": digest, "integrity": "ok"})
+                    elif path.is_file():
+                        info = tar.gettarinfo(path, arcname=arc)
+                        digest = _add_file(tar, path, arc)
+                        manifest["files"].append({"path": rel.as_posix(), "size": info.size, "sha256": digest})
+                except FileNotFoundError:  # deleted while we were walking (a document deletion)
+                    manifest["skipped"].append({"path": rel.as_posix(), "reason": "vanished during backup"})
+            body = json.dumps(manifest, indent=1, sort_keys=True).encode()
+            info = tarfile.TarInfo("MANIFEST.json")
+            info.size = len(body)
+            info.mtime = int(_dt.datetime.now().timestamp())
+            info.mode = 0o600
+            tar.addfile(info, io.BytesIO(body))
+    finally:
+        shutil.rmtree(snaps, ignore_errors=True)
+    return manifest
+
+
+def _add_file(tar: tarfile.TarFile, path: Path, arcname: str) -> str:
+    info = tar.gettarinfo(path, arcname=arcname)
+    with open(path, "rb") as f:
+        reader = HashingReader(f)
+        tar.addfile(info, reader)
+    return reader.h.hexdigest()
+
+
+def snapshot_dbs_only(data_dir: Path, out: Path, meta: Dict) -> Dict:
+    """Database snapshots only (sign-in data included), readable by their owner only."""
+    data_dir = data_dir.resolve()
+    old_umask = os.umask(0o077)
+    try:
+        return _snapshot_dbs_only(data_dir, out, meta)
+    finally:
+        os.umask(old_umask)
+
+
+def _snapshot_dbs_only(data_dir: Path, out: Path, meta: Dict) -> Dict:
+    out.mkdir(parents=True, exist_ok=True)
+    os.chmod(out, 0o700)
+    manifest: Dict = dict(meta, format=FORMAT, databases=[])
+    for path, rel in walk(data_dir):
+        if is_db(path):
+            dst = out / rel
+            snapshot_db(path, dst)
+            os.chmod(dst, 0o600)
+            manifest["databases"].append({"path": rel.as_posix(), "size": dst.stat().st_size,
+                                          "sha256": sha256_file(dst), "integrity": "ok"})
+    (out / "MANIFEST.json").write_text(json.dumps(manifest, indent=1, sort_keys=True))
+    return manifest
+
+
+def upload(files: List[Path], dest: str) -> List[str]:
+    """Copy files to dest (s3://bucket/prefix or file:///dir); returns their URLs."""
+    urls = []
+    if dest.startswith("s3://"):
+        base = dest.rstrip("/")
+        for f in files:
+            url = f"{base}/{f.name}"
+            subprocess.run(["aws", "s3", "cp", "--only-show-errors", "--no-progress", str(f), url], check=True)
+            urls.append(url)
+    elif dest.startswith("file://"):
+        target = Path(dest[len("file://"):])
+        target.mkdir(parents=True, exist_ok=True)
+        for f in files:
+            shutil.copyfile(f, target / f.name)
+            urls.append((target / f.name).as_uri())
+    else:
+        raise BackupError(f"Unknown destination {dest!r}: use s3://bucket/prefix or file:///directory.")
+    return urls
+
+
+def default_dest(profile: Optional[str]) -> Optional[str]:
+    if os.environ.get("PINNY_BACKUP_DEST"):
+        return os.environ["PINNY_BACKUP_DEST"]
+    bucket = (os.environ.get("PINNY_BACKUP_BUCKET") or "").strip()
+    if bucket and "CHANGE_ME" not in bucket and profile:
+        return f"s3://{bucket}/pinny/{profile}"
+    return None
+
+
+def release_version(profile: Optional[str]) -> Optional[str]:
+    if os.environ.get("PINNY_VERSION"):
+        return os.environ["PINNY_VERSION"]
+    if profile:
+        try:
+            for line in Path(f"/opt/pinny/{profile}/current/release.env").read_text().splitlines():
+                if line.startswith("PINNY_VERSION="):
+                    return line.split("=", 1)[1].strip()
+        except OSError:
+            pass
+    return None
+
+
+def write_status(state_dir: Path, status: Dict) -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    tmp = state_dir / "status.json.tmp"
+    tmp.write_text(json.dumps(status, indent=1, sort_keys=True))
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, state_dir / "status.json")
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="pinny-backup", description=__doc__.split("\n\n")[0])
+    ap.add_argument("--profile", help="production or staging (sets the defaults below)")
+    ap.add_argument("--data-dir", help="default: $PINNY_DATA_DIR, else /srv/pinny/<profile>")
+    ap.add_argument("--dest", help="s3://bucket/prefix or file:///dir (default: see above)")
+    ap.add_argument("--work-dir", help="where the archive is built (default: <state dir>/work)")
+    ap.add_argument("--state-dir", help="where status.json goes (default: $STATE_DIRECTORY, "
+                                        "else /var/lib/pinny-backup/<profile>)")
+    ap.add_argument("--no-upload", action="store_true", help="build the archive and keep it; upload nothing")
+    ap.add_argument("--keep-local", action="store_true", help="keep the local archive after uploading")
+    ap.add_argument("--dbs-only", action="store_true", help="snapshot the databases only, into --out")
+    ap.add_argument("--out", help="with --dbs-only: the output directory")
+    args = ap.parse_args(argv)
+
+    profile = args.profile
+    data_dir = Path(args.data_dir or os.environ.get("PINNY_DATA_DIR") or
+                    (f"/srv/pinny/{profile}" if profile else ""))
+    if not str(data_dir) or str(data_dir) == "." or not data_dir.is_dir():
+        print(f"pinny-backup: no data directory {str(data_dir)!r}; pass --data-dir or --profile.", file=sys.stderr)
+        return 2
+    label = profile or data_dir.name
+    now = _dt.datetime.now(_dt.timezone.utc)
+    meta = {"profile": label, "created_at": now.isoformat(timespec="seconds"),
+            "data_dir": str(data_dir.resolve()), "pinny_version": release_version(profile),
+            "host": os.uname().nodename}
+    try:
+        if args.dbs_only:
+            if not args.out:
+                print("pinny-backup: --dbs-only needs --out DIR.", file=sys.stderr)
+                return 2
+            m = snapshot_dbs_only(data_dir, Path(args.out), meta)
+            log(f"Snapshot of {len(m['databases'])} database(s) in {args.out}; integrity_check ok.")
+            return 0
+
+        dest = None if args.no_upload else (args.dest or default_dest(profile))
+        if not args.no_upload and not dest:
+            print("pinny-backup: no destination. Set PINNY_BACKUP_BUCKET in /etc/pinny/ops.env, "
+                  "or pass --dest or --no-upload.", file=sys.stderr)
+            return 2
+        state_dir = Path(args.state_dir or os.environ.get("STATE_DIRECTORY", "").split(":")[0] or
+                         f"/var/lib/pinny-backup/{label}")
+        work_dir = Path(args.work_dir) if args.work_dir else state_dir / "work"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(work_dir, 0o700)
+        check_space(work_dir, data_size(data_dir))
+
+        name = f"pinny-{label}-{utc_stamp(now)}"
+        log(f"Backing up {data_dir} as {name} ...")
+        manifest = build_archive(data_dir, work_dir, name, meta)
+        archive = work_dir / f"{name}.tar.gz"
+        digest = sha256_file(archive)
+        sums = work_dir / f"{name}.tar.gz.sha256"
+        sums.write_text(f"{digest}  {archive.name}\n")
+        size = archive.stat().st_size
+        mfile = work_dir / f"{name}.manifest.json"
+        mfile.write_text(json.dumps(dict(manifest, archive_sha256=digest, archive_bytes=size),
+                                    indent=1, sort_keys=True))
+        log(f"  {len(manifest['databases'])} database(s), {len(manifest['files'])} file(s), "
+            f"{size / 2**20:.1f} MiB, sha256 {digest[:16]}...")
+        for s in manifest["skipped"]:
+            log(f"  skipped {s['path']}: {s['reason']}")
+        if dest:
+            urls = upload([archive, sums, mfile], dest)
+            log(f"  uploaded to {urls[0]}")
+            if not args.keep_local:
+                for f in (archive, sums, mfile):
+                    f.unlink(missing_ok=True)
+        else:
+            urls = [archive.as_uri()]
+            log(f"  kept at {archive} (not uploaded)")
+        write_status(state_dir, {"last_success": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+                                 "archive": urls[0], "archive_sha256": digest, "archive_bytes": size,
+                                 "databases": len(manifest["databases"]), "files": len(manifest["files"]),
+                                 "uploaded": bool(dest)})
+        log("Backup finished.")
+        return 0
+    except (BackupError, sqlite3.Error, OSError, subprocess.CalledProcessError) as exc:
+        print(f"pinny-backup FAILED: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

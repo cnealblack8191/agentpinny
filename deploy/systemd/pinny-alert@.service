@@ -1,0 +1,16 @@
+# Sends an email (through the SNS alert topic) when another unit fails.
+# Used as OnFailure=pinny-alert@%n.service; the instance is the failed unit.
+[Unit]
+Description=Pinny alert for %i
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+EnvironmentFile=/etc/pinny/ops.env
+Environment=HOME=/tmp
+ExecStart=/usr/local/sbin/pinny-notify "Pinny: %i failed on %H" "The systemd unit %i failed on %H. See what happened with: sudo journalctl -u %i -n 100 --no-pager. docs/deployment.md, section 'Alerts', says what to do."
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

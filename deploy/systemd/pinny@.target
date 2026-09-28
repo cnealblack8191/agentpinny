@@ -1,0 +1,11 @@
+# Everything that serves one Pinny profile (production or staging).
+#   systemctl restart pinny@production.target   restarts its web and worker units
+#   systemctl stop pinny@staging.target         stops them
+# Units join it with PartOf= and, when enabled, WantedBy=.
+[Unit]
+Description=Pinny %i (web and workers)
+Wants=network-online.target
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target

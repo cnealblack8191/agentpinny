@@ -1,0 +1,33 @@
+# Monthly restore test: download the newest backup of %i, restore it into a
+# scratch directory, check every file's sha256 and every database's
+# PRAGMA integrity_check, then delete the scratch copy. Never touches the
+# live data directory. A failure sends an alert.
+[Unit]
+Description=Pinny restore test (%i)
+After=network-online.target
+Wants=network-online.target
+OnFailure=pinny-alert@%n.service
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+EnvironmentFile=/etc/pinny/ops.env
+CacheDirectory=pinny-restore-test/%i
+Environment=HOME=/var/cache/pinny-restore-test/%i
+ExecStart=/usr/local/sbin/pinny-restore latest --profile %i --target /var/cache/pinny-restore-test/%i/data --cleanup
+Nice=15
+IOSchedulingClass=idle
+MemoryMax=1G
+TimeoutStartSec=3h
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

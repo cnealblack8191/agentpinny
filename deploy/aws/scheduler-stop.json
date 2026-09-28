@@ -1,0 +1,19 @@
+{
+  "Name": "pinny-stop-weekdays",
+  "Description": "Stop the Pinny EC2 instance at 19:00 New York time, Monday to Friday",
+  "ScheduleExpression": "cron(0 19 ? * MON-FRI *)",
+  "ScheduleExpressionTimezone": "America/New_York",
+  "FlexibleTimeWindow": {
+    "Mode": "OFF"
+  },
+  "State": "ENABLED",
+  "Target": {
+    "Arn": "arn:aws:scheduler:::aws-sdk:ec2:stopInstances",
+    "RoleArn": "arn:aws:iam::ACCOUNT_ID:role/pinny-scheduler",
+    "Input": "{\"InstanceIds\": [\"INSTANCE_ID\"]}",
+    "RetryPolicy": {
+      "MaximumRetryAttempts": 5,
+      "MaximumEventAgeInSeconds": 3600
+    }
+  }
+}
