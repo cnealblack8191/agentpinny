@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · Pinny</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="auth">
+  <main class="auth-box">
+    <h1>Sign in to Pinny</h1>
+    <form id="login-form">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required autofocus>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+    <p id="status" class="status" role="status"></p>
+    <p class="muted">Forgot your password? Ask an admin for a new set-password link.</p>
+  </main>
+  <script type="module" src="login.js"></script>
+</body>
+</html>

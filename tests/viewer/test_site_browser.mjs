@@ -2,13 +2,13 @@
 //
 //   node tests/viewer/test_site_browser.mjs
 //
-// Runs the real server in production mode with a throwaway signing key in
-// place of the AWS load balancer's, and gives each browser context its own
-// x-amzn-oidc-data header, as the ALB does after Cognito sign-in. Checks: the
-// user bar and sign-out link, the admin-only Members panel, reviewers
-// cannot delete someone else's drawing but can delete their own, a
-// non-member is turned away, the page runs under the CSP, and unsaved
-// edits are stored per person.
+// Runs the real server in production mode with Pinny's own sign-in. Checks:
+// a visitor who is not signed in is sent to the sign-in page; a set-password
+// link works and signs the person in; a wrong password is refused; the user
+// bar and sign-out; the admin-only Members panel and the set-password link
+// it shows for a new member; reviewers cannot delete someone else's drawing
+// but can delete their own; the pages run under the CSP; and unsaved edits
+// are stored per person.
 
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -41,36 +41,30 @@ const REVIEWER = 'assistant@example.com';
 const OUTSIDER = 'stranger@example.com';
 const work = mkdtempSync(join(tmpdir(), 'pinny-site-'));
 
-// Serve in production mode; print the base URL and a token per user.
+// Serve in production mode; print the base URL and a set-password token per user.
 function startServer() {
   const code = `
-import json, socket, sys
+import json, socket, sys, time
 sys.path.insert(0, 'tests/viewer')
 from pathlib import Path
 from pdfgen import make_pdf
 from pinny.viewer import ViewerService
-from pinny.viewer.auth import Authenticator
-from tests.viewer.test_alb_gate import ARN, ISS, alb_token, verifier
 from pinny.viewer.server import Site, SiteServer
 from pinny.viewer.settings import Settings
-from pinny.viewer.sitedb import SiteDB
 data = Path(${JSON.stringify(work)}) / "data"
 open(Path(${JSON.stringify(work)}) / "a.pdf", "wb").write(make_pdf(tag="a"))
 open(Path(${JSON.stringify(work)}) / "b.pdf", "wb").write(make_pdf(tag="b"))
 s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
 origin = "http://127.0.0.1:%d" % port
-settings = Settings(env="production", data_dir=data, origin=origin, alb_arn=ARN, oidc_issuer=ISS,
+settings = Settings(env="production", data_dir=data, origin=origin,
                     admin_emails=(${JSON.stringify(ADMIN)},), version="e2e")
-ver = verifier()
 svc = ViewerService(data)
-db = SiteDB(data); db.ensure_admins(settings.admin_emails)
-site = Site(svc, settings, Authenticator(settings, db, ver))
+site = Site(svc, settings)
 site.sitedb.put_member(${JSON.stringify(REVIEWER)}, "reviewer", actor="setup")
-def tok(email):
-    return alb_token(email, exp_in=3600)
+links = {e: site.sitedb.issue_setup_link(e, actor="setup", now=time.time())[0]
+         for e in (${JSON.stringify(ADMIN)}, ${JSON.stringify(REVIEWER)})}
 httpd = SiteServer(site, "127.0.0.1", port)
-print(json.dumps({"base": origin, "tokens": {e: tok(e) for e in (${JSON.stringify(ADMIN)},
-      ${JSON.stringify(REVIEWER)}, ${JSON.stringify(OUTSIDER)})}}), flush=True)
+print(json.dumps({"base": origin, "links": links}), flush=True)
 httpd.serve_forever()
 `;
   return new Promise((res, rej) => {
@@ -98,38 +92,63 @@ let server = null;
 try {
   server = await startServer();
   const cspErrors = [];
-  async function open(email) {
-    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 },
-      extraHTTPHeaders: { 'x-amzn-oidc-data': server.tokens[email] } });
+  async function newPage(label) {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await ctx.newPage();
     page.on('dialog', (d) => d.accept());
-    page.on('pageerror', (e) => check(`${email}: no page errors`, false, e.message));
+    page.on('pageerror', (e) => check(`${label}: no page errors`, false, e.message));
     page.on('console', (m) => { if (/Content Security Policy/i.test(m.text())) cspErrors.push(m.text()); });
-    await page.goto(server.base + '/');
     return { ctx, page };
   }
+  // First sign-in: the one-time set-password link.
+  async function open(email, password) {
+    const r = await newPage(email);
+    await r.page.goto(`${server.base}/setup.html#token=${server.links[email]}`);
+    await waitFor(r.page, () => !document.getElementById('setup-form').hidden);
+    check(`${email}: the link names the account`,
+      (await r.page.locator('#who').textContent()).includes(email));
+    check(`${email}: the token is removed from the address bar`, !r.page.url().includes('token='));
+    await r.page.locator('#password').fill(password);
+    await r.page.locator('#password2').fill(password);
+    await r.page.locator('#setup-form button').click();
+    await r.page.waitForURL(server.base + '/');
+    return r;
+  }
+
+  // ------------------------------------------------------------ visitor
+  const visitor = await newPage('visitor');
+  await visitor.page.goto(server.base + '/');
+  await visitor.page.waitForURL(/\/login\.html/);
+  check('a visitor who is not signed in lands on the sign-in page', visitor.page.url().includes('/login.html'));
+  await visitor.page.locator('#email').fill(ADMIN);
+  await visitor.page.locator('#password').fill('not the password');
+  await visitor.page.locator('#login-form button').click();
+  await waitFor(visitor.page, () => document.getElementById('status').classList.contains('error'));
+  check('a wrong password is refused', (await visitor.page.locator('#status').textContent()).includes("don't match"));
 
   // ------------------------------------------------------------- admin
-  const admin = await open(ADMIN);
+  const admin = await open(ADMIN, 'admin password 123');
   let page = admin.page;
   await waitFor(page, () => document.getElementById('user-bar').textContent.includes('Signed in'));
   const bar = await page.locator('#user-bar').textContent();
   check('user bar names the admin', bar.includes(ADMIN) && bar.includes('(admin)'), bar);
-  check('sign-out link ends the load-balancer session',
-    (await page.locator('#user-bar a').getAttribute('href')) === '/logout');
+  check('user bar has a sign-out button', (await page.locator('#user-bar button').textContent()) === 'Sign out');
+  check('account section offers a password change', await page.locator('#account-section').isVisible());
   await waitFor(page, () => document.querySelectorAll('#members-table tbody tr').length === 2);
   check('admin sees the Members panel', await page.locator('#members-section').isVisible());
   await page.locator('#member-email').fill('draftsman@example.com');
   await page.locator('#member-add-btn').click();
   await waitFor(page, () => document.querySelectorAll('#members-table tbody tr').length === 3);
   check('admin adds a member', (await page.locator('#members-table').textContent()).includes('draftsman@example.com'));
+  check('adding a member shows their set-password link', await page.locator('#setup-link-box').isVisible()
+    && (await page.locator('#setup-link-url').inputValue()).startsWith(server.base + '/setup.html#token='));
   await page.locator('#file').setInputFiles(join(work, 'a.pdf'));
   await waitFor(page, () => window.__pinny.frame() !== null);
   check('admin can delete their own upload', !(await page.locator('#delete-doc-btn').isDisabled()));
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'site-admin.png') });
 
   // ---------------------------------------------------------- reviewer
-  const rev = await open(REVIEWER);
+  const rev = await open(REVIEWER, 'reviewer password 1');
   page = rev.page;
   await waitFor(page, () => document.getElementById('user-bar').textContent.includes('Signed in'));
   check('reviewer sees their own name', (await page.locator('#user-bar').textContent()).includes(`${REVIEWER} (reviewer)`));
@@ -149,11 +168,18 @@ try {
   check('unsaved edits are stored per person', qkey === `pinny.viewer.outbox.v1:${REVIEWER}`
     && adminKey === `pinny.viewer.outbox.v1:${ADMIN}`, `${qkey} / ${adminKey}`);
 
-  // ---------------------------------------------------------- outsider
-  const out = await open(OUTSIDER);
-  await waitFor(out.page, () => document.getElementById('user-bar').textContent.length > 0);
-  check('a non-member is turned away', (await out.page.locator('#user-bar').textContent()) === 'Not a Pinny member.'
-    && (await out.page.locator('#view-message').textContent()).includes('not a Pinny member'));
+  // ------------------------------------------------- sign out, sign in
+  await page.locator('#user-bar button').click();
+  await page.waitForURL(/\/login\.html/);
+  await page.goto(server.base + '/');
+  await page.waitForURL(/\/login\.html/);
+  check('sign-out ends the session', page.url().includes('/login.html'));
+  await page.locator('#email').fill(REVIEWER);
+  await page.locator('#password').fill('reviewer password 1');
+  await page.locator('#login-form button').click();
+  await page.waitForURL(server.base + '/');
+  await waitFor(page, () => document.getElementById('user-bar').textContent.includes('Signed in'));
+  check('signing in with the password works', (await page.locator('#user-bar').textContent()).includes(REVIEWER));
   check('no CSP violations', cspErrors.length === 0, cspErrors.join(' | '));
 } finally {
   await browser.close();

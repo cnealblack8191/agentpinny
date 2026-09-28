@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import ipaddress
 import os
-import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,9 +24,6 @@ JOBS_SANDBOX = "sandbox"  # worker threads in the web process, each job in a san
 JOBS_EXTERNAL = "external"  # separate `python -m pinny.jobs.worker` services
 JOBS_MODES = (JOBS_INPROCESS, JOBS_SANDBOX, JOBS_EXTERNAL)
 
-# The sign-in gate is an AWS Application Load Balancer with Amazon Cognito
-# (docs/training-site.md section 1); this is the load balancer's ARN.
-_ALB_ARN_RE = re.compile(r"^arn:aws[a-z-]*:elasticloadbalancing:([a-z0-9-]+):\d{12}:loadbalancer/app/[\w-]+/[0-9a-f]+$")
 
 
 class ConfigError(ValueError):
@@ -58,9 +54,6 @@ class Settings:
     env: str = DEVELOPMENT
     data_dir: Path = field(default_factory=_store_default_data_dir)
     origin: Optional[str] = None  # https://pinny.example.com; None in development
-    alb_arn: Optional[str] = None  # the load balancer that signs x-amzn-oidc-data
-    oidc_issuer: Optional[str] = None  # the Cognito user pool, checked when set
-    sign_out_url: Optional[str] = None  # Cognito logout URL the ALB gate redirects to
     admin_emails: Tuple[str, ...] = ()
     version: str = "git:unknown"
     dev_email: str = "local@localhost"
@@ -69,11 +62,6 @@ class Settings:
     @property
     def production(self) -> bool:
         return self.env == PRODUCTION
-
-    @property
-    def alb_region(self) -> Optional[str]:
-        m = _ALB_ARN_RE.match(self.alb_arn or "")
-        return m.group(1) if m else None
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None,
@@ -91,25 +79,17 @@ class Settings:
             raise ConfigError(f"PINNY_JOBS must be one of {', '.join(JOBS_MODES)}, not {jobs!r}.")
         s = cls(env=env,
                 data_dir=Path(raw_dir).resolve() if raw_dir else _store_default_data_dir(),
-                origin=origin, alb_arn=(e.get("PINNY_ALB_ARN") or "").strip() or None,
-                oidc_issuer=(e.get("PINNY_OIDC_ISSUER") or "").strip().rstrip("/") or None,
-                sign_out_url=(e.get("PINNY_SIGN_OUT_URL") or "").strip() or None,
-                admin_emails=admins,
+                origin=origin, admin_emails=admins,
                 version=(e.get("PINNY_VERSION") or "").strip() or _git_version(),
                 dev_email=((e.get("PINNY_REVIEWER") or "").strip() or _os_user()) if env == DEVELOPMENT
                 else "",
                 jobs=jobs)
         if s.production:
             missing = [name for name, val in (
-                ("PINNY_DATA_DIR", raw_dir), ("PINNY_ORIGIN", origin), ("PINNY_ALB_ARN", s.alb_arn),
+                ("PINNY_DATA_DIR", raw_dir), ("PINNY_ORIGIN", origin),
                 ("PINNY_ADMIN_EMAILS", admins), ("PINNY_VERSION", e.get("PINNY_VERSION"))) if not val]
             if missing:
                 raise ConfigError("Production needs these settings: " + ", ".join(missing) + ".")
-            if s.alb_region is None:
-                raise ConfigError("PINNY_ALB_ARN must be an application load balancer ARN "
-                                  "(arn:aws:elasticloadbalancing:<region>:<account>:loadbalancer/app/<name>/<id>).")
-            if s.sign_out_url and not s.sign_out_url.startswith("https://"):
-                raise ConfigError("PINNY_SIGN_OUT_URL must start with https://.")
             if not origin.startswith("https://"):
                 raise ConfigError("PINNY_ORIGIN must start with https:// in production.")
             if jobs == JOBS_INPROCESS:
@@ -121,7 +101,7 @@ class Settings:
         """Development has no sign-in, so it may only listen on loopback."""
         if not self.production and not is_loopback(host):
             raise ConfigError(f"Development mode has no sign-in and may only listen on 127.0.0.1, "
-                              f"not {host!r}. Set PINNY_ENV=production behind the sign-in gate.")
+                              f"not {host!r}. Set PINNY_ENV=production to turn on sign-in.")
 
 
 def _os_user() -> str:

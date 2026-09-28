@@ -3,8 +3,8 @@
 Status: v1, 2026-09-27. This is the contract every training-site session
 builds against. It follows the plan in `docs/training-site-plan.md`, whose
 section 1 holds the server facts: one EC2 instance in the owner's AWS
-account at `pinny.ecinc.us`, an Application Load Balancer with Amazon
-Cognito sign-in in front, three users, backups to S3. Anything here that contradicts `docs/contracts.md` sections
+account at `pinny.ecinc.us`, Caddy for HTTPS, Pinny's own sign-in,
+three users, backups to S3. Anything here that contradicts `docs/contracts.md` sections
 1-6 is a mistake; those still govern documents, coordinates, scans and
 reviews.
 
@@ -14,42 +14,46 @@ deployment, Step 7 training pages).
 
 ## 1. Identity and roles (built)
 
-**Sign-in happens at the gate, never in Pinny.** Pinny never sees a
-password. The gate is AWS: an Application Load Balancer at
-`pinny.ecinc.us` terminates HTTPS (ACM certificate) and runs an
-`authenticate-cognito` rule in front of every path. The Cognito user pool
-is invite-only (admins create users; self sign-up is off) and signs people
-in with an emailed one-time code. After sign-in the ALB adds the
-`x-amzn-oidc-data` header to every request it forwards. Pinny verifies it
-on every request:
+**Pinny has its own sign-in** (decided 2026-09-28: no paid identity
+service; stronger layers such as second factors come later if the project
+proves worth it). HTTPS ends at Caddy on the same instance, which forwards
+to the app on `127.0.0.1`. Nothing else can reach the app.
 
-* header `alg` is `ES256` and `kid` is a plain key id (letters, digits,
-  hyphens) before any key is fetched;
-* header `signer` is exactly this load balancer's ARN (`PINNY_ALB_ARN`),
-  so a token minted by any other load balancer is refused;
-* the ECDSA P-256 signature, against the public key from
-  `https://public-keys.auth.elb.<region>.amazonaws.com/<kid>` (the region
-  comes from the ARN; keys are cached);
-* `exp` holds, with 60 s leeway, and `iss` equals the Cognito user pool
-  (`PINNY_OIDC_ISSUER`) when set;
-* the `email` claim is present. It is lower-cased and becomes the user id.
+* **Passwords** are at least 12 characters and are stored only as salted
+  scrypt hashes (`pinny/viewer/passwords.py`) in `site.sqlite3`.
+* **Nobody signs up.** An admin adds a member and gets a one-time
+  **set-password link** (`/setup.html#token=...`, valid 72 hours, replaced
+  by any newer link) to send them privately. The token rides in the URL
+  fragment, which browsers never send to a server, so it stays out of logs.
+  The first admin gets theirs from the server:
+  `python -m pinny.viewer.members setup-link EMAIL`.
+* **Signing in** (`POST /api/login`) checks the password and sets a session
+  cookie: `__Host-pinny_session`, `Secure; HttpOnly; SameSite=Lax; Path=/`.
+  Only a SHA-256 of the session token is stored, so a copy of the database
+  (a backup) cannot be used to sign in. A session ends after 7 days without
+  use, and after 30 days regardless.
+* **Wrong passwords.** Every failure gives the same answer, whether the
+  email is unknown, has no password yet, or the password is wrong, and
+  takes the same time. 10 wrong passwords in a row lock that account for
+  15 minutes (`account_locked` audit event). 30 failures from one client
+  address in 15 minutes block that address for the rest of the window.
+  The client address is the one Caddy reports (`X-Forwarded-For` is
+  trusted only from `127.0.0.1`).
+* **Forgot password:** an admin clicks *Reset password* on the Members panel
+  (or runs `python -m pinny.viewer.members reset EMAIL`). That removes the
+  password, signs the person out everywhere, and gives a new link.
+* **Changing your password** (`POST /api/me/password`, needs the current one)
+  signs out your other devices. Removing a member ends their sessions at
+  once. `python -m pinny.viewer.members sign-out-all` ends every session.
+* **Sign-out** (`POST /api/logout`) deletes the session on the server and
+  clears the cookie.
+* Every request looks the session up, then the member. A request with no
+  valid session gets `401 unauthenticated`, and the page sends the
+  browser to `/login.html`.
 
-The ALB keeps `=` padding in the token's base64url segments, which general
-JWT libraries reject, so this check is done directly with `cryptography`.
-The instance's security group admits the app port **only from the ALB's
-security group**; nothing else can reach Pinny to present a header.
-
-`GET /logout` expires the ALB session cookies (`AWSELBAuthSessionCookie-0`
-to `-3`) and redirects to the Cognito logout page (`PINNY_SIGN_OUT_URL`).
-
-A request with no token, or a token that fails any check, gets
-`401 unauthenticated`. Only the load balancer's header is read, never a
-cookie.
-
-**Members.** Passing the gate is not enough. Pinny keeps its own members
-table, and a verified email that is not an active member gets
-`403 not_a_member`. So an address invited in Cognito by mistake still
-sees nothing.
+**Members.** Only members can sign in. The members table decides who is
+in and with which role; a session whose member was removed in the same
+instant gets `403 not_a_member`.
 
 | Role | Can |
 |---|---|
@@ -57,8 +61,9 @@ sees nothing.
 | `reviewer` | upload, scan, batch scan, review pins, export reports, delete documents they uploaded |
 
 Every route declares a minimum role (`public`, `reviewer` or `admin`). A
-test fails if any route has none. `public` is only `GET /healthz`,
-`GET /logout` and the static page files.
+test fails if any route has none. `public` is only `GET /healthz`, the
+sign-in routes (`/api/login`, `/api/logout`, `/api/setup/check`,
+`/api/setup`) and the static page files.
 
 The first admin comes from `PINNY_ADMIN_EMAILS` (comma-separated), added on
 startup if missing and never removed by it. Further members are managed on
@@ -105,7 +110,12 @@ The site is one origin, `PINNY_ORIGIN` (for example
 | Method and path | Role | Body / query | Notes |
 |---|---|---|---|
 | `GET /healthz` | public | | `{"ok": true, "version"}`, no data |
-| `GET /api/me` | reviewer | | `{"email", "role", "sign_out_url"}` |
+| `POST /api/login` | public | `{email, password}` | sets the session cookie; 401 `bad_login`, 429 `account_locked` / `too_many_attempts` |
+| `POST /api/logout` | public | `{}` | ends the session, clears the cookie |
+| `POST /api/setup/check` | public | `{token}` | `{email}`; 400 `bad_setup_link` |
+| `POST /api/setup` | public | `{token, password}` | sets the password, signs in; 400 `weak_password` |
+| `GET /api/me` | reviewer | | `{"email", "role", "env", "sign_in", "version"}` |
+| `POST /api/me/password` | reviewer | `{current_password, new_password}` | signs out your other sessions |
 | `GET /api/health` | reviewer | | as before, plus `version` |
 | `GET /api/documents` | reviewer | | adds `uploaded_by` |
 | `POST /api/documents?filename=` | reviewer | PDF bytes, `Content-Type: application/pdf` | streamed to disk; 413 over the limit |
@@ -124,8 +134,9 @@ The site is one origin, `PINNY_ORIGIN` (for example
 | `GET /api/batches/{id}/queue` | reviewer | `strategy`, `limit` | |
 | `POST /api/batches/{id}/cancel` | reviewer | `{}` | |
 | `POST /api/batches/{id}/resume` | reviewer | `{retry_failed?}` | |
-| `GET /api/members` | admin | | `[{email, role, added_at, added_by}]` |
-| `POST /api/members` | admin | `{email, role}` | add or change role |
+| `GET /api/members` | admin | | `[{email, role, added_at, added_by, has_password}]` |
+| `POST /api/members` | admin | `{email, role}` | add or change role; a member with no password yet also gets `setup: {email, setup_url, expires_at}` |
+| `POST /api/members/setup-link` | admin | `{email, reset?}` | `{email, setup_url, expires_at}`; `reset: true` removes the password and ends their sessions (not for yourself) |
 | `POST /api/members/remove` | admin | `{email}` | an admin cannot remove themself |
 | `GET /api/audit?limit=` | admin | | newest first |
 
@@ -239,8 +250,9 @@ the training work in Step 7.
 
 `site.sqlite3` table `audit(seq, at, actor, action, target, detail)`,
 append-only (trigger). Actions: `member_added`, `member_role_changed`,
-`member_removed`, `document_uploaded`, `document_deleted`,
-`batch_started`. Review actions are already an append-only log in the
+`member_removed`, `setup_link_issued`, `password_reset`, `password_set`,
+`account_locked`, `all_sessions_ended`, `document_uploaded`,
+`document_deleted`, `batch_started`. Review actions are already an append-only log in the
 learning store (`review_events`) with the reviewer's email.
 
 ## 7. Deletion and retention (built)
@@ -264,10 +276,10 @@ deletion is complete everywhere after 30 days.
 
 | # (plan §2) | Threat | Fix | Status |
 |---|---|---|---|
-| 1 | Anyone with the URL sees drawings | ALB + Cognito sign-in, signed-header verification (signer pinned), members table, per-route roles | built |
+| 1 | Anyone with the URL sees drawings | Pinny's own sign-in (scrypt passwords, invite-only set-password links, hashed session tokens, lockout), members table, per-route roles | built |
 | 2 | Global document list leaks across owners | one workspace of 3 trusted people; `uploaded_by` for deletion | built (single workspace) |
 | 3 | Reviews under the server's OS account | signed-in email as reviewer | built |
-| 4 | `http.server`: no TLS, slow clients, a thread per connection | uvicorn + Starlette, bounded thread pool, TLS and slow-client handling at the ALB, app reachable only from the ALB | built |
+| 4 | `http.server`: no TLS, slow clients, a thread per connection | uvicorn + Starlette, bounded thread pool, TLS and slow-client handling at Caddy, app listening only on 127.0.0.1 | built |
 | 5 | Uploads held in memory | streamed to disk with the limit enforced while reading | built |
 | 6 | Heavy work in web requests | rendering and template matching in job pools with limits | built |
 | 7 | Untrusted PDFs parsed in the web process | ingest and rendering only in sandboxed children | built |
@@ -313,12 +325,9 @@ class RenderClient(Protocol):
 | `PINNY_ENV` | `development` (default) | `production` |
 | `PINNY_DATA_DIR` | optional | required |
 | `PINNY_ORIGIN` | derived from the host | required, `https://...` |
-| `PINNY_ALB_ARN` | unused | required: the load balancer's ARN |
-| `PINNY_OIDC_ISSUER` | unused | recommended: `https://cognito-idp.<region>.amazonaws.com/<pool id>` |
-| `PINNY_SIGN_OUT_URL` | unused | the Cognito `/logout?client_id=...&logout_uri=...` URL |
-| `PINNY_ADMIN_EMAILS` | optional | required for first start |
+| `PINNY_ADMIN_EMAILS` | optional | required for first start; each then needs `members setup-link` |
 | `PINNY_VERSION` | from git | required (build-time) |
 | `PINNY_JOBS` | `inprocess` (default) | `sandbox` (default) or `external`; `inprocess` is refused |
-| Bind address | `127.0.0.1` only | the instance's private address; the security group admits only the ALB |
+| Bind address | `127.0.0.1` only | `127.0.0.1`, behind Caddy on the same instance |
 
 Production refuses to start if any required variable is missing.

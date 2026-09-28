@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime as _dt
 import json
 import logging
 import mimetypes
@@ -57,8 +58,12 @@ CSP = ("default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-
 # state-changing request must send: "json", "pdf" or None (no body).
 ROUTES = [
     ("GET", "/healthz", "healthz", PUBLIC, None),
-    ("GET", "/logout", "logout", PUBLIC, None),
+    ("POST", "/api/login", "login", PUBLIC, "json"),
+    ("POST", "/api/logout", "logout", PUBLIC, "json"),
+    ("POST", "/api/setup/check", "setup_check", PUBLIC, "json"),
+    ("POST", "/api/setup", "setup", PUBLIC, "json"),
     ("GET", "/api/me", "me", REVIEWER, None),
+    ("POST", "/api/me/password", "change_password", REVIEWER, "json"),
     ("GET", "/api/health", "health", REVIEWER, None),
     ("GET", "/api/documents", "documents", REVIEWER, None),
     ("POST", "/api/documents", "upload", REVIEWER, "pdf"),
@@ -80,6 +85,7 @@ ROUTES = [
     ("GET", "/api/members", "members", ADMIN, None),
     ("POST", "/api/members", "member_put", ADMIN, "json"),
     ("POST", "/api/members/remove", "member_remove", ADMIN, "json"),
+    ("POST", "/api/members/setup-link", "member_setup_link", ADMIN, "json"),
     ("GET", "/api/audit", "audit", ADMIN, None),
     ("GET", "/{path:path}", "static", PUBLIC, None),
 ]
@@ -236,19 +242,44 @@ class Site:
     def h_healthz(self, request, ident, body):
         return self._json({"ok": True, "version": self.settings.version})
 
-    def h_logout(self, request, ident, body):
-        """ALB gate sign-out: expire the load balancer's session cookies, then
-        send the browser to the Cognito logout page (or back to the start)."""
-        resp = Response(status_code=302, headers={"Location": self.settings.sign_out_url or "/",
-                                                  "Cache-Control": "no-store"})
-        for i in range(4):  # the ALB splits a large session across -0 .. -3
-            resp.set_cookie(f"AWSELBAuthSessionCookie-{i}", "", max_age=0, expires=0, path="/",
-                            secure=True, httponly=True, samesite="lax")
+    # ---------------------------------------------------------------- sign-in
+    def _signed_in(self, ident: Identity, status: int = 200) -> JSONResponse:
+        resp = self._json({"email": ident.email, "role": ident.role}, status)
+        resp.set_cookie(self.auth.cookie_name, ident.session, max_age=self.auth.session_max_age,
+                        **self.auth.cookie_attrs())
         return resp
+
+    def _require_login(self) -> None:
+        if not self.auth.enabled:
+            raise ViewerError("no_sign_in", "This server runs in development mode without sign-in.", 404)
+
+    def h_login(self, request, ident, b: dict):
+        self._require_login()
+        client = request.client.host if request.client else "unknown"
+        return self._signed_in(self.auth.login(b.get("email"), b.get("password"), client))
+
+    def h_logout(self, request, ident, b):
+        self.auth.logout(request.headers)
+        resp = self._json({"signed_out": True})
+        resp.delete_cookie(self.auth.cookie_name, **self.auth.cookie_attrs())
+        return resp
+
+    def h_setup_check(self, request, ident, b: dict):
+        self._require_login()
+        return self._json({"email": self.auth.setup_email(b.get("token"))})
+
+    def h_setup(self, request, ident, b: dict):
+        self._require_login()
+        return self._signed_in(self.auth.complete_setup(b.get("token"), b.get("password")))
+
+    def h_change_password(self, request, ident: Identity, b: dict):
+        self._require_login()
+        self.auth.change_password(ident, b.get("current_password"), b.get("new_password"))
+        return self._json({"changed": True})
 
     def h_me(self, request, ident: Identity, body):
         return self._json({"email": ident.email, "role": ident.role, "env": self.settings.env,
-                           "sign_out_url": self.auth.sign_out_url, "version": self.settings.version})
+                           "sign_in": self.auth.enabled, "version": self.settings.version})
 
     def h_health(self, request, ident, body):
         return self._json({"ok": True, "version": self.settings.version,
@@ -338,7 +369,7 @@ class Site:
         return self._json(self.service.scan_state(request.path_params["s"]))
 
     def h_act(self, request, ident: Identity, b: dict):
-        reviewer = None if self.auth.verifier is None else ident.email
+        reviewer = ident.email if self.auth.enabled else None
         return self._json(self.service.act(request.path_params["s"], b, reviewer=reviewer))
 
     def h_report(self, request, ident, body):
@@ -384,15 +415,44 @@ class Site:
             raise ViewerError("invalid_retry", "retry_failed must be true or false.")
         return self._json(self.service.resume_batch(request.path_params["b"], retry_failed=retry))
 
+    def _member_dict(self, m) -> dict:
+        return dict(m.to_dict(), has_password=self.sitedb.has_password(m.email))
+
+    def _setup_link(self, request, email: str, actor: str, reset: bool) -> dict:
+        token, expires = self.sitedb.issue_setup_link(email, actor=actor, now=self.auth.clock(), reset=reset)
+        origin = self.settings.origin or f"{request.url.scheme}://{request.headers.get('host', '')}"
+        # The token rides in the fragment, which browsers never send to a
+        # server, so it stays out of access logs and Referer headers.
+        return {"email": email, "setup_url": f"{origin}/setup.html#token={token}",
+                "expires_at": _dt.datetime.fromtimestamp(expires, _dt.timezone.utc).isoformat(timespec="seconds")}
+
     def h_members(self, request, ident, body):
-        return self._json({"members": [m.to_dict() for m in self.sitedb.members()]})
+        return self._json({"members": [self._member_dict(m) for m in self.sitedb.members()]})
 
     def h_member_put(self, request, ident: Identity, b: dict):
         try:
             m = self.sitedb.put_member(b.get("email"), b.get("role"), actor=ident.email)
         except ValueError as exc:
             raise ViewerError("invalid_member", str(exc)) from None
-        return self._json(m.to_dict())
+        out = self._member_dict(m)
+        if self.auth.enabled and not out["has_password"]:
+            out["setup"] = self._setup_link(request, m.email, ident.email, reset=False)
+        return self._json(out)
+
+    def h_member_setup_link(self, request, ident: Identity, b: dict):
+        """A new one-time set-password link. ``reset: true`` also removes the
+        current password and signs that member out everywhere."""
+        self._require_login()
+        reset = b.get("reset", False)
+        if not isinstance(reset, bool):
+            raise ViewerError("invalid_reset", "reset must be true or false.")
+        email = b.get("email")
+        if reset and isinstance(email, str) and email.strip().lower() == ident.email:
+            raise ViewerError("invalid_member", "Change your own password from your account instead.")
+        try:
+            return self._json(self._setup_link(request, email, ident.email, reset=reset))
+        except ValueError as exc:
+            raise ViewerError("invalid_member", str(exc)) from None
 
     def h_member_remove(self, request, ident: Identity, b: dict):
         email = b.get("email")
@@ -441,7 +501,9 @@ class SiteServer:
         self.server_address = self._sock.getsockname()
         config = uvicorn.Config(site.app, log_level="info" if verbose else "warning",
                                 access_log=verbose, server_header=False, timeout_keep_alive=5,
-                                limit_concurrency=200, lifespan="off")
+                                limit_concurrency=200, lifespan="off",
+                                # Caddy on the same host: trust its client address, no one else's.
+                                proxy_headers=True, forwarded_allow_ips="127.0.0.1")
         self._server = uvicorn.Server(config)
         self._stopped = threading.Event()
 

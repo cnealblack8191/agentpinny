@@ -2,9 +2,9 @@
 roles, CSRF, headers, errors, streamed uploads, reviewer identity, deletion,
 members and audit.
 
-Requests carry load-balancer tokens built the way the AWS ALB builds them
-(``tests/viewer/test_alb_gate.py``) and verified by the real
-``AlbOidcVerifier``; only the public-key lookup is replaced.
+Requests carry Pinny session cookies. The fixture signs each test user in
+by creating a session directly; ``tests/viewer/test_login.py`` covers the
+sign-in flow itself.
 """
 
 from __future__ import annotations
@@ -22,11 +22,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pdfgen import make_pdf  # noqa: E402
 
 from pinny.viewer import ViewerService  # noqa: E402
-from pinny.viewer.auth import ALB_HEADER, PUBLIC, ROLE_RANK, Authenticator  # noqa: E402
+from pinny.viewer.auth import PUBLIC, ROLE_RANK  # noqa: E402
 from pinny.viewer.server import ROUTES, Site, SiteServer  # noqa: E402
 from pinny.viewer.settings import ConfigError, Settings  # noqa: E402
-from tests.viewer.test_alb_gate import ARN, ISS, alb_token  # noqa: E402
-from tests.viewer.test_alb_gate import verifier as alb_verifier  # noqa: E402
 from tests.viewer.test_viewer_api import _template_for  # noqa: E402
 
 ORIGIN = "https://pinny.test"
@@ -36,33 +34,38 @@ DRAFTSMAN = "draftsman@example.com"
 OUTSIDER = "stranger@example.com"
 
 
-def token(email=ADMIN):
-    return alb_token(email)
-
-
-def verifier():
-    return alb_verifier()
+COOKIE = "__Host-pinny_session"
+SESSIONS = {}  # email -> session token, filled by the ``site`` fixture
 
 
 def prod_settings(data_dir):
-    return Settings(env="production", data_dir=Path(data_dir), origin=ORIGIN, alb_arn=ARN, oidc_issuer=ISS,
-                    admin_emails=(ADMIN,), version="test-1.0")
+    return Settings(env="production", data_dir=Path(data_dir), origin=ORIGIN, admin_emails=(ADMIN,),
+                    version="test-1.0")
+
+
+def sign_in_all(sitedb, emails):
+    """A session for each email, as if each had signed in. A non-member
+    (``OUTSIDER``) stands for someone removed after signing in."""
+    import time
+    SESSIONS.clear()
+    for e in emails:
+        SESSIONS[e] = sitedb.create_session(e, time.time())
 
 
 # --------------------------------------------------------------- settings
 def test_production_refuses_to_start_without_its_settings(tmp_path):
     with pytest.raises(ConfigError) as e:
         Settings.from_env({"PINNY_ENV": "production"})
-    for name in ("PINNY_DATA_DIR", "PINNY_ORIGIN", "PINNY_ALB_ARN", "PINNY_ADMIN_EMAILS", "PINNY_VERSION"):
+    for name in ("PINNY_DATA_DIR", "PINNY_ORIGIN", "PINNY_ADMIN_EMAILS", "PINNY_VERSION"):
         assert name in str(e.value)
     env = {"PINNY_ENV": "production", "PINNY_DATA_DIR": str(tmp_path), "PINNY_ORIGIN": "http://x",
-           "PINNY_ALB_ARN": ARN, "PINNY_ADMIN_EMAILS": ADMIN, "PINNY_VERSION": "v1"}
+           "PINNY_ADMIN_EMAILS": ADMIN, "PINNY_VERSION": "v1"}
     with pytest.raises(ConfigError, match="https"):
         Settings.from_env(env)
     s = Settings.from_env(dict(env, PINNY_ORIGIN="https://pinny.test/",
                                PINNY_ADMIN_EMAILS=" Boss@Example.com , x@y.z"))
     assert s.production and s.origin == ORIGIN and s.admin_emails == (ADMIN, "x@y.z")
-    s.check_bind("0.0.0.0")  # production listens for the load balancer (security group: ALB only)
+    s.check_bind("127.0.0.1")  # production listens behind Caddy on the same host
     with pytest.raises(ConfigError):
         Settings.from_env({"PINNY_ENV": "staging"})
 
@@ -87,7 +90,8 @@ def test_every_route_declares_a_role_and_body():
         else:
             assert body is None, name
         if role == PUBLIC:
-            assert name in ("healthz", "logout", "static"), f"{name} must not be public"
+            assert name in ("healthz", "login", "logout", "setup_check", "setup", "static"), \
+                f"{name} must not be public"
         names.add(name)
     assert len(names) == len(ROUTES)
 
@@ -97,9 +101,10 @@ def test_every_route_declares_a_role_and_body():
 def site(tmp_path):
     svc = ViewerService(tmp_path)
     settings = prod_settings(tmp_path)
-    s = Site(svc, settings, Authenticator(settings, _sitedb_for(settings), verifier()))
+    s = Site(svc, settings)
     s.sitedb.put_member(REVIEWER, "reviewer", actor=ADMIN)
     s.sitedb.put_member(DRAFTSMAN, "reviewer", actor=ADMIN)
+    sign_in_all(s.sitedb, (ADMIN, REVIEWER, DRAFTSMAN, OUTSIDER))
     httpd = SiteServer(s, "127.0.0.1", 0)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
@@ -110,17 +115,10 @@ def site(tmp_path):
     svc.close()
 
 
-def _sitedb_for(settings):
-    from pinny.viewer.sitedb import SiteDB
-    db = SiteDB(settings.data_dir)
-    db.ensure_admins(settings.admin_emails)
-    return db
-
-
 def call(base, method, path, *, who=ADMIN, body=None, ctype=None, origin=ORIGIN, headers=None):
     h = dict(headers or {})
     if who is not None:
-        h[ALB_HEADER] = token(who)
+        h["Cookie"] = f"{COOKIE}={SESSIONS[who]}"
     if origin is not None:
         h["Origin"] = origin
     data = None
@@ -156,10 +154,11 @@ def _fill(path):
 
 
 def test_authorization_matrix(site):
-    base, _, _ = site
+    base, s, _ = site
     for method, path, name, role, body in ROUTES:
         if name == "static":
             continue
+        sign_in_all(s.sitedb, (ADMIN, REVIEWER, DRAFTSMAN, OUTSIDER))  # POST /api/logout ends them
         p = _fill(path)
         kw = {}
         if body == "json":
@@ -168,7 +167,8 @@ def test_authorization_matrix(site):
             kw = {"body": b"%PDF-1.4\n%%EOF", "ctype": "application/pdf"}
         results = {who: call(base, method, p, who=who, **kw) for who in (None, OUTSIDER, REVIEWER, ADMIN)}
         if role == PUBLIC:
-            assert all(r[0] == 200 for r in results.values()), name
+            want = {"login": 401, "setup_check": 400, "setup": 400}.get(name, 200)
+            assert all(r[0] == want for r in results.values()), (name, results)
             continue
         assert results[None][0] == 401 and err(results[None][2])["code"] == "unauthenticated", name
         assert results[OUTSIDER][0] == 403 and err(results[OUTSIDER][2])["code"] == "not_a_member", name
@@ -241,7 +241,7 @@ def test_me_and_reviewer_identity(site):
     base, s, svc = site
     code, _, raw = call(base, "GET", "/api/me", who=REVIEWER)
     assert json.loads(raw) == {"email": REVIEWER, "role": "reviewer", "env": "production",
-                               "sign_out_url": "/logout", "version": "test-1.0"}
+                               "sign_in": True, "version": "test-1.0"}
     doc = upload(base, who=REVIEWER)
     assert doc["uploaded_by"] == REVIEWER
     v = doc["document_version"]
@@ -309,7 +309,10 @@ def test_members(site):
         ADMIN: "admin", REVIEWER: "reviewer", DRAFTSMAN: "reviewer"}
     assert call(base, "GET", "/api/me", who=OUTSIDER)[0] == 403
     code, _, raw = call(base, "POST", "/api/members", body={"email": "Stranger@Example.com", "role": "reviewer"})
-    assert code == 200 and json.loads(raw)["email"] == OUTSIDER
+    out = json.loads(raw)
+    assert code == 200 and out["email"] == OUTSIDER and not out["has_password"]
+    assert out["setup"]["setup_url"].startswith(ORIGIN + "/setup.html#token=")
+    sign_in_all(site[1].sitedb, (ADMIN, REVIEWER, DRAFTSMAN, OUTSIDER))  # adding a member signs no one in
     assert call(base, "GET", "/api/me", who=OUTSIDER)[0] == 200
     code, _, raw = call(base, "POST", "/api/members", body={"email": "nope", "role": "reviewer"})
     assert code == 400 and err(raw)["code"] == "invalid_member"
@@ -319,13 +322,13 @@ def test_members(site):
     assert code == 400 and "yourself" in err(raw)["message"]
     code, _, raw = call(base, "POST", "/api/members/remove", body={"email": OUTSIDER})
     assert code == 200
-    assert call(base, "GET", "/api/me", who=OUTSIDER)[0] == 403
+    assert call(base, "GET", "/api/me", who=OUTSIDER)[0] == 401  # removal ends their sessions
     assert call(base, "POST", "/api/members/remove", body={"email": OUTSIDER})[0] == 404
     # The last admin cannot be demoted.
     code, _, raw = call(base, "POST", "/api/members", body={"email": ADMIN, "role": "reviewer"})
     assert code == 400 and "last admin" in err(raw)["message"]
     events = [e["action"] for e in json.loads(call(base, "GET", "/api/audit?limit=5")[2])["events"]]
-    assert events[:2] == ["member_removed", "member_added"]
+    assert events[:3] == ["member_removed", "setup_link_issued", "member_added"]
 
 
 def test_development_mode_is_the_local_admin(tmp_path, monkeypatch):
@@ -338,7 +341,7 @@ def test_development_mode_is_the_local_admin(tmp_path, monkeypatch):
     base = f"http://127.0.0.1:{httpd.server_address[1]}"
     try:
         code, h, raw = call(base, "GET", "/api/me", who=None, origin=None)
-        assert code == 200 and json.loads(raw)["role"] == "admin" and json.loads(raw)["sign_out_url"] is None
+        assert code == 200 and json.loads(raw)["role"] == "admin" and json.loads(raw)["sign_in"] is False
         assert "strict-transport-security" not in {k.lower() for k in h}
         # CSRF still applies locally: the page's own origin only.
         assert call(base, "POST", "/api/scans", who=None, body={}, origin=None)[0] == 403

@@ -33,7 +33,7 @@ py -3.12 -m venv .venv
 
 Run locally, the viewer is in development mode: no sign-in, you are the
 admin, and it refuses to listen on anything but 127.0.0.1. On the internet
-it runs in production mode behind an AWS load balancer with Cognito sign-in; see
+it runs in production mode behind Caddy (HTTPS) with Pinny's own password sign-in; see
 `docs/training-site.md` (sign-in, roles, API, deletion, configuration) and
 manage members with `python -m pinny.viewer.members`. There, PDFs are
 opened only by sandboxed job processes (`PINNY_JOBS=sandbox`, or separate
