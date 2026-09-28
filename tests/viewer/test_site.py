@@ -64,10 +64,13 @@ def prod_settings(data_dir):
 def test_production_refuses_to_start_without_its_settings(tmp_path):
     with pytest.raises(ConfigError) as e:
         Settings.from_env({"PINNY_ENV": "production"})
-    for name in ("PINNY_DATA_DIR", "PINNY_ORIGIN", "PINNY_CF_TEAM_DOMAIN", "PINNY_CF_AUD",
-                 "PINNY_ADMIN_EMAILS", "PINNY_VERSION"):
+    for name in ("PINNY_DATA_DIR", "PINNY_ORIGIN", "PINNY_ALB_ARN", "PINNY_ADMIN_EMAILS", "PINNY_VERSION"):
         assert name in str(e.value)
-    env = {"PINNY_ENV": "production", "PINNY_DATA_DIR": str(tmp_path), "PINNY_ORIGIN": "http://x",
+    with pytest.raises(ConfigError) as e:
+        Settings.from_env({"PINNY_ENV": "production", "PINNY_GATE": "cloudflare"})
+    assert "PINNY_CF_TEAM_DOMAIN" in str(e.value) and "PINNY_CF_AUD" in str(e.value)
+    env = {"PINNY_ENV": "production", "PINNY_GATE": "cloudflare", "PINNY_DATA_DIR": str(tmp_path),
+           "PINNY_ORIGIN": "http://x",
            "PINNY_CF_TEAM_DOMAIN": TEAM, "PINNY_CF_AUD": AUD, "PINNY_ADMIN_EMAILS": ADMIN,
            "PINNY_VERSION": "v1"}
     with pytest.raises(ConfigError, match="https"):
@@ -112,7 +115,7 @@ def test_every_route_declares_a_role_and_body():
         else:
             assert body is None, name
         if role == PUBLIC:
-            assert name in ("healthz", "static"), f"{name} must not be public"
+            assert name in ("healthz", "logout", "static"), f"{name} must not be public"
         names.add(name)
     assert len(names) == len(ROUTES)
 

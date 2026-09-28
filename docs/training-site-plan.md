@@ -22,10 +22,12 @@ SERVER FACTS
 - Machine for the site: the owner's AWS account. Default: its own EC2 instance,
   Ubuntu 24.04 LTS, 2 vCPU / 8 GB RAM (e.g. m7i.large), 100 GB gp3 EBS, no GPU (default)
 - Docker available? yes, installed on the instance (default)
-- Network: EC2 with no inbound ports open; Cloudflare Tunnel makes an outbound connection
-- Domain: new domain to be registered, DNS on Cloudflare (needed for the tunnel)
-- Sign-in: no company directory needed. Cloudflare Access with email one-time codes
-  for an allow-list of three addresses
+- Network (updated 2026-09-28: AWS services instead of Cloudflare): an internet-facing
+  Application Load Balancer (HTTPS 443, ACM certificate) in front of the EC2 instance;
+  the instance's security group admits the app port only from the ALB
+- Domain: subdomain pinny.ecinc.us; DNS record details to come from the owner's AWS setup
+- Sign-in: Amazon Cognito user pool, invite-only, email one-time codes, via the ALB's
+  authenticate-cognito rule; PINNY_GATE=alb
 - Who will use it: 3 people. Owner = admin (super admin); assistant and draftsman = reviewers.
   No customers
 - Backups: AWS. Nightly encrypted backup to a private S3 bucket in the same account,

@@ -141,7 +141,8 @@ In the browser:
 
 The HTTP layer is Starlette on uvicorn (`server.py`). In development it is
 a single local admin with no sign-in, on 127.0.0.1 only. In production it
-verifies Cloudflare Access, checks the members table and each route's
+verifies the sign-in gate's signed header (AWS ALB + Cognito, or Cloudflare
+Access), checks the members table and each route's
 role, enforces Origin and Content-Type on state-changing requests, sends
 security headers, streams uploads to disk, and hides internal errors
 behind a request id. `docs/training-site.md` is the contract; the page

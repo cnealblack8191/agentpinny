@@ -117,7 +117,8 @@ def urllib_quote(s: str) -> str:
 
 def test_settings_require_sandboxed_jobs_in_production(tmp_path):
     from pinny.viewer.settings import ConfigError, Settings
-    env = {"PINNY_ENV": "production", "PINNY_DATA_DIR": str(tmp_path), "PINNY_ORIGIN": "https://p.test",
+    env = {"PINNY_ENV": "production", "PINNY_GATE": "cloudflare", "PINNY_DATA_DIR": str(tmp_path),
+           "PINNY_ORIGIN": "https://p.test",
            "PINNY_CF_TEAM_DOMAIN": "t.cloudflareaccess.com", "PINNY_CF_AUD": "a",
            "PINNY_ADMIN_EMAILS": "a@b.c", "PINNY_VERSION": "v"}
     assert Settings.from_env(env).jobs == "sandbox"

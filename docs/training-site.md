@@ -3,8 +3,8 @@
 Status: v1, 2026-09-27. This is the contract every training-site session
 builds against. It follows the plan in `docs/training-site-plan.md`, whose
 section 1 holds the server facts: one EC2 instance in the owner's AWS
-account, Cloudflare Tunnel and Cloudflare Access in front, three users,
-backups to S3. Anything here that contradicts `docs/contracts.md` sections
+account at `pinny.ecinc.us`, an Application Load Balancer with Amazon
+Cognito sign-in in front, three users, backups to S3. Anything here that contradicts `docs/contracts.md` sections
 1-6 is a mistake; those still govern documents, coordinates, scans and
 reviews.
 
@@ -14,29 +14,48 @@ deployment, Step 7 training pages).
 
 ## 1. Identity and roles (built)
 
-**Sign-in happens at the gate, never in Pinny.** Cloudflare Access sits in
-front of the site with an allow-list of email addresses and one-time email
-codes. Pinny never sees a password.
+**Sign-in happens at the gate, never in Pinny.** Pinny never sees a
+password. The gate is chosen with `PINNY_GATE`.
 
-On every request the gate adds the `Cf-Access-Jwt-Assertion` header, a
-JWT signed by the Cloudflare team's keys. Pinny verifies it on every
-request:
+**`alb` (the deployment's gate).** An AWS Application Load Balancer at
+`pinny.ecinc.us` terminates HTTPS (ACM certificate) and runs an
+`authenticate-cognito` rule in front of every path. The Cognito user pool
+is invite-only (admins create users; self sign-up is off) and signs people
+in with an emailed one-time code. After sign-in the ALB adds the
+`x-amzn-oidc-data` header to every request it forwards. Pinny verifies it
+on every request:
 
-* algorithm `RS256`, key chosen by `kid` from
-  `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` (cached; an
-  unknown `kid` triggers one refetch);
-* `aud` contains the application's audience tag (`PINNY_CF_AUD`);
-* `iss` is `https://<team>.cloudflareaccess.com` (`PINNY_CF_TEAM_DOMAIN`);
-* `exp` and `nbf` hold, with 60 s leeway;
+* header `alg` is `ES256` and `kid` is a plain key id (letters, digits,
+  hyphens) before any key is fetched;
+* header `signer` is exactly this load balancer's ARN (`PINNY_ALB_ARN`),
+  so a token minted by any other load balancer is refused;
+* the ECDSA P-256 signature, against the public key from
+  `https://public-keys.auth.elb.<region>.amazonaws.com/<kid>` (the region
+  comes from the ARN; keys are cached);
+* `exp` holds, with 60 s leeway, and `iss` equals the Cognito user pool
+  (`PINNY_OIDC_ISSUER`) when set;
 * the `email` claim is present. It is lower-cased and becomes the user id.
 
-A request with no token, or a token that fails any check, gets
-`401 unauthenticated`. The `CF_Authorization` cookie is not read; the
-header is the only source.
+The ALB keeps `=` padding in the token's base64url segments, which general
+JWT libraries reject, so this check is done directly with `cryptography`.
+The instance's security group admits the app port **only from the ALB's
+security group**; nothing else can reach Pinny to present a header.
+
+`GET /logout` expires the ALB session cookies (`AWSELBAuthSessionCookie-0`
+to `-3`) and redirects to the Cognito logout page (`PINNY_SIGN_OUT_URL`).
+
+**`cloudflare` (alternative).** Cloudflare Access adds
+`Cf-Access-Jwt-Assertion` (RS256, key by `kid` from the team JWKS, `aud` =
+`PINNY_CF_AUD`, `iss` = `https://<PINNY_CF_TEAM_DOMAIN>`, `exp`, `email`).
+Sign-out is Cloudflare's `/cdn-cgi/access/logout`.
+
+With either gate, a request with no token, or a token that fails any
+check, gets `401 unauthenticated`. Only the gate's header is read, never a
+cookie.
 
 **Members.** Passing the gate is not enough. Pinny keeps its own members
 table, and a verified email that is not an active member gets
-`403 not_a_member`. So an address added to Cloudflare by mistake still
+`403 not_a_member`. So an address invited in Cognito by mistake still
 sees nothing.
 
 | Role | Can |
@@ -45,7 +64,8 @@ sees nothing.
 | `reviewer` | upload, scan, batch scan, review pins, export reports, delete documents they uploaded |
 
 Every route declares a minimum role (`public`, `reviewer` or `admin`). A
-test fails if any route has none. `public` is only `GET /healthz`.
+test fails if any route has none. `public` is only `GET /healthz`,
+`GET /logout` and the static page files.
 
 The first admin comes from `PINNY_ADMIN_EMAILS` (comma-separated), added on
 startup if missing and never removed by it. Further members are managed on
@@ -251,10 +271,10 @@ deletion is complete everywhere after 30 days.
 
 | # (plan §2) | Threat | Fix | Status |
 |---|---|---|---|
-| 1 | Anyone with the URL sees drawings | Cloudflare Access + JWT verification + members table + per-route roles | built |
+| 1 | Anyone with the URL sees drawings | ALB + Cognito sign-in, signed-header verification (signer pinned), members table, per-route roles | built |
 | 2 | Global document list leaks across owners | one workspace of 3 trusted people; `uploaded_by` for deletion | built (single workspace) |
 | 3 | Reviews under the server's OS account | signed-in email as reviewer | built |
-| 4 | `http.server`: no TLS, slow clients, a thread per connection | uvicorn + Starlette, bounded thread pool, TLS at Cloudflare, app bound to localhost | built |
+| 4 | `http.server`: no TLS, slow clients, a thread per connection | uvicorn + Starlette, bounded thread pool, TLS and slow-client handling at the ALB, app reachable only from the ALB | built |
 | 5 | Uploads held in memory | streamed to disk with the limit enforced while reading | built |
 | 6 | Heavy work in web requests | rendering and template matching in job pools with limits | built |
 | 7 | Untrusted PDFs parsed in the web process | ingest and rendering only in sandboxed children | built |
@@ -300,11 +320,15 @@ class RenderClient(Protocol):
 | `PINNY_ENV` | `development` (default) | `production` |
 | `PINNY_DATA_DIR` | optional | required |
 | `PINNY_ORIGIN` | derived from the host | required, `https://...` |
-| `PINNY_CF_TEAM_DOMAIN` | unused | required, e.g. `acme.cloudflareaccess.com` |
-| `PINNY_CF_AUD` | unused | required (the Access application's AUD tag) |
+| `PINNY_GATE` | unused | `alb` (default) or `cloudflare` |
+| `PINNY_ALB_ARN` | unused | required with `alb`: the load balancer's ARN |
+| `PINNY_OIDC_ISSUER` | unused | recommended with `alb`: `https://cognito-idp.<region>.amazonaws.com/<pool id>` |
+| `PINNY_SIGN_OUT_URL` | unused | with `alb`: the Cognito `/logout?client_id=...&logout_uri=...` URL |
+| `PINNY_CF_TEAM_DOMAIN` | unused | required with `cloudflare`, e.g. `acme.cloudflareaccess.com` |
+| `PINNY_CF_AUD` | unused | required with `cloudflare` (the Access application's AUD tag) |
 | `PINNY_ADMIN_EMAILS` | optional | required for first start |
 | `PINNY_VERSION` | from git | required (build-time) |
 | `PINNY_JOBS` | `inprocess` (default) | `sandbox` (default) or `external`; `inprocess` is refused |
-| Bind address | `127.0.0.1` only | `127.0.0.1` (cloudflared connects locally) |
+| Bind address | `127.0.0.1` only | the instance's private address; the security group admits only the ALB |
 
 Production refuses to start if any required variable is missing.

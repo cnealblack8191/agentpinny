@@ -57,6 +57,7 @@ CSP = ("default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-
 # state-changing request must send: "json", "pdf" or None (no body).
 ROUTES = [
     ("GET", "/healthz", "healthz", PUBLIC, None),
+    ("GET", "/logout", "logout", PUBLIC, None),
     ("GET", "/api/me", "me", REVIEWER, None),
     ("GET", "/api/health", "health", REVIEWER, None),
     ("GET", "/api/documents", "documents", REVIEWER, None),
@@ -234,6 +235,16 @@ class Site:
     # --------------------------------------------------------------- handlers
     def h_healthz(self, request, ident, body):
         return self._json({"ok": True, "version": self.settings.version})
+
+    def h_logout(self, request, ident, body):
+        """ALB gate sign-out: expire the load balancer's session cookies, then
+        send the browser to the Cognito logout page (or back to the start)."""
+        resp = Response(status_code=302, headers={"Location": self.settings.sign_out_url or "/",
+                                                  "Cache-Control": "no-store"})
+        for i in range(4):  # the ALB splits a large session across -0 .. -3
+            resp.set_cookie(f"AWSELBAuthSessionCookie-{i}", "", max_age=0, expires=0, path="/",
+                            secure=True, httponly=True, samesite="lax")
+        return resp
 
     def h_me(self, request, ident: Identity, body):
         return self._json({"email": ident.email, "role": ident.role, "env": self.settings.env,
