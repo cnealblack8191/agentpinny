@@ -54,7 +54,7 @@ need_root "$PROFILE" "$REF"
 check_profile "$PROFILE"
 ENV_FILE="$PINNY_ETC/$PROFILE.env"
 [ -f "$ENV_FILE" ] || die "$ENV_FILE is missing: run pinny-bootstrap first"
-if grep -q CHANGE_ME "$ENV_FILE"; then
+if grep -q "^[^#]*CHANGE_ME" "$ENV_FILE"; then
   die "edit $ENV_FILE first (replace every CHANGE_ME)"
 fi
 GIT_URL=$(env_value "$PINNY_ETC/ops.env" PINNY_GIT_URL) || GIT_URL=https://github.com/cnealblack8191/agentpinny.git

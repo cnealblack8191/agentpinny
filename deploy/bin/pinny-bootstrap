@@ -244,7 +244,7 @@ if [ "$CHANGED" = yes ]; then run systemctl reload-or-restart caddy; else run sy
 # ---------------------------------------------------------------- timers
 say "Timers"
 run systemctl enable --now --quiet pinny-check-alerts.timer
-if [ ! -f "$PINNY_ETC/ops.env" ] || grep -q CHANGE_ME "$PINNY_ETC/ops.env"; then
+if [ ! -f "$PINNY_ETC/ops.env" ] || grep -q "^[^#]*CHANGE_ME" "$PINNY_ETC/ops.env"; then
   OPS_READY=no
   warn "$PINNY_ETC/ops.env still has CHANGE_ME values: backups are not scheduled yet"
 else
@@ -265,7 +265,7 @@ Next steps (docs/deployment.md):
 EOF
 n=1
 for p in $PROFILES; do
-  if grep -q CHANGE_ME "$PINNY_ETC/$p.env" 2>/dev/null; then
+  if grep -q "^[^#]*CHANGE_ME" "$PINNY_ETC/$p.env" 2>/dev/null; then
     echo "  $n. Edit $PINNY_ETC/$p.env: set PINNY_ADMIN_EMAILS to your email."
     n=$((n + 1))
   fi
