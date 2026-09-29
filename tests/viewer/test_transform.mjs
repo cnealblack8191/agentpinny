@@ -87,3 +87,27 @@ test('hitTest picks the nearest pin within the radius', () => {
   assert.equal(T.hitTest(v, pins, 27, 20), 1);
   assert.equal(T.hitTest(v, pins, 200, 200), -1);
 });
+
+test('pinch zooms by the change in finger spacing and keeps the midpoint fixed', () => {
+  for (const rotation of T.ROTATIONS) {
+    const start = { zoom: 0.5, rotation, panX: 40, panY: -30 };
+    const a0 = { x: 300, y: 300 }, b0 = { x: 500, y: 300 };
+    const under = T.toCanonical(start, 400, 300);
+    // Spread to twice the distance and move the midpoint 50 px right.
+    const v = T.pinch(start, a0, b0, { x: 250, y: 300 }, { x: 650, y: 300 });
+    assert.ok(Math.abs(v.zoom - 1) < 1e-12);
+    assert.equal(v.rotation, start.rotation);
+    const s = T.toScreen(v, under.x, under.y);
+    assert.ok(Math.hypot(s.x - 450, s.y - 300) < 1e-9);
+  }
+});
+
+test('pinch with unchanged spacing only pans, and zoom stays clamped', () => {
+  const start = { zoom: 1, rotation: 0, panX: 0, panY: 0 };
+  const v = T.pinch(start, { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 10, y: 20 }, { x: 110, y: 20 });
+  assert.deepEqual(v, { zoom: 1, rotation: 0, panX: 10, panY: 20 });
+  const big = T.pinch(start, { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 0 }, { x: 1000, y: 0 });
+  assert.equal(big.zoom, T.MAX_ZOOM);
+  const same = T.pinch(start, { x: 5, y: 5 }, { x: 5, y: 5 }, { x: 5, y: 5 }, { x: 50, y: 5 });
+  assert.equal(same.zoom, 1); // fingers started on one spot: no zoom
+});

@@ -44,6 +44,10 @@ const el = {
 
 const HIDDEN_STATES = new Set(['rejected', 'removed']);
 const CLICK_SLOP = 4; // CSS px a pointer may move and still count as a click
+const TOUCH_SLOP = 10; // the same for a finger, which wobbles more
+const TOUCH_HIT_RADIUS = 22; // CSS px around a pin a finger tap selects it (mouse: 10)
+const DOUBLE_TAP_MS = 300; // second tap within this long ...
+const DOUBLE_TAP_PX = 30; // ... and this close zooms in
 const MIN_TEMPLATE_SIDE = 8; // detector minimum (ScanSettings.min_template_side)
 const SCAN_MODE_KEY = 'pinny.scanMode';
 const BATCH_POLL_MS = 1500;
@@ -64,6 +68,11 @@ const S = {
   template: null,
   dragBox: null,
   drag: null,
+  // Touch: every finger on the viewport (pointerId -> viewport point), the
+  // two-finger pinch in progress, and the last one-finger tap (double tap).
+  touches: new Map(),
+  pinch: null,
+  lastTap: null,
   spaceDown: false,
   scans: [],
   scanId: null,
@@ -707,7 +716,7 @@ function clearPage() {
   S.seq.page += 1;
   S.seq.scan += 1;
   S.seq.scanReq += 1; // a scan still running for the old page can no longer apply
-  Object.assign(S, { page: null, frame: null, image: null, template: null, dragBox: null, drag: null,
+  Object.assign(S, { page: null, frame: null, image: null, template: null, dragBox: null, drag: null, pinch: null,
     scans: [], scanId: null, scan: null, serverPins: [], selected: null, scanning: false });
   setStatus(el.scanStatus, '');
 }
@@ -1143,28 +1152,79 @@ function setView(v) {
   render();
 }
 
+const isTouch = (e) => e.pointerType === 'touch';
+
+// Two fingers pan and zoom in every mode; one finger does what the mode says.
+// A drag one finger had started (a template box, say) is dropped when the
+// second finger lands, and the finger left after a pinch pans.
+function startPinch() {
+  const [a, b] = [...S.touches.entries()];
+  S.drag = null;
+  S.dragBox = null;
+  S.lastTap = null;
+  S.pinch = { ids: [a[0], b[0]], a0: a[1], b0: b[1], view: { ...S.view } };
+  render();
+}
+
+function pinchMove() {
+  const p = S.pinch;
+  setView(T.pinch(p.view, p.a0, p.b0, S.touches.get(p.ids[0]), S.touches.get(p.ids[1])));
+}
+
+function touchUp(e) {
+  S.touches.delete(e.pointerId);
+  if (!S.pinch) return false;
+  if (!S.pinch.ids.includes(e.pointerId)) return true;
+  S.pinch = null;
+  const rest = [...S.touches.entries()][0];
+  if (rest) {
+    S.drag = { kind: 'pan', pointerId: rest[0], start: rest[1], last: rest[1],
+      startC: T.toCanonical(S.view, rest[1].x, rest[1].y), moved: true, button: 0, touch: true };
+  }
+  return true;
+}
+
 el.viewport.addEventListener('pointerdown', (e) => {
   el.viewport.focus({ preventScroll: true });
   if (!S.frame || e.button === 2) return;
   const s = localPoint(e);
+  if (isTouch(e)) {
+    e.preventDefault();
+    // The first finger of a new gesture: forget fingers whose lift was lost.
+    if (e.isPrimary) { S.touches.clear(); S.pinch = null; }
+    if (S.touches.size >= 2) return; // a third finger is ignored
+    el.viewport.setPointerCapture(e.pointerId);
+    S.touches.set(e.pointerId, s);
+    if (S.touches.size === 2) {
+      startPinch();
+      return;
+    }
+  }
   const pan = e.button === 1 || S.spaceDown || (S.mode === 'pan' && e.button === 0);
   if (!pan && e.button !== 0) return;
   e.preventDefault();
   el.viewport.setPointerCapture(e.pointerId);
   S.drag = { kind: pan ? 'pan' : S.mode, pointerId: e.pointerId, start: s, last: s,
-    startC: T.toCanonical(S.view, s.x, s.y), moved: false, button: e.button };
+    startC: T.toCanonical(S.view, s.x, s.y), moved: false, button: e.button, touch: isTouch(e) };
   render();
 });
 
 el.viewport.addEventListener('pointermove', (e) => {
   if (!S.frame) return;
   const s = localPoint(e);
+  if (isTouch(e) && S.touches.has(e.pointerId)) {
+    S.touches.set(e.pointerId, s);
+    if (S.pinch) {
+      if (S.pinch.ids.includes(e.pointerId)) pinchMove();
+      return;
+    }
+  }
   const c = T.toCanonical(S.view, s.x, s.y);
   el.cursorPos.textContent = T.insidePage(c, S.frame)
     ? `x ${c.x.toFixed(1)}  y ${c.y.toFixed(1)} px` : 'outside page';
   const d = S.drag;
   if (!d || d.pointerId !== e.pointerId) return;
-  if (Math.hypot(s.x - d.start.x, s.y - d.start.y) > CLICK_SLOP) d.moved = true;
+  if (Math.hypot(s.x - d.start.x, s.y - d.start.y) > (d.touch ? TOUCH_SLOP : CLICK_SLOP)) d.moved = true;
   if (d.kind === 'pan') {
     setView(T.panBy(S.view, s.x - d.last.x, s.y - d.last.y));
   } else if ((d.kind === 'template' || d.kind === 'legendbox') && d.moved) {
@@ -1174,7 +1234,25 @@ el.viewport.addEventListener('pointermove', (e) => {
   d.last = s;
 });
 
+// A finger tap on the page in pan mode that selected no pin: a second one
+// soon after, close by, zooms in there.
+function doubleTap(s) {
+  const now = performance.now();
+  const t = S.lastTap;
+  if (t && now - t.time <= DOUBLE_TAP_MS && Math.hypot(s.x - t.x, s.y - t.y) <= DOUBLE_TAP_PX) {
+    S.lastTap = null;
+    setView(T.zoomAt(S.view, 2, s.x, s.y));
+    return true;
+  }
+  S.lastTap = { x: s.x, y: s.y, time: now };
+  return false;
+}
+
 function endDrag(e, cancelled) {
+  if (isTouch(e) && touchUp(e)) {
+    render();
+    return;
+  }
   const d = S.drag;
   if (!d || d.pointerId !== e.pointerId) return;
   S.drag = null;
@@ -1183,7 +1261,9 @@ function endDrag(e, cancelled) {
   if (!cancelled) {
     if (d.kind === 'pan' && !d.moved && S.mode === 'pan' && d.button === 0) {
       const pins = visiblePins();
-      const i = T.hitTest(S.view, pins, s.x, s.y);
+      const i = T.hitTest(S.view, pins, s.x, s.y, d.touch ? TOUCH_HIT_RADIUS : undefined);
+      if (d.touch && i < 0 && doubleTap(s)) return;
+      if (d.touch && i >= 0) S.lastTap = null;
       selectPin(i >= 0 ? pins[i].pin_id : null);
     } else if (d.kind === 'template' && d.moved) {
       const box = T.boxFromDrag(d.startC, c, S.frame);
