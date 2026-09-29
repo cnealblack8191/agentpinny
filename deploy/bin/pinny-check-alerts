@@ -310,6 +310,8 @@ def run_checks(state: Dict, now: float, *, profiles: List[str], etc: Path, opt: 
     for p in profiles:
         if not (opt / p / "current").exists():
             continue  # not deployed yet
+        if unit_run("is-enabled", "--quiet", f"pinny@{p}.target") != 0:
+            continue  # switched off on purpose (docs/deployment.md, "Staging and production")
         env = read_env_file(etc / f"{p}.env")
         alerts += check_health(p, env, get)
         alerts += check_units(p, unit_run)

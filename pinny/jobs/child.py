@@ -131,7 +131,11 @@ def main() -> int:
                        "message": "The scanning sandbox is not available on this server."})
 
     try:
-        from . import tasks
+        from . import tasks, train_tasks
+        # In a sandboxed child, pages missing from the PNG cache are rendered
+        # by the interactive worker (its own low-privilege user), never by
+        # opening an uploaded PDF here: the train child runs as the web user.
+        train_tasks.RENDER_IN_WORKERS = True
         result = tasks.run(kind, payload, data_dir, job_id=req.get("job_id"))
         return answer({"ok": True, "result": result})
     except MemoryError:

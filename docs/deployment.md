@@ -449,7 +449,15 @@ copies the databases aside (for a rollback), switches `current` to the new
 release, restarts the web and worker units, and waits until `/healthz`
 reports the new version and a test job has gone through a worker's
 sandbox. If any of that fails after the switch, it switches back to the
-previous release by itself and says so. It keeps the newest 5 releases.
+previous release by itself and says so. It keeps the newest 3 releases, and prunes download-cache files unused for 30 days.
+
+**Training runs and deploys.** A deploy does not restart the train worker
+while a training, dataset or benchmark job is running (it would cut the run
+off). It says so; restart that worker after the run
+(`sudo systemctl restart pinny-worker-train@production`), or it picks up the
+new release at the evening stop. `PINNY_RESTART_TRAINING=yes sudo pinny-deploy ...`
+restarts it anyway.
+
 
 Restarting the workers interrupts a running job. A scan or page job is
 requeued and runs again a few seconds later; a training run is marked
@@ -484,6 +492,8 @@ Anything saved after that deploy (new reviews, members) is lost, so only
 do this when the old release will not start otherwise.
 
 ## 8. Backups
+
+Page images (`documents/*/pages/`) are left out: Pinny renders them again from each PDF when a page is opened.
 
 * **When:** every weekday at 18:15 New York time (production; staging at
   18:35), before the 19:00 shutdown. If the server was off at that time, the

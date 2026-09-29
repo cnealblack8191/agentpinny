@@ -123,3 +123,18 @@ def test_run_checks_skips_profiles_not_deployed(tmp_path):
                            srv=tmp_path, caddy_logs=tmp_path, backup_state=tmp_path,
                            get=lambda *a, **k: (0, None), unit_run=lambda *a: 1)
     assert [a for a in alerts if not a.key.startswith("disk:")] == []
+
+
+def test_run_checks_skips_a_profile_switched_off(tmp_path):
+    """Found by review: turning staging off (its target disabled) left its
+    units enabled-but-stopped and /healthz down, which alerted forever."""
+    (tmp_path / "staging" / "current").mkdir(parents=True)
+    (tmp_path / "staging.env").write_text("PINNY_PORT=8002\n")
+
+    def units(*a):
+        return 1 if a[-1] == "pinny@staging.target" else 0  # target disabled; everything else "enabled"
+
+    alerts = ca.run_checks({}, time.time(), profiles=["staging"], etc=tmp_path, opt=tmp_path,
+                           srv=tmp_path, caddy_logs=tmp_path, backup_state=tmp_path,
+                           get=lambda *a, **k: (0, None), unit_run=units)
+    assert [a for a in alerts if not a.key.startswith("disk:")] == []

@@ -88,6 +88,10 @@ def _model_summary(meta: Dict[str, Any]) -> Dict[str, Any]:
             "created_at": meta.get("created_at")}
 
 
+# Set by pinny.jobs.child: render missing pages through render_page jobs.
+RENDER_IN_WORKERS = False
+
+
 # ------------------------------------------------------------ build_dataset
 class _CountingRender:
     """The render service, reporting a step of progress per page rendered."""
@@ -141,7 +145,12 @@ def build_dataset(p: Dict[str, Any], data_dir: Path, progress: Progress, job_id:
     progress.update(0.02, "exporting reviews from the learning store")
     with LearningStore(data_dir) as store:
         export = store.export(document_version=version)
-    render_service = RenderService(data_dir, cache_size=2)
+    if RENDER_IN_WORKERS:
+        from pinny.jobs.queue import JobQueue
+        from pinny.viewer.render_client import JobRenderClient
+        render_service = JobRenderClient(data_dir, JobQueue(data_dir), cache_size=2)
+    else:  # in-process (development, tests): no separate workers to ask
+        render_service = RenderService(data_dir, cache_size=2)
     export, skipped = _without_deleted_documents(export, render_service)
     if skipped:
         progress.update(0.05, f"left out {skipped} scan(s) of deleted drawings")

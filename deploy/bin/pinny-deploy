@@ -26,7 +26,7 @@ set -Eeuo pipefail
 . "$(dirname "$(readlink -f "$0")")/pinny-common.sh"
 
 TORCH_INDEX=https://download.pytorch.org/whl/cpu
-KEEP_RELEASES=5
+KEEP_RELEASES=3  # each has its own Python environment (about 1.5 GB with torch)
 
 usage() {
   sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
@@ -158,6 +158,8 @@ if enable_units "$PROFILE" "$REL" && restart_units "$PROFILE" && verify_release 
       run rm -rf -- "$dir"
     fi
   done < <(find "$BASE/releases" -mindepth 1 -maxdepth 1 -type d | sort -r)
+  # The download cache only speeds up rebuilding the same versions.
+  find "$PIP_CACHE_DIR" -type f -atime +30 -delete 2>/dev/null || true
   exit 0
 fi
 

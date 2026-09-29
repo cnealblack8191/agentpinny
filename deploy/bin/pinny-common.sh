@@ -109,9 +109,30 @@ enabled_units() {
   done
 }
 
+# training_running PROFILE: a training, dataset or benchmark job is running.
+training_running() {
+  local data n
+  data=$(env_value "$PINNY_ETC/$1.env" PINNY_DATA_DIR) || return 1
+  [ -e "$data/jobs/jobs.sqlite3" ] || return 1
+  n=$(sqlite3 -readonly "$data/jobs/jobs.sqlite3" \
+    "SELECT COUNT(*) FROM jobs WHERE pool='train' AND status='running'" 2>/dev/null) || return 1
+  [ "${n:-0}" -gt 0 ]
+}
+
 restart_units() {
-  local -a units
+  local -a units keep
   mapfile -t units < <(enabled_units "$1")
+  # Restarting the train worker would cut off a run that may have taken hours
+  # (it is not retried). Leave it on the old release until the run ends; it
+  # picks up the new release at its next restart (at the latest the evening stop).
+  if [ "${PINNY_RESTART_TRAINING:-no}" != yes ] && training_running "$1"; then
+    warn "a training run is in progress on $1: the train worker keeps the old release until it" \
+      "finishes. Restart it afterwards: systemctl restart pinny-worker-train@$1" \
+      "(or deploy with PINNY_RESTART_TRAINING=yes to stop the run now)"
+    keep=()
+    for u in "${units[@]}"; do [ "$u" = "pinny-worker-train@$1.service" ] || keep+=("$u"); done
+    units=("${keep[@]}")
+  fi
   run systemctl restart "${units[@]}"
   run systemctl start "pinny@$1.target"
 }

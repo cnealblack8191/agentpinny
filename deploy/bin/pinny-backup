@@ -47,6 +47,10 @@ FORMAT = 1
 DB_SUFFIX = ".sqlite3"
 SKIP_SUFFIXES = tuple(DB_SUFFIX + s for s in ("-wal", "-shm", "-journal"))
 SKIP_TOP = {"tmp"}  # upload staging: never needed after a restore
+# documents/<sha>/pages/ holds the page images Pinny renders from source.pdf
+# on demand: about 10 MB per sheet, barely compressible, and recreated after
+# a restore, so they are left out.
+SKIP_CACHE_DIR = "pages"
 
 
 class BackupError(RuntimeError):
@@ -110,6 +114,8 @@ def walk(data_dir: Path):
         rel_root = rootp.relative_to(data_dir)
         if rel_root == Path("."):
             dirs[:] = [d for d in dirs if d not in SKIP_TOP]
+        elif len(rel_root.parts) == 2 and rel_root.parts[0] == "documents":
+            dirs[:] = [d for d in dirs if d != SKIP_CACHE_DIR]
         dirs.sort()
         for d in dirs:
             yield rootp / d, rel_root / d
@@ -321,6 +327,14 @@ def main(argv=None) -> int:
         work_dir = Path(args.work_dir) if args.work_dir else state_dir / "work"
         work_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(work_dir, 0o700)
+        # A run cut off (the evening stop, a failed upload) leaves its archive
+        # and database copies here; they would pile up and eat the disk.
+        for old in work_dir.glob(f"pinny-{label}-*"):
+            log(f"  removing leftover {old.name}")
+            if old.is_dir():
+                shutil.rmtree(old, ignore_errors=True)
+            else:
+                old.unlink(missing_ok=True)
         check_space(work_dir, data_size(data_dir))
 
         name = f"pinny-{label}-{utc_stamp(now)}"

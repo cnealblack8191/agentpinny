@@ -465,3 +465,32 @@ def test_a_rescan_supersedes_the_old_scan_for_marking_and_the_queue(site):
     code, out = post(base, "/api/training/pages/complete", {"document_version": v, "page_index": 0},
                      who=REVIEWER)
     assert code == 200 and out["status"] == "complete", out
+
+
+def test_a_sandboxed_dataset_build_has_missing_pages_rendered_by_the_workers(site, monkeypatch):
+    """Found by review: the train child (web user) rendered pages straight from
+    the uploaded PDF when a PNG was missing (e.g. after a restore, which leaves
+    page images out). In a sandboxed child it now asks for render_page jobs."""
+    from pinny.jobs.progress import Progress
+    from pinny.render import RenderService
+    from pinny.viewer.render_client import JobRenderClient
+
+    base, s, svc = site
+    v, st = scanned(base, svc)
+    for i, p in enumerate(st["pins"]):
+        act(base, st["scan_id"], p["pin_id"], "approve" if i else "reject")
+    data = s.settings.data_dir
+    for png in (data / "documents").rglob("pages/*.png"):
+        png.unlink()
+    asked = []
+
+    def fake_job(self, version, page_index):  # what the interactive worker would do
+        asked.append((version, page_index))
+        RenderService(data).render_page_png(version, page_index)
+
+    monkeypatch.setattr(JobRenderClient, "_render_job", fake_job)
+    monkeypatch.setattr(train_tasks, "RENDER_IN_WORKERS", True)
+    job_id = "test"
+    info = train_tasks.build_dataset({}, data, Progress(None, data_dir=data), job_id)
+    assert asked == [(v, 0)]
+    assert sum(c["pos"] for c in info["counts"]["verifier"].values()) == 4

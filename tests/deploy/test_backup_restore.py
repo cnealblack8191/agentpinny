@@ -167,3 +167,20 @@ def test_no_destination_is_an_error(data_dir, tmp_path, monkeypatch):
     monkeypatch.setenv("PINNY_BACKUP_BUCKET", "CHANGE_ME")
     assert backup.main(["--profile", "production", "--data-dir", str(data_dir),
                         "--state-dir", str(tmp_path / "s")]) == 2
+
+
+def test_page_image_cache_is_left_out_and_leftovers_are_cleared(data_dir, tmp_path):
+    """Page PNGs are re-rendered from source.pdf on demand; a cut-off run's
+    archive in the work dir must not pile up (found by review)."""
+    import tarfile
+    work = tmp_path / "state" / "work"
+    work.mkdir(parents=True)
+    (work / "pinny-production-20260101T000000Z.tar.gz").write_bytes(os.urandom(4096))
+    (work / "pinny-production-20260101T000000Z.dbs").mkdir()
+    dest = run_backup(data_dir, tmp_path)
+    [arc] = sorted(dest.rglob("*.tar.gz"))
+    with tarfile.open(arc) as t:
+        names = t.getnames()
+    assert any(n.endswith("source.pdf") for n in names)
+    assert not any("/pages/" in n or n.endswith("/pages") for n in names), names
+    assert not list(work.glob("pinny-production-2026010*"))
