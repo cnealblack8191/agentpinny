@@ -186,6 +186,14 @@ missing.
 Template scans are unchanged: the tag tools appear only on legend scans, and
 pins added to a template scan have no tag.
 
+## Sheet info (optional OCR)
+
+OCR is off until an admin turns it on under **OCR (admin)**. It is one
+switch for the whole site, and `$PINNY_OCR_ENGINE` on the server overrides
+it. When it is on, **Read sheet info** under *2. Page* reads the sheet
+number, title and revision from the title-block corner of the open page and
+saves the result for that page. See `docs/ocr.md`.
+
 ## Sign-in and security
 
 The HTTP layer is Starlette on uvicorn (`server.py`). In development it is

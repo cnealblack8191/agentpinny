@@ -82,6 +82,11 @@ ROUTES = [
     ("POST", "/api/documents/{v}/legend/confirm", "legend_confirm", REVIEWER, "json"),
     ("POST", "/api/documents/{v}/legend/save-standard", "legend_save_standard", REVIEWER, "json"),
     ("GET", "/api/legend-library", "legend_library", REVIEWER, None),
+    # Optional OCR (docs/ocr.md): an admin turns it on; reviewers read sheet info.
+    ("GET", "/api/ocr", "ocr_state", REVIEWER, None),
+    ("POST", "/api/ocr", "ocr_set", ADMIN, "json"),
+    ("GET", "/api/documents/{v}/pages/{i:int}/sheet-info", "sheet_info", REVIEWER, None),
+    ("POST", "/api/documents/{v}/pages/{i:int}/sheet-info", "sheet_info_read", REVIEWER, "json"),
     ("GET", "/api/documents/{v}/set-scans", "set_scans", REVIEWER, None),
     ("POST", "/api/documents/{v}/set-scans", "set_scan_start", REVIEWER, "json"),
     ("GET", "/api/documents/{v}/counts", "counts", REVIEWER, None),
@@ -403,6 +408,26 @@ class Site:
 
     def h_legend_library(self, request, ident, body):
         return self._json(self.service.legend.library())
+
+    # ------------------------------------------------------------------ ocr
+    def h_ocr_state(self, request, ident, body):
+        return self._json(self.service.ocr.state())
+
+    def h_ocr_set(self, request, ident: Identity, b: dict):
+        out = self.service.ocr.set_engine(b.get("engine"))
+        self.sitedb.audit(ident.email, "ocr_engine_set", None, {"engine": out["engine"]})
+        return self._json(out)
+
+    def h_sheet_info(self, request, ident, body):
+        p = request.path_params
+        return self._json({"sheet_info": self.service.ocr.saved(p["v"], p["i"]),
+                           "ocr": {"enabled": self.service.ocr.enabled()}})
+
+    def h_sheet_info_read(self, request, ident: Identity, b: dict):
+        p = request.path_params
+        out = self.service.ocr.read(p["v"], p["i"], b.get("region"), requested_by=ident.email)
+        self.sitedb.audit(ident.email, "sheet_info_read", p["v"], {"page_index": p["i"]})
+        return self._json({"sheet_info": out})
 
     def h_set_scans(self, request, ident, body):
         v = request.path_params["v"]

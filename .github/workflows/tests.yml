@@ -16,6 +16,8 @@ jobs:
           cache-dependency-path: requirements.lock.txt
       - run: pip install --require-hashes -r requirements.lock.txt
       - run: pip install -e . --no-deps
+      # Optional OCR (docs/ocr.md): without it the real-engine tests skip.
+      - run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
       - name: Unit tests
         run: python -m pytest -q tests evaluation/tests
       - name: Evaluator regression gate (mini corpus)

@@ -76,3 +76,5 @@ body.auth { display: block; background: #f4f4f4; }
 #manual-scan[open] > summary .muted { display: none; }
 #manual-scan > section { border-top: none; }
 #manual-scan > section:first-of-type > h2 { display: none; }
+#sheet-info-result td.guess { font-style: italic; color: #8a5a00; }
+#sheet-info-result th { text-align: left; padding-right: 0.5em; }

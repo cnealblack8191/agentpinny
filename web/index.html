@@ -95,6 +95,11 @@
     <section>
       <h2>2. Page</h2>
       <div id="pages" class="pages"><span class="muted">Upload a PDF first.</span></div>
+      <div id="sheet-info" hidden>
+        <button id="sheet-info-btn" title="Read the sheet number, title and revision from the title block (OCR)">Read sheet info</button>
+        <p id="sheet-info-status" class="status" role="status"></p>
+        <div id="sheet-info-result" hidden></div>
+      </div>
     </section>
 
     <details id="manual-scan" open>
@@ -196,6 +201,15 @@
       </div>
     </section>
 
+    <section id="ocr-section" hidden>
+      <h2>OCR (admin)</h2>
+      <p class="muted">Off by default. When on, everyone can read the sheet number, title and revision of a page from its title block.</p>
+      <label for="ocr-engine">Engine</label>
+      <select id="ocr-engine"></select>
+      <button id="ocr-save-btn">Save</button>
+      <p id="ocr-status" class="status" role="status"></p>
+    </section>
+
     <section id="account-section" hidden>
       <h2>Your password</h2>
       <form id="password-form">
@@ -231,5 +245,6 @@
   </main>
   <script type="module" src="app.js"></script>
   <script type="module" src="train/viewer-hook.js"></script>
+  <script type="module" src="ocr.js"></script>
 </body>
 </html>
