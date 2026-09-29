@@ -33,6 +33,9 @@ POOLS = {
     "template": "interactive",
     "scan": "scan",
     "selftest": "interactive",
+    # Legend workflow (docs/legend-reader.md, docs/set-scanning.md).
+    "read_legend": "interactive",
+    "scan_set": "scan",
     # Training (docs/training-site.md section 4): admin jobs, one at a time.
     "build_dataset": "train",
     "train_verifier": "train",
@@ -50,6 +53,13 @@ LIMITS = {
     # Measured ~760 MB RSS for four rotations on an Arch D sheet; allow Arch E.
     "scan": Limits(memory_mb=4096, cpu_s=300, wall_s=360),
     "selftest": Limits(memory_mb=1024, cpu_s=30, wall_s=60),
+    # Finding the legend reads only page text (0.75 s for a 91 MB, 42-page
+    # set); then one page's drawing is read.
+    "read_legend": Limits(memory_mb=2048, cpu_s=120, wall_s=120),
+    # Every sheet, one at a time: a 42-page dense set took ~99 s and ~600 MB
+    # resident (docs/set-scanning.md). Scanned sheets are rendered at 200 DPI
+    # and template matched like a ``scan`` job, so the same address space.
+    "scan_set": Limits(memory_mb=4096, cpu_s=1800, wall_s=1800),
     # Renders every labelled page once (up to 100 MP each) and writes crops and
     # grayscale pages; one page raster at a time.
     "build_dataset": Limits(memory_mb=3072, cpu_s=3600, wall_s=3600, open_files=256, max_attempts=1),

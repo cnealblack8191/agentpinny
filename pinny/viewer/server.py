@@ -74,6 +74,18 @@ ROUTES = [
     ("GET", "/api/documents/{v}/pages/{i:int}/raster.png", "raster", REVIEWER, None),
     ("GET", "/api/documents/{v}/pages/{i:int}/scans", "page_scans", REVIEWER, None),
     ("GET", "/api/documents/{v}/batches", "document_batches", REVIEWER, None),
+    # Legend workflow (docs/training-site.md section 3): read and check the
+    # legend, scan the whole set with it, count.
+    ("GET", "/api/documents/{v}/legend", "legend", REVIEWER, None),
+    ("POST", "/api/documents/{v}/legend/read", "legend_read", REVIEWER, "json"),
+    ("POST", "/api/documents/{v}/legend/edit", "legend_edit", REVIEWER, "json"),
+    ("POST", "/api/documents/{v}/legend/confirm", "legend_confirm", REVIEWER, "json"),
+    ("POST", "/api/documents/{v}/legend/save-standard", "legend_save_standard", REVIEWER, "json"),
+    ("GET", "/api/legend-library", "legend_library", REVIEWER, None),
+    ("GET", "/api/documents/{v}/set-scans", "set_scans", REVIEWER, None),
+    ("POST", "/api/documents/{v}/set-scans", "set_scan_start", REVIEWER, "json"),
+    ("GET", "/api/documents/{v}/counts", "counts", REVIEWER, None),
+    ("GET", "/api/documents/{v}/counts.csv", "counts_csv", REVIEWER, None),
     ("GET", "/api/models", "models", REVIEWER, None),
     ("POST", "/api/scans", "scan", REVIEWER, "json"),
     ("GET", "/api/scans/{s}", "scan_state", REVIEWER, None),
@@ -367,6 +379,51 @@ class Site:
     def h_document_batches(self, request, ident, body):
         return self._json({"batches": self.service.document_batches(request.path_params["v"])})
 
+    # ---------------------------------------------------------------- legend
+    def h_legend(self, request, ident, body):
+        return self._json(self.service.legend.state(request.path_params["v"]))
+
+    def h_legend_read(self, request, ident: Identity, b: dict):
+        v = request.path_params["v"]
+        out = self.service.legend.read(v, b.get("page_index"), requested_by=ident.email)
+        self.sitedb.audit(ident.email, "legend_read", v, {"page_index": out["legend"]["page_index"]})
+        return self._json(out)
+
+    def h_legend_edit(self, request, ident: Identity, b: dict):
+        return self._json(self.service.legend.edit(request.path_params["v"], b, reviewer=ident.email))
+
+    def h_legend_confirm(self, request, ident: Identity, b: dict):
+        v = request.path_params["v"]
+        out = self.service.legend.confirm(v, b, reviewer=ident.email)
+        self.sitedb.audit(ident.email, "legend_confirmed", v, {"version": out["legend"]["version"]})
+        return self._json(out)
+
+    def h_legend_save_standard(self, request, ident: Identity, b: dict):
+        return self._json(self.service.legend.save_standard(request.path_params["v"], b, reviewer=ident.email))
+
+    def h_legend_library(self, request, ident, body):
+        return self._json(self.service.legend.library())
+
+    def h_set_scans(self, request, ident, body):
+        v = request.path_params["v"]
+        self.service.document_info(v)  # 404s for an unknown version
+        return self._json({"set_scans": self.service.legend.runs(v)})
+
+    def h_set_scan_start(self, request, ident: Identity, b: dict):
+        v = request.path_params["v"]
+        out = self.service.legend.start_scan(v, b.get("request_id"), requested_by=ident.email)
+        self.sitedb.audit(ident.email, "set_scan_started", out["run_id"],
+                          {"document_version": v, "sheets": out["sheets_total"]})
+        return self._json(out, 202)
+
+    def h_counts(self, request, ident, body):
+        return self._json(self.service.legend.counts(request.path_params["v"]))
+
+    def h_counts_csv(self, request, ident, body):
+        data, name = self.service.legend.counts_csv(request.path_params["v"])
+        return Response(data, media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
     def h_models(self, request, ident, body):
         return self._json(self.service.models())
 
@@ -641,6 +698,9 @@ def main(argv=None) -> int:
     resumed = service.resume_interrupted_batches()
     if resumed:
         print(f"Resumed {len(resumed)} interrupted batch scan(s).", flush=True)
+    resumed = service.legend.resume_interrupted()
+    if resumed:
+        print(f"Resumed {len(resumed)} interrupted whole-set scan(s).", flush=True)
     httpd = make_server(service, args.host, args.port, args.verbose, settings=settings)
     host, port = httpd.server_address[:2]
     print(f"Pinny viewer on http://{host}:{port}/  ({settings.env}, jobs: {settings.jobs}, "

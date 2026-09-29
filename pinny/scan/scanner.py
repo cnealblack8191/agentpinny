@@ -266,10 +266,14 @@ def scan_set(
     legend: Legend,
     settings: SetScanSettings = SetScanSettings(),
     progress: Optional[Callable[[int, int, int], None]] = None,
+    matched: Optional[Callable[[int, int, int], None]] = None,
 ) -> SetScanResult:
     """Find every counted legend symbol on the set's sheets.
 
-    ``progress(page_index, done, total)`` is called after each sheet.
+    ``progress(page_index, done, total)`` is called after each sheet is
+    finished. ``matched(page_index, done, total)`` is called as each sheet's
+    matching (the slow part) finishes, before the size search, so a caller
+    can show progress while the sheets are searched.
     """
     start = time.perf_counter()
     path = os.fspath(pdf_path)
@@ -304,6 +308,9 @@ def scan_set(
         sheets: List[SheetResult] = []
         raw_by_page: Dict[int, Tuple[str, list, dict, List[str], float]] = {}
         images: Dict[int, np.ndarray] = {}
+        # Scanned sheets are finished at once (the size search is for vector
+        # sheets only), so only one page raster is held at a time.
+        finished: Dict[int, SheetResult] = {}
         for k, p in enumerate(pages):
             t0 = time.perf_counter()
             kind = classify_page(path, p).kind
@@ -320,10 +327,19 @@ def scan_set(
                     sheet_warnings.append(f"Vector matching failed ({exc.code}): {exc}")
             if kind in ("raster", "mixed"):
                 img = render_page(path, p, doc)
-                images[p] = img
                 for sym in symbols:
                     found.extend((sym, d) for d in _raster_matches(img, sym, settings, p, sheet_warnings))
+                if kind == "raster":
+                    kept, dropped = _resolve(found, [], settings, text_available=False, img=img)
+                    kept.sort(key=lambda d: (d.tag, d.box.y, d.box.x))
+                    finished[p] = SheetResult(p, kind, kept, frames[p].descriptor(), time.perf_counter() - t0,
+                                              sheet_warnings, dropped)
+                else:
+                    images[p] = img
+                del img
             raw_by_page[p] = (kind, found, frames[p].descriptor(), sheet_warnings, time.perf_counter() - t0)
+            if matched:
+                matched(p, k + 1, len(pages))
 
         # Symbols that found nothing anywhere: try other sizes. The size is
         # chosen on a few sample sheets, then every vector sheet is searched
@@ -364,6 +380,11 @@ def scan_set(
                             warnings.append(f"{sym.entry.tag} ({sym.entry.name}) is drawn at {f:.2f}× its legend size on the sheets.")
 
         for k, p in enumerate(pages):
+            if p in finished:
+                sheets.append(finished.pop(p))
+                if progress:
+                    progress(p, k + 1, len(pages))
+                continue
             kind, found, frame, sheet_warnings, elapsed = raw_by_page[p]
             t1 = time.perf_counter()
             lines = lines_from_document(doc, p, frames[p]) if kind in ("vector", "mixed") else []

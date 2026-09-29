@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pinny viewer</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="legend.css">
 </head>
 <body>
   <aside id="panel">
@@ -24,6 +25,71 @@
       <select id="doc-select"><option value="">- uploaded documents -</option></select>
       <p id="doc-status" class="status" role="status"></p>
       <button id="delete-doc-btn" disabled hidden>Delete this drawing</button>
+    </section>
+
+    <section id="legend-section" hidden>
+      <h2>Legend: count the whole set</h2>
+      <p class="muted legend-small">Pinny reads the drawing's symbol legend, then finds every symbol on every sheet.</p>
+      <div class="legend-buttons">
+        <button id="legend-find-btn">Find legend</button>
+        <button id="legend-page-btn" hidden title="If Pinny picked the wrong page, open the legend page and press this">Read legend on this page</button>
+      </div>
+      <p id="legend-status" class="status" role="status"></p>
+      <div id="legend-body" hidden>
+        <p id="legend-summary"></p>
+        <details id="legend-details" open>
+        <summary>Legend symbols</summary>
+        <table id="legend-table" class="legend-table">
+          <thead><tr><th>Symbol</th><th>Tag</th><th>Name</th><th title="Count this symbol on the sheets">Count</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="legend-editor" class="legend-editor" hidden>
+          <p id="legend-notes" class="muted legend-small"></p>
+          <label for="le-name">Name</label> <input id="le-name" type="text" maxlength="200" autocomplete="off">
+          <label for="le-tag">Tag</label> <input id="le-tag" type="text" maxlength="8" autocomplete="off">
+          <label for="le-group">Group</label> <input id="le-group" type="text" maxlength="80" autocomplete="off">
+          <div class="legend-buttons">
+            <button id="le-save">Save changes</button>
+            <button id="le-confirm" title="The row is right as it is">Looks right</button>
+            <button id="le-split" title="One symbol per drawing">Split</button>
+            <button id="le-delete">Delete</button>
+          </div>
+          <div class="legend-buttons">
+            <label for="le-merge-into">Same symbol as</label>
+            <select id="le-merge-into"></select>
+            <button id="le-merge">Merge</button>
+          </div>
+        </div>
+        <div class="legend-buttons">
+          <button id="legend-add-btn">Add a missing symbol</button>
+          <button id="legend-add-anyway-btn" hidden>Add anyway</button>
+        </div>
+        </details>
+        <p id="legend-problems" class="status"></p>
+        <button id="legend-confirm-btn">Confirm legend</button>
+        <details id="legend-library">
+          <summary>Engineer's standard legend</summary>
+          <label for="legend-engineer">Engineer</label>
+          <input id="legend-engineer" type="text" list="legend-engineers" maxlength="80" autocomplete="off">
+          <datalist id="legend-engineers"></datalist>
+          <div class="legend-buttons">
+            <button id="legend-compare-btn">Compare</button>
+            <button id="legend-save-std-btn">Save as their standard legend</button>
+          </div>
+          <p id="legend-compare" class="muted legend-small"></p>
+        </details>
+      </div>
+      <div id="setscan-body" hidden>
+        <h3>Whole set</h3>
+        <button id="setscan-btn">Scan whole set</button>
+        <progress id="setscan-progress" max="1" value="0" hidden></progress>
+        <p id="setscan-status" class="status" role="status"></p>
+        <table id="sheets-table" class="legend-table" hidden>
+          <thead><tr><th>Sheet</th><th>Found</th><th>To review</th><th>Status</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <button id="next-sheet-btn" hidden>Next sheet to review</button>
+      </div>
     </section>
 
     <section>
@@ -74,6 +140,14 @@
       <label for="scan-select">Scan</label>
       <select id="scan-select" disabled><option value="">- none -</option></select>
       <p id="counts"></p>
+      <div id="tag-tools" class="tag-tools" hidden>
+        <label for="new-pin-tag">Tag for new pins</label>
+        <select id="new-pin-tag"></select>
+        <button id="approve-as-btn" hidden title="Approve the selected pin as this symbol instead">Approve as</button>
+        <label for="tag-filter">Show</label>
+        <select id="tag-filter"><option value="">All tags</option></select>
+        <div id="tag-key" class="tag-key"></div>
+      </div>
       <p id="save-status" class="status" role="status"></p>
       <div id="failures"></div>
       <div id="pin-actions">
@@ -86,7 +160,20 @@
       <p><a id="report-link" class="disabled" aria-disabled="true">Export report (JSON)</a></p>
       <p><button id="mark-reviewed-btn" title="Every receptacle on this page is pinned and every pin reviewed">Mark page fully reviewed</button></p>
       <p id="mark-reviewed-status" class="status" role="status"></p>
-      <table id="pin-table"><thead><tr><th>Pin</th><th>Score</th><th>State</th></tr></thead><tbody></tbody></table>
+      <table id="pin-table"><thead><tr><th>Pin</th><th>Score</th><th>State</th><th>Tag</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="counts-section" hidden>
+      <h2>Counts</h2>
+      <label for="counts-scope">Show</label>
+      <select id="counts-scope"></select>
+      <table id="counts-table" class="legend-table counts-table">
+        <thead><tr><th>Tag</th><th title="Found by Pinny">Found</th><th title="Approved">Appr.</th><th title="Rejected">Rej.</th><th title="Added by hand">Added</th><th title="Confirmed: approved + added by hand">Total</th><th title="Not reviewed yet">Left</th></tr></thead>
+        <tbody></tbody>
+        <tfoot></tfoot>
+      </table>
+      <p class="muted legend-small">Appr. = approved, Rej. = rejected, Added = added by hand, Total = approved + added, Left = still to review.</p>
+      <p><a id="counts-csv" download>Download counts (CSV)</a></p>
     </section>
 
     <section id="members-section" hidden>

@@ -13,6 +13,7 @@ import { api, ApiError, newRequestId } from './api.js';
 import { EditQueue, projectPins, mergePins, storageKeyFor } from './edits.js';
 import * as T from './transform.js';
 import * as B from './batch.js';
+import * as LG from './legend.js';
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -89,6 +90,7 @@ const queue = new EditQueue({
   storage,
   send: (e) => {
     const body = { action: e.action, request_id: e.request_id };
+    if (e.class_label) body.class_label = e.class_label; // a legend tag (legend scans only)
     if (e.action === 'add_manual') {
       body.x = e.x;
       body.y = e.y;
@@ -100,6 +102,7 @@ const queue = new EditQueue({
     return api.act(e.scan_id, body);
   },
   onSaved: (e, result) => {
+    LG.onSaved(e);
     if (S.batch && S.batch.pages.some((p) => p.scan_id === e.scan_id)) refreshBatchSoon();
     if (e.scan_id !== S.scanId) return; // saved; not on screen
     S.serverPins = mergePins(S.serverPins, [result.pin]);
@@ -124,8 +127,8 @@ function displayPins() {
 }
 
 function visiblePins() {
-  return displayPins().filter((p) => el.showHidden.checked || !HIDDEN_STATES.has(p.state)
-    || p.pin_id === S.selected || p.failed);
+  return displayPins().filter((p) => (el.showHidden.checked || !HIDDEN_STATES.has(p.state)
+    || p.pin_id === S.selected || p.failed) && (LG.pinShown(p) || p.pin_id === S.selected));
 }
 
 function sizeCanvas() {
@@ -158,6 +161,7 @@ function draw() {
     '#666', 1, []);
   if (S.template && needsTemplate()) polygon(ctx, T.boxCorners(S.view, S.template), '#2a6df4', 2, [6, 4]);
   if (S.dragBox) polygon(ctx, T.boxCorners(S.view, S.dragBox), '#2a6df4', 1.5, [3, 3]);
+  LG.drawOverlay(ctx, (box) => T.boxCorners(S.view, box), polygon);
   if (el.hidePins.checked) return;
   const pins = visiblePins();
   const sel = pins.find((p) => p.pin_id === S.selected);
@@ -224,6 +228,7 @@ function drawPin(ctx, p, selected) {
   }
   if (p.failed) ring(ctx, s.x, s.y, 11, '#b00020', 2);
   if (selected) ring(ctx, s.x, s.y, p.failed ? 14 : 11, '#2a6df4', 2);
+  if (p.class_label && (selected || S.view.zoom >= 0.12)) LG.drawTag(ctx, p.class_label, s.x, s.y);
   if (p.score != null && (selected || S.view.zoom >= 0.25)) {
     const label = scoreLabel(p, 2);
     ctx.font = '11px system-ui, sans-serif';
@@ -324,6 +329,7 @@ function renderPanel() {
   el.batchBtn.textContent = el.batchPages.value.trim() ? 'Scan listed pages' : 'Scan all pages';
   renderBatch();
   renderAccount();
+  LG.renderPanel();
   el.scanBtn.title = c.pending ? 'Wait until your edits are saved.'
     : c.failed ? 'Retry or discard the failed edits first.' : '';
 
@@ -405,7 +411,7 @@ function renderPanel() {
   // Selected pin
   const sel = pins.find((p) => p.pin_id === S.selected);
   if (sel) {
-    el.pinInfo.textContent = `${pinLabel(sel)} | ${sel.state}${sel.pending ? ' (saving)' : ''}`
+    el.pinInfo.textContent = `${pinLabel(sel)}${sel.class_label ? ` | ${sel.class_label}` : ''} | ${sel.state}${sel.pending ? ' (saving)' : ''}`
       + (sel.verifier_score != null
         ? ` | verifier ${sel.verifier_score.toFixed(3)}`
           + (sel.template_score != null ? ` | template ${sel.template_score.toFixed(3)}` : '')
@@ -444,7 +450,8 @@ function renderPanel() {
   const rows = sortedPins(visiblePins()).map((p) =>
     `<tr data-pin="${escapeHtml(p.pin_id)}" class="${p.pin_id === S.selected ? 'selected' : ''}">`
     + `<td>${escapeHtml(pinLabel(p))}</td><td>${scoreLabel(p, 3)}</td>`
-    + `<td>${p.state}${p.pending ? ' (saving)' : ''}${p.failed ? ' (not saved)' : ''}</td></tr>`).join('');
+    + `<td>${p.state}${p.pending ? ' (saving)' : ''}${p.failed ? ' (not saved)' : ''}</td>`
+    + `<td>${LG.tagChipHtml(p.class_label)}</td></tr>`).join('');
   const tbody = el.pinTable.tBodies[0];
   if (tbody.dataset.html !== rows) {
     tbody.innerHTML = rows;
@@ -531,6 +538,7 @@ async function deleteDocument() {
     S.doc = null;
     S.batches = [];
     S.batch = null;
+    LG.openDocument(null);
     clearPage();
     el.pages.innerHTML = '<span class="muted">Upload a PDF first.</span>';
     await refreshDocuments();
@@ -678,6 +686,7 @@ function openDocument(doc, restore = null) {
     el.pages.append(b);
   }
   setStatus(el.docStatus, `${doc.filename}: ${doc.page_count} page(s).`);
+  LG.openDocument(doc);
   S.batches = [];
   S.batch = null;
   S.seq.batch += 1;
@@ -1049,6 +1058,11 @@ function review(kind) {
   if (kind === 'approve') {
     if (p.origin !== 'machine' || p.state === 'approved') return;
     queue.enqueue({ scan_id: S.scanId, action: 'approve', pin_id: p.pin_id, request_id: newRequestId() });
+  } else if (kind === 'approve_as') { // legend scans: the pin is another legend symbol
+    const tag = LG.tagForNewPin();
+    if (p.origin !== 'machine' || !tag || (p.state === 'approved' && p.class_label === tag)) return;
+    queue.enqueue({ scan_id: S.scanId, action: 'approve', pin_id: p.pin_id, request_id: newRequestId(),
+      class_label: tag });
   } else {
     if (p.temp) { // not on the server yet: drop the queued add instead
       const e = queue.find(p.request_id);
@@ -1071,8 +1085,10 @@ function addPin(pt) {
     return;
   }
   const p = T.clampPoint(pt, S.frame);
+  const tag = LG.tagForNewPin(); // legend scans: the tag chosen under Review
+  if (tag) LG.rememberTag(tag);
   const e = queue.enqueue({ scan_id: S.scanId, action: 'add_manual', x: round3(p.x), y: round3(p.y),
-    request_id: newRequestId() });
+    request_id: newRequestId(), ...(tag ? { class_label: tag } : {}) });
   S.selected = 'tmp:' + e.request_id;
   render();
 }
@@ -1151,7 +1167,7 @@ el.viewport.addEventListener('pointermove', (e) => {
   if (Math.hypot(s.x - d.start.x, s.y - d.start.y) > CLICK_SLOP) d.moved = true;
   if (d.kind === 'pan') {
     setView(T.panBy(S.view, s.x - d.last.x, s.y - d.last.y));
-  } else if (d.kind === 'template' && d.moved) {
+  } else if ((d.kind === 'template' || d.kind === 'legendbox') && d.moved) {
     S.dragBox = T.boxFromDrag(d.startC, c, S.frame);
     render();
   }
@@ -1178,6 +1194,10 @@ function endDrag(e, cancelled) {
         S.template = box;
         setStatus(el.scanStatus, '');
       }
+    } else if (d.kind === 'legendbox' && d.moved) {
+      const box = T.boxFromDrag(d.startC, c, S.frame);
+      S.mode = 'pan';
+      if (box) LG.boxDrawn(box);
     } else if (d.kind === 'add' && !d.moved) {
       if (T.insidePage(c, S.frame)) addPin(c);
       else setStatus(el.scanStatus, 'Click inside the page to add a pin.', 'error');
@@ -1341,6 +1361,7 @@ window.__pinny = {
   template: () => S.template && { ...S.template },
   scanMode: () => S.scanMode,
   batch: () => S.batch && JSON.parse(JSON.stringify(S.batch)),
+  legend: () => LG.debugState(),
   selected: () => S.selected,
   models: () => S.models,
   queue: () => queue.entries.map((e) => ({ ...e })),
@@ -1350,6 +1371,35 @@ window.__pinny = {
   lookAt: (x, y, zoom, rotation) => setView(T.centreOn({ ...S.view, zoom: T.clampZoom(zoom),
     rotation: T.normRotation(rotation) }, x, y, S.css.w, S.css.h)),
 };
+
+// ------------------------------------------------------ legend workflow
+// web/legend.js: legend, whole-set scan, sheets and counts.
+async function refreshPageScans() {
+  if (!S.doc || S.page == null || !S.frame) return;
+  const token = S.seq.page;
+  try {
+    const { scans } = await api.pageScans(S.doc.document_version, S.page);
+    if (token !== S.seq.page) return;
+    S.scans = scans;
+    if (!S.scanId && scans.length) await loadScan(scans[scans.length - 1].scan_id);
+    render();
+  } catch (err) { /* the scan list refreshes on the next page load */ }
+}
+
+LG.init({
+  state: () => ({ doc: S.doc, page: S.page, frame: S.frame,
+    scan: S.scan && S.scan.scan_id === S.scanId ? S.scan : null, pins: displayPins(),
+    selected: selectedPin() }),
+  approveAs: () => review('approve_as'),
+  selectPage: (i, restore = null) => selectPage(i, restore),
+  centreOn: (x, y, minZoom = 1) => {
+    if (!S.frame) return;
+    setView(T.centreOn({ ...S.view, zoom: T.clampZoom(Math.max(S.view.zoom, minZoom)) }, x, y, S.css.w, S.css.h));
+  },
+  setMode: (m) => setMode(m),
+  render: () => render(),
+  refreshPageScans,
+});
 
 // ---------------------------------------------------------- scan modes
 async function loadModels() {
