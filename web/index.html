@@ -97,6 +97,8 @@
       <div id="pages" class="pages"><span class="muted">Upload a PDF first.</span></div>
     </section>
 
+    <details id="manual-scan" open>
+    <summary>3. Scan with a template <span class="muted">(manual; not needed after a whole-set scan)</span></summary>
     <section>
       <h2>3. Scan</h2>
       <label for="scan-mode">Scan mode</label>
@@ -134,8 +136,9 @@
       </div>
       <table id="batch-table"><thead><tr><th>Page</th><th>Status</th><th>To review</th></tr></thead><tbody></tbody></table>
     </section>
+    </details>
 
-    <section>
+    <section id="review-section">
       <h2>4. Review</h2>
       <label for="scan-select">Scan</label>
       <select id="scan-select" disabled><option value="">- none -</option></select>

@@ -484,6 +484,26 @@ function startScan() {
 function openSheet(pageIndex) {
   const s = L.counts && L.counts.sheets.find((x) => x.page_index === pageIndex);
   host.selectPage(pageIndex, s && s.scan_id ? { scanId: s.scan_id } : null);
+  // Reviewing is the next step: bring it into view.
+  const review = document.getElementById('review-section');
+  if (review && review.scrollIntoView) review.scrollIntoView({ block: 'start' });
+}
+
+// Once a drawing has a whole-set scan, the manual template scan and batch
+// sections sit between the sheet list and Review; fold them away (once per
+// drawing, so a person who opens them again keeps them open).
+let fold = { doc: null, folded: false };
+function foldManualScan(hasSetScan) {
+  const d = document.getElementById('manual-scan');
+  const v = L.doc && L.doc.document_version;
+  if (!d || !v) return;
+  if (fold.doc !== v) { // another drawing: start from its own state
+    fold = { doc: v, folded: hasSetScan };
+    d.open = !hasSetScan;
+  } else if (hasSetScan && !fold.folded) { // its first whole-set scan just finished
+    fold.folded = true;
+    d.open = false;
+  }
 }
 
 function onTableClick(e) {
@@ -687,6 +707,7 @@ function renderRun() {
     tbody.innerHTML = rows;
   }
   el.sheets.hidden = !sheets.length;
+  if (L.counts) foldManualScan(sheets.length > 0);
   el.nextSheet.hidden = !sheets.length;
   el.nextSheet.disabled = !C.nextSheet(sheets, cur);
 }

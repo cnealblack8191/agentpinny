@@ -71,3 +71,8 @@ body.auth { display: block; background: #f4f4f4; }
 .site-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; font-size: 13px; }
 .site-nav a { color: #2a6df4; }
 .site-nav a[aria-current=page] { color: #111; font-weight: bold; text-decoration: none; }
+#manual-scan { border-top: 1px solid #eee; }
+#manual-scan > summary { font-weight: bold; font-size: 14px; margin: 14px 0 6px; cursor: pointer; }
+#manual-scan[open] > summary .muted { display: none; }
+#manual-scan > section { border-top: none; }
+#manual-scan > section:first-of-type > h2 { display: none; }
