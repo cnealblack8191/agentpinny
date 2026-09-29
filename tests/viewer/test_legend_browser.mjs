@@ -38,12 +38,16 @@ function check(name, ok, detail = '') {
 
 const work = mkdtempSync(join(tmpdir(), 'pinny-legend-'));
 const pdfPath = join(work, 'set.pdf');
+const plainPath = join(work, 'plain.pdf'); // no legend
 // Symbol centres per sheet (canonical px of the displayed page), by tag.
 const want = JSON.parse(execFileSync(PY, ['-c', `
 import json
 from pathlib import Path
 from tests.viewer.test_legend_workflow import legend_set
 from tests.scan.test_scan import SHEET1, SHEET2, TAG, PX
+import sys; sys.path.insert(0, 'tests/viewer')
+from pdfgen import make_pdf
+open(${JSON.stringify(plainPath)}, 'wb').write(make_pdf())
 legend_set(Path(${JSON.stringify(pdfPath)}))
 print(json.dumps({str(i + 1): [[TAG[k], x * PX, y * PX] for k, x, y, _ in s if k in TAG]
                   for i, s in enumerate((SHEET1, SHEET2))}))`], { cwd: REPO }).toString());
@@ -317,6 +321,17 @@ try {
   await waitFor(page, () => window.__pinny.legend().counts && window.__pinny.legend().counts.run_id
     && window.__pinny.legend().legend && window.__pinny.legend().legend.confirmed);
   check('after a reload the legend and counts are back', true);
+
+  // A drawing without a legend points to the template workflow.
+  await page.locator('#file').setInputFiles(plainPath);
+  await waitFor(page, () => document.querySelectorAll('#pages button').length === 1 && window.__pinny.idle());
+  check('another drawing starts without a legend', await page.locator('#legend-body').isHidden()
+    && await page.locator('#counts-section').isHidden());
+  await page.locator('#legend-find-btn').click();
+  await waitFor(page, () => document.getElementById('legend-status').className.includes('error'));
+  const msg = await page.locator('#legend-status').textContent();
+  check('no legend: a plain message pointing to the template workflow', msg.includes('could not find a symbol legend')
+    && msg.includes('Template box'), msg);
   check('no CSP violations', cspErrors.length === 0, cspErrors.join(' | '));
   await page.close();
 } finally {

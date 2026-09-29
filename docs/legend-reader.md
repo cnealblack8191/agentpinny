@@ -21,6 +21,9 @@ compare(legend, library)     # match / new / changed / missing
 library.update_from(legend, project="Maple Street Clinic"); library.save("hanson-reyes.json")
 ```
 
+In the viewer, a reviewer finds, checks and confirms the legend, then scans
+the whole set with it: see `docs/viewer.md` "Legend and whole set".
+
 Command line:
 
 ```

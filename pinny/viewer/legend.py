@@ -23,6 +23,7 @@ from the run, so a restart part-way records the rest and repeats nothing.
 from __future__ import annotations
 
 import csv
+import dataclasses
 import datetime as _dt
 import hashlib
 import io
@@ -50,6 +51,7 @@ SCAN_MODE = "legend"
 # Scan ids of a whole-set scan's sheets derive from its run id and page.
 _RUN_NS = uuid.UUID("5e7d0c3a-9b1f-4c2e-8d6a-2f4b7a9c1e03")
 _ENGINEER_RE = re.compile(r"^[\w .,&'()\-/]{1,80}$")
+_SIGNATURE_RE = re.compile(r"^[0-9a-f]{64}$")  # reader.symbol_signature: a 16 x 16 grid
 
 RUN_QUEUED, RUN_RUNNING, RUN_RECORDING, RUN_DONE, RUN_FAILED = "queued", "running", "recording", "done", "failed"
 RUN_ACTIVE = (RUN_QUEUED, RUN_RUNNING, RUN_RECORDING)
@@ -671,6 +673,14 @@ class LegendService:
             return
         entries = {str(e["entry_id"]): e for e in result.get("entries", [])}
         scales = {entries[k]["tag"]: v for k, v in (result.get("scales") or {}).items() if k in entries}
+        # The result comes from a sandboxed job that parsed the PDF: keep only
+        # tags of the legend this run scanned with.
+        try:
+            snap = json.loads((self._run_dir(version, run_id) / "legend.json").read_text())
+            run["_tags"] = sorted({e["tag"] for e in snap["entries"] if e.get("count")})
+        except (OSError, ValueError, KeyError, TypeError):
+            self._fail(run, "legend_missing", "The legend for this scan is missing. Start the scan again.")
+            return
         sheets = []
         for sheet in result.get("sheets", []):
             p = int(sheet["page_index"])
@@ -688,7 +698,9 @@ class LegendService:
                                     "message": "This sheet's result could not be saved."}
             sheets.append(row)
         self._keep_signatures(version, result)
-        run.update(status=RUN_DONE, finished_at=_now(), sheets=sheets, warnings=list(result.get("warnings", [])),
+        run.pop("_tags", None)
+        run.update(status=RUN_DONE, finished_at=_now(), sheets=sheets,
+                   warnings=[str(w) for w in result.get("warnings", [])][:100],
                    elapsed_seconds=result.get("elapsed_seconds"))
         self._write_run(run)
 
@@ -701,7 +713,11 @@ class LegendService:
                               "shows it, so its pins were not saved.", 409)
         scan_id = str(uuid.uuid5(_RUN_NS, f"{run['run_id']}#p{p}"))
         detections = []
-        for n, d in enumerate(sheet.get("detections", []), start=1):
+        tags = set(run.get("_tags") or ())
+        for d in sheet.get("detections", []):
+            if d.get("tag") not in tags:
+                continue
+            n = len(detections) + 1
             rot = int(round(float(d.get("rotation", 0)) / 90.0)) * 90 % 360
             det = {"id": f"det-{n}", "box": d["box"], "x": d["x"], "y": d["y"], "score": d["score"],
                    "rotation": rot, "mirrored": bool(d.get("mirrored", False)), "source": d.get("source", "vector"),
@@ -731,7 +747,6 @@ class LegendService:
         metadata = {"scan_result": scan_result, "request_id": run["request_id"]}
         if run.get("requested_by"):
             metadata["requested_by"] = run["requested_by"]
-        import dataclasses
         scan = dataclasses.replace(scan, metadata=metadata)
         self.viewer._db(self.viewer.store.record_scan, scan, dets)  # idempotent on scan id and content
         return scan_id
@@ -747,7 +762,8 @@ class LegendService:
             changed = False
             for e in legend.entries:
                 s = sigs.get(e.id)
-                if s and len(e.signatures) < len(e.symbol_boxes) and len(s) == len(e.symbol_boxes):
+                if (isinstance(s, list) and len(e.signatures) < len(e.symbol_boxes) == len(s)
+                        and all(isinstance(x, str) and _SIGNATURE_RE.match(x) for x in s)):
                     e.signatures = list(s)
                     changed = True
             if changed:

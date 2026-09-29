@@ -475,3 +475,30 @@ def test_scan_set_task_validates_its_payload(tmp_path):
         legend_tasks.scan_set({"document_version": "sha256:" + "0" * 64, "run_id": rid(),
                                "legend_sha256": "0" * 64}, tmp_path, prog)
     assert e.value.code == "document_version_not_found"
+
+
+def test_a_tampered_result_cannot_add_tags_or_bad_signatures(svc, set_pdf):
+    """result.json comes from a child that parsed the PDF: the web process
+    keeps only tags of the run's own legend and well-formed signatures."""
+    v = svc.upload(set_pdf, "set.pdf")["document_version"]
+    svc.legend.read(v)
+    svc.legend.confirm(v, {})
+    svc.legend._follow = lambda *a: None  # record by hand below
+    run = svc.legend.start_scan(v, rid())
+    rdir = svc.data_dir / "documents" / v[7:] / "set_scans" / run["run_id"]
+    q = svc.legend.jobs
+    job_id = json.loads((rdir / "run.json").read_text())["job_id"]
+    deadline = time.time() + 60
+    while q.get(job_id).status != "done" and time.time() < deadline:
+        time.sleep(0.05)
+    result = json.loads((rdir / "result.json").read_text())
+    good = result["sheets"][0]["detections"][0]
+    result["sheets"][0]["detections"].append(dict(good, tag="EVIL<script>"))
+    result["legend_signatures"] = {"L1": ["not hex"]}
+    (rdir / "result.json").write_text(json.dumps(result))
+    svc.legend._record(json.loads((rdir / "run.json").read_text()))
+    run = svc.legend.wait(v, run["run_id"])
+    pins = svc.scan_state(run["sheets"][0]["scan_id"])["pins"]
+    assert run["status"] == "done" and {p["class_label"] for p in pins} <= {"D", "G", "DD", "Q"}
+    assert len(pins) == sum(expected(SHEET1).values())
+    assert svc.legend.state(v)["legend"]["entries"]  # the legend still reads

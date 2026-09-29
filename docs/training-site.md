@@ -62,7 +62,7 @@ instant gets `403 not_a_member`.
 | Role | Can |
 |---|---|
 | `admin` | everything a reviewer can, plus: add, change and remove members; delete any document; read the audit log; build datasets, train, benchmark, promote and deactivate models |
-| `reviewer` | upload, scan, batch scan, review pins, export reports, delete documents they uploaded; see the training dashboard, label queue and models, and mark pages fully reviewed |
+| `reviewer` | upload, scan, batch scan, read and edit legends, scan whole sets and download counts, review pins, export reports, delete documents they uploaded; see the training dashboard, label queue and models, and mark pages fully reviewed |
 
 Every route declares a minimum role (`public`, `reviewer` or `admin`). A
 test fails if any route has none. `public` is only `GET /healthz`, the
@@ -98,6 +98,10 @@ Everything lives under one `PINNY_DATA_DIR` (required in production):
 ```
 $PINNY_DATA_DIR/
   documents/<sha256>/source.pdf, version.json, pages/p<i>.png   render service
+  documents/<sha256>/legend.json                                 the drawing's legend (pinny.legend v1), web process
+  documents/<sha256>/set_scans/<run_id>/run.json, legend.json   one whole-set scan: state (web) and its legend
+  documents/<sha256>/set_scans/<run_id>/result.json             pinny.set_scan v1, written by the scan_set job
+  legend_library/<engineer>.json                                engineers' standard legends (pinny.legend_library v1)
   pinny.sqlite3, crops/, exports/                               learning store
   site.sqlite3                                                  members, uploads, deletions, audit
   jobs.sqlite3, jobs/<job_id>/progress.json, log.txt            job queue; training progress and log
@@ -135,10 +139,20 @@ The site is one origin, `PINNY_ORIGIN` (for example
 | `GET /api/documents/{version}/pages/{i}/raster.png` | reviewer | | `Cache-Control: private` |
 | `GET /api/documents/{version}/pages/{i}/scans` | reviewer | | |
 | `GET /api/documents/{version}/batches` | reviewer | | |
+| `GET /api/documents/{version}/legend` | reviewer | | `{legend, set_scan}`; legend null until read |
+| `POST /api/documents/{version}/legend/read` | reviewer | `{page_index?}` | a `read_legend` job; 422 `legend_not_found`, `legend_is_scanned` (both point to the template workflow) |
+| `POST /api/documents/{version}/legend/edit` | reviewer | `{op, entry_id?, expected_version?, ...}` | see `docs/viewer.md`; 409 `stale_legend`, `row_already_read` |
+| `POST /api/documents/{version}/legend/confirm` | reviewer | `{expected_version?}` | 409 `legend_needs_review` |
+| `POST /api/documents/{version}/legend/save-standard` | reviewer | `{engineer}` | confirmed legends only |
+| `GET /api/legend-library` | reviewer | | `{engineers [{engineer, symbols, updated_at}]}` |
+| `GET /api/documents/{version}/set-scans` | reviewer | | whole-set scans with `status`, `sheets_done`, `sheets_total`, `progress`, `sheets [{page_index, scan_id, counts, error}]` |
+| `POST /api/documents/{version}/set-scans` | reviewer | `{request_id}` | 202, a `scan_set` job; 409 `legend_not_confirmed`, `set_scan_running` |
+| `GET /api/documents/{version}/counts` | reviewer | | per tag, per sheet and set: found, approved, rejected, added, confirmed, unreviewed |
+| `GET /api/documents/{version}/counts.csv` | reviewer | | attachment; cells that could start a formula are quoted |
 | `GET /api/models` | reviewer | | |
 | `POST /api/scans` | reviewer | as `docs/viewer.md` | |
 | `GET /api/scans/{id}` | reviewer | | |
-| `POST /api/scans/{id}/actions` | reviewer | as `docs/viewer.md` | reviewer = signed-in email |
+| `POST /api/scans/{id}/actions` | reviewer | as `docs/viewer.md` | reviewer = signed-in email; optional `class_label` must be a tag of the document's legend |
 | `GET /api/scans/{id}/report` | reviewer | | attachment |
 | `POST /api/batches` | reviewer | as `docs/viewer.md` | |
 | `GET /api/batches/{id}` | reviewer | | |
@@ -200,6 +214,16 @@ which are written for users. Any 5xx, and any other exception, becomes
 `500 internal_error` with the request id; the detail goes only to the
 server log.
 
+**Legend workflow** (docs/viewer.md "Legend and whole set"). A reviewer
+finds the legend (`read_legend` job), checks and edits it (each edit logged
+in `legend.json` with the signed-in email), confirms it, and scans the
+whole set (`scan_set` job). When that job is done the web process records
+one ordinary scan per sheet (`detector.name` `pinny-set-scan`, each pin's
+`class_label` its legend tag), so review, "Mark page fully reviewed", the
+label queue, datasets and training treat them like any scan. Recording is
+idempotent and resumes after a restart. Counts come from the latest
+whole-set scan.
+
 **Training data rules.** Detector pages must be marked fully reviewed
 ("Mark page fully reviewed" on the latest scan), because everything unpinned
 on such a page is taught as background. A new scan of a page reopens its
@@ -219,6 +243,8 @@ result:
 | `template` | interactive | crop a template, return its pixel sha256 | `document_version`, `page_index`, `box` |
 | `scan` | scan | template matching on one page | `document_version`, `page_index`, `template {page_index, box, sha256}`, `settings` |
 | `selftest` | interactive | sandbox probes for tests; never submitted by the web tier | `action` |
+| `read_legend` | interactive | find the legend page (or read the given page) and return it as `pinny.legend` v1 | `document_version`, `page_index?` |
+| `scan_set` | scan | scan every sheet with the run's legend snapshot; writes `documents/<sha256>/set_scans/<run_id>/result.json`; reports progress | `document_version`, `run_id`, `legend_sha256` |
 
 | `build_dataset` | train | export the learning store and build a `pinny.dataset` v1 under `datasets/` | `{}` (whole store) |
 | `train_verifier` | train | train a verifier on a dataset, save it in the registry | `dataset_id`, `epochs?`, `seed?` |
@@ -248,10 +274,22 @@ cancellation there is cooperative (at the next progress report) and
 there are no resource limits, which is one reason production refuses
 that mode.
 
+**Legend jobs.** `scan_set` reports progress the same way (the fraction is
+sheets searched), and the web tier shows it as sheets done of total. The
+child reads the run's legend snapshot, checks it against `legend_sha256`,
+and writes `result.json` into the run's directory, which the web process
+created (it never creates directories, so a document deleted meanwhile
+stays deleted). The child has no access to the learning store: the web
+process follows the job and records the result when it is done; on startup
+it follows every run a restart cut off. In development `read_legend` runs
+in the web process like the other interactive kinds, and `scan_set` runs
+in an in-process `scan` pool with the same job records.
+
 **Queue.** `jobs.sqlite3`, states `queued` → `running` → `done` |
 `failed` | `cancelled`. Workers claim the lowest priority number first,
 then the oldest: single scans (priority 0) go ahead of batch pages
-(10). Three pools, so an upload or a page image never waits behind a
+(10) and whole-set scans (10); a single scan waits for a whole-set scan
+already running (about 2.4 s per dense sheet). Three pools, so an upload or a page image never waits behind a
 scan, and neither waits behind training.
 A render of the same page already queued or running is reused
 (`dedupe_key`). Finished jobs are pruned after 7 days.
@@ -331,6 +369,8 @@ still open.
 | `render_page` job | 3 GB, 180 s CPU, 240 s wall |
 | `template` job | 2 GB, 60 s CPU, 120 s wall |
 | `scan` job | 4 GB, 300 s CPU, 360 s wall |
+| `read_legend` job | 2 GB, 120 s CPU, 120 s wall |
+| `scan_set` job | 4 GB (scanned sheets are template matched like `scan`; a 42-page dense vector set measured ~600 MB and ~99 s), 30 min CPU, 30 min wall |
 | `build_dataset` job | 3 GB, 1 h CPU, 1 h wall |
 | `train_verifier`, `train_detector` jobs | 5 GB address space, 8 h CPU (2 threads), 4 h wall |
 | `benchmark` job | 5 GB, 4 h CPU (2 threads), 2 h wall |
@@ -344,7 +384,8 @@ still open.
 append-only (trigger). Actions: `member_added`, `member_role_changed`,
 `member_removed`, `setup_link_issued`, `password_reset`, `password_set`,
 `account_locked`, `all_sessions_ended`, `document_uploaded`,
-`document_deleted`, `batch_started`, `dataset_build_started`,
+`document_deleted`, `batch_started`, `legend_read`, `legend_confirmed`,
+`set_scan_started`, `dataset_build_started`,
 `training_started`, `benchmark_started`, `training_cancelled` (target: the
 job id; detail: kind and payload), `model_promoted` (target: the model id;
 detail: kind, benchmark job id, evidence sha256) and `model_deactivated`.
@@ -356,8 +397,9 @@ learning store (`review_events`) with the reviewer's email.
 
 `DELETE /api/documents/{version}` (uploader or admin):
 
-1. removes `documents/<sha256>/` (the PDF, its metadata and cached page
-   images) and drops the render cache;
+1. stops its running whole-set scans, then removes `documents/<sha256>/`
+   (the PDF, its metadata, cached page images, its legend and its
+   whole-set scans' legends and results) and drops the render cache;
 2. deletes that version's training-crop files and marks their rows
    `document_deleted`, so they are never regenerated;
 3. writes a tombstone (`deleted_documents`) and a `document_deleted` audit
