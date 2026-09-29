@@ -62,6 +62,10 @@ class World:
     def add_manual(self, scan_id, x, y):
         return self.store.add_manual(scan_id, x, y, request_id=self.rid(), source="test").pin.pin_id
 
+    def mark_complete(self, version, page_index: int = 0):
+        """The reviewer's "Mark page fully reviewed": every receptacle is pinned."""
+        return self.store.mark_page_complete(version.pages[page_index].canonical_page_id)
+
     def remove_manual(self, scan_id, pin_id):
         return self.store.remove_manual(scan_id, pin_id, request_id=self.rid(), source="test")
 

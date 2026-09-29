@@ -34,6 +34,7 @@ def reviewed_document(world, *, shift: float = 0.0, document_id=None):
     scan = world.add_scan(version, [(x + shift * 200 / 72, y) for x, y in GLYPHS_PX])
     for i in range(len(GLYPHS_PX)):
         world.approve(scan, f"det-{i}")
+    world.mark_complete(version)
     return version, scan
 
 
@@ -91,13 +92,22 @@ def test_completeness_rule_excludes_pages_with_unreviewed_pins(world, tmp_path):
     world.approve(new, "det-0")
     world.reject(new, "det-1")
     manual = world.add_manual(new, 300.5, 400.25)
+    world.mark_complete(vb)
 
     # Page C: complete, then rescanned; the rescan is unreviewed -> excluded.
     vc = world.add_document([(x + 7, y) for x, y in GLYPHS_PT])
     sc = world.add_scan(vc, GLYPHS_PX)
     for i in range(3):
         world.approve(sc, f"det-{i}")
-    world.add_scan(vc, GLYPHS_PX)
+    world.mark_complete(vc)
+    world.add_scan(vc, GLYPHS_PX)  # reopens the page's review
+
+    # Page D: every pin answered but never marked fully reviewed -> no detector entry
+    # (a receptacle the scanner missed would otherwise be taught as background).
+    vd = world.add_document([(x, y + 9) for x, y in GLYPHS_PT])
+    sd = world.add_scan(vd, GLYPHS_PX)
+    for i in range(3):
+        world.approve(sd, f"det-{i}")
 
     m = build(world, tmp_path / "datasets").manifest
     det = {e["canonical_page_id"]: e for e in m["detector"]}
@@ -119,6 +129,7 @@ def test_page_scanned_with_no_detections_and_nothing_added_counts_as_complete(wo
     # P3 as written: zero unreviewed pins on the latest scan -> the page is used, as all background.
     v = world.add_document(GLYPHS_PT)
     world.add_scan(v, [])
+    world.mark_complete(v)
     m = build(world, tmp_path / "datasets").manifest
     assert [e["points"] for e in m["detector"]] == [[]]
     assert m["verifier"] == []
@@ -131,6 +142,7 @@ def test_removed_manual_pins_are_unused(world, tmp_path):
     kept = world.add_manual(scan, 250.0, 260.0)
     gone = world.add_manual(scan, 400.0, 420.0)
     world.remove_manual(scan, gone)
+    world.mark_complete(v)
 
     m = build(world, tmp_path / "datasets").manifest
     used = {e["source_example_id"] for e in m["verifier"]}
@@ -265,3 +277,12 @@ def test_verify_dataset_reports_tampering(world, tmp_path):
     problems = ds.verify_dataset(res.path)
     assert any("missing" in p for p in problems)
     assert any("stray.png" in p for p in problems)
+
+
+def test_a_rescan_reopens_a_page_marked_fully_reviewed(world, tmp_path):
+    v, scan = reviewed_document(world)
+    cpid = v.pages[0].canonical_page_id
+    assert world.store.page_review_status(cpid).status == "complete"
+    world.add_scan(v, GLYPHS_PX)
+    assert world.store.page_review_status(cpid).status == "in_progress"
+    assert build(world, tmp_path / "datasets").manifest["detector"] == []

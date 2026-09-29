@@ -661,6 +661,12 @@ class LearningStore:
                     " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (scan.scan_id, d.detection_id, MACHINE, UNREVIEWED, d.detection_id,
                      x, y, *b.edges(), 1, now, now, None, d.rotation))
+            # A new scan supersedes the page's earlier ones, including any pins
+            # added by hand there, so "every receptacle is pinned" no longer
+            # holds: reopen the page's review until it is marked again.
+            db.execute("UPDATE page_reviews SET status=?, completed_at=NULL, updated_at=?"
+                       " WHERE canonical_page_id=? AND status=?",
+                       (PAGE_IN_PROGRESS, now, scan.canonical_page_id, PAGE_COMPLETE))
 
     def record_scan_result(self, result: Mapping[str, Any]) -> str:
         """Record a section-4 scan result dict; returns its ``scan_id``."""

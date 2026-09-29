@@ -117,7 +117,7 @@ class TrainingService:
                 labelled_docs.add(doc_id)
             if ex["pin_state"] != "unreviewed":
                 reviewed += 1
-        # Detector pages (P3): the latest scan of a page has zero unreviewed pins.
+        # Detector pages (P3): marked fully reviewed, and the latest scan has zero unreviewed pins.
         latest: Dict[str, dict] = {}
         for s in export["scans"]:  # record order
             latest[s["canonical_page_id"]] = s
@@ -125,10 +125,12 @@ class TrainingService:
         for ex in export["examples"]:
             by_scan.setdefault(ex["scan_id"], []).append(ex)
         complete_pages, complete_points, complete_docs = 0, 0, set()
+        reviews = export["page_reviews"]
         for page_id, s in latest.items():
             exs = by_scan.get(s["scan_id"], [])
-            if any(ex["label_status"] == "unlabeled" for ex in exs):
-                continue
+            if (reviews.get(page_id) or {}).get("status") != "complete" or any(
+                    ex["label_status"] == "unlabeled" for ex in exs):
+                continue  # detector pages must be marked fully reviewed (see pinny.training.dataset)
             complete_pages += 1
             complete_points += sum(1 for ex in exs if ex["label"] == "positive")
             complete_docs.add(s["document"]["document_id"])

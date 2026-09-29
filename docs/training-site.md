@@ -200,6 +200,12 @@ which are written for users. Any 5xx, and any other exception, becomes
 `500 internal_error` with the request id; the detail goes only to the
 server log.
 
+**Training data rules.** Detector pages must be marked fully reviewed
+("Mark page fully reviewed" on the latest scan), because everything unpinned
+on such a page is taught as background. A new scan of a page reopens its
+review. Verifier samples are every approved, rejected or added pin.
+Unreviewed pins, removed manual pins and deleted drawings are never used.
+
 ## 4. Jobs and sandbox (built)
 
 With jobs on (`PINNY_JOBS=sandbox` or `external`, required in production)

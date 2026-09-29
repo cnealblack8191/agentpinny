@@ -300,7 +300,8 @@ def build_dataset(export: Mapping[str, Any], render: PageRenderer, datasets_root
       manual pins are ``label 1``; rejected machine pins are ``label 0``.
       Removed manual pins and unreviewed pins are not used.
     * Detector: one entry per page, from the page's **latest** scan, and only
-      when that scan has zero unreviewed pins. Its points are the approved
+      when that scan has zero unreviewed pins and the page is marked fully
+      reviewed (``export["page_reviews"]``). Its points are the approved
       and added pins; everything else on the page is background.
     """
     # P3 names the export "v1", but the learning store writes EXPORT_SCHEMA_VERSION (2 today);
@@ -343,8 +344,9 @@ def build_dataset(export: Mapping[str, Any], render: PageRenderer, datasets_root
         for sid, s in scans.items():
             by_page.setdefault(s["canonical_page_id"], []).append(sid)
         for page_id in sorted(by_page):
+            marked = ((export.get("page_reviews") or {}).get(page_id) or {}).get("status") == "complete"
             _build_page(writer, render, page_id, [scans[sid] for sid in by_page[page_id]],
-                        examples_by_scan, scans[latest[page_id]])
+                        examples_by_scan, scans[latest[page_id]], marked)
         return writer.finish()
     except BaseException:
         writer.abort()
@@ -352,11 +354,16 @@ def build_dataset(export: Mapping[str, Any], render: PageRenderer, datasets_root
 
 
 def _build_page(writer: DatasetWriter, render: PageRenderer, page_id: str, page_scans: list[Mapping[str, Any]],
-                examples_by_scan: Mapping[str, list[Mapping[str, Any]]], latest: Mapping[str, Any]) -> None:
+                examples_by_scan: Mapping[str, list[Mapping[str, Any]]], latest: Mapping[str, Any],
+                marked_complete: bool = True) -> None:
     labelled = [ex for s in page_scans for ex in examples_by_scan.get(s["scan_id"], [])
                 if ex["label"] in ("positive", "negative")]
     latest_examples = examples_by_scan.get(latest["scan_id"], [])
-    complete = not any(ex["label_status"] == "unlabeled" for ex in latest_examples)
+    # A detector page treats everything unpinned as background, so it needs
+    # the reviewer's word that every receptacle is pinned ("Mark page fully
+    # reviewed"), not just that every machine pin was answered: a missed
+    # receptacle would otherwise be taught as "not a receptacle".
+    complete = marked_complete and not any(ex["label_status"] == "unlabeled" for ex in latest_examples)
     if not labelled and not complete:
         return  # nothing to take from this page; skip rendering it
 
