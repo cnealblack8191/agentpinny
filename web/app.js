@@ -31,7 +31,7 @@ const el = {
   batchPages: $('batch-pages'), batchBtn: $('batch-btn'), batchSelect: $('batch-select'),
   batchStatus: $('batch-status'), batchProgress: $('batch-progress'),
   batchNextBtn: $('batch-next-btn'), batchCancelBtn: $('batch-cancel-btn'),
-  batchRetryBtn: $('batch-retry-btn'), batchTable: $('batch-table'),
+  batchRetryBtn: $('batch-retry-btn'), batchResumeBtn: $('batch-resume-btn'), batchTable: $('batch-table'),
   userBar: $('user-bar'), deleteDocBtn: $('delete-doc-btn'), membersSection: $('members-section'),
   membersTable: $('members-table'), memberEmail: $('member-email'), memberRole: $('member-role'),
   memberAddBtn: $('member-add-btn'), membersStatus: $('members-status'),
@@ -364,7 +364,11 @@ function renderPanel() {
   const otherFailed = queue.entries.filter((e) => e.scan_id !== S.scanId && e.status === 'failed').length;
   let msg = '';
   let kind = '';
-  if (c.failed) { msg = `${c.failed} edit(s) not saved. Retry or discard below.`; kind = 'error'; }
+  const signedOut = queue.entries.some((e) => e.status === 'failed' && e.error && e.error.status === 401);
+  if (signedOut) {
+    msg = 'Your sign-in has expired. Sign in again: your unsaved edits are kept and sent afterwards.';
+    kind = 'error';
+  } else if (c.failed) { msg = `${c.failed} edit(s) not saved. Retry or discard below.`; kind = 'error'; }
   else if (c.pending) msg = `Saving ${c.pending} edit(s)...`;
   else if (S.scanId) { msg = 'All changes saved.'; kind = 'ok'; }
   if (other) msg += ` Saving ${other} edit(s) on another scan.`;
@@ -373,6 +377,12 @@ function renderPanel() {
     msg += ' This browser cannot keep unsaved edits across a reload; do not close the page yet.';
   }
   setStatus(el.saveStatus, msg, kind);
+  if (signedOut) {
+    const a = document.createElement('a');
+    a.href = 'login.html?next=' + encodeURIComponent(location.pathname + location.hash);
+    a.textContent = 'Sign in';
+    el.saveStatus.append(' ', a);
+  }
 
   // Failures
   el.failures.innerHTML = '';
@@ -560,6 +570,7 @@ function renderBatch() {
   el.batchNextBtn.disabled = !b || S.batchBusy;
   el.batchCancelBtn.disabled = !B.isActive(b) || S.batchBusy;
   el.batchRetryBtn.disabled = !b || !b.page_counts.failed || b.status === 'cancelled' || S.batchBusy;
+  el.batchResumeBtn.disabled = !B.isActive(b) || S.batchBusy;
   const rows = b ? b.pages.map((p) => {
     const review = p.status === 'done' ? `${p.counts.unreviewed} of ${p.counts.total}`
       + (p.review_complete ? ' (complete)' : '') : '';
@@ -1247,6 +1258,7 @@ el.batchPages.oninput = render;
 el.batchNextBtn.onclick = batchNext;
 el.batchCancelBtn.onclick = () => batchCall(api.cancelBatch, 'Stopped. Pages already scanned are kept.');
 el.batchRetryBtn.onclick = () => batchCall((id) => api.resumeBatch(id, true), 'Retrying the failed pages.');
+el.batchResumeBtn.onclick = () => batchCall((id) => api.resumeBatch(id, false), 'Continuing the batch.');
 el.batchSelect.onchange = () => {
   S.seq.batch += 1;
   showBatch(S.batches.find((b) => b.batch_id === el.batchSelect.value) || null);
@@ -1413,6 +1425,10 @@ async function start() {
     const d = S.docs.find((x) => x.document_version === restore.version);
     if (d) openDocument(d, restore);
     else setStatus(el.docStatus, 'The document in the link is not on this server. Upload it again.', 'error');
+  }
+  // Edits refused only because the sign-in had expired go out again now.
+  for (const e of queue.entries.filter((x) => x.status === 'failed' && x.error && x.error.status === 401)) {
+    queue.retry(e.request_id);
   }
   queue.pump(); // resend anything left from before a reload
 }

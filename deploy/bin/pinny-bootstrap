@@ -175,6 +175,11 @@ for p in $PROFILES; do
     run ln -s jobs/jobs.sqlite3 "$d/jobs.sqlite3"
   fi
   run chown -h "pinny-$p:pinny-$p-jobs" "$d/jobs.sqlite3"
+  # Create the queue itself group-writable, so it does not matter which
+  # service (web or worker, different users) opens it first.
+  if [ ! -e "$d/jobs/jobs.sqlite3" ]; then
+    run install -m 0660 -o "pinny-$p" -g "pinny-$p-jobs" /dev/null "$d/jobs/jobs.sqlite3"
+  fi
   run install -d -o "pinny-$p" -g "pinny-$p" -m 0755 "$PINNY_BACKUP_STATE/$p"
 done
 
@@ -240,6 +245,27 @@ if [ "$DRY" = no ]; then
 fi
 run systemctl enable --quiet caddy
 if [ "$CHANGED" = yes ]; then run systemctl reload-or-restart caddy; else run systemctl start caddy; fi
+
+# ------------------------------------------------------------------ swap
+# The services' memory caps add up to more than the machine's RAM (they are
+# rarely all busy at once). A swap file turns a rare peak into a slowdown
+# instead of an out-of-memory kill.
+say "Swap"
+if [ "$(swapon --noheadings --show=NAME 2>/dev/null | wc -l)" -eq 0 ]; then
+  if [ ! -f /swapfile ]; then
+    run fallocate -l 4G /swapfile
+    run chmod 0600 /swapfile
+    run mkswap /swapfile
+  fi
+  run swapon /swapfile
+fi
+if ! grep -q '^/swapfile ' /etc/fstab; then
+  if [ "$DRY" = yes ]; then run "echo '/swapfile none swap sw 0 0' >> /etc/fstab"; else echo '/swapfile none swap sw 0 0' >> /etc/fstab; fi
+fi
+if [ "$(sysctl -n vm.swappiness 2>/dev/null)" != 10 ]; then
+  run sysctl -q -w vm.swappiness=10
+  if [ "$DRY" = no ]; then echo 'vm.swappiness = 10' > /etc/sysctl.d/60-pinny-swap.conf; fi
+fi
 
 # ---------------------------------------------------------------- timers
 say "Timers"

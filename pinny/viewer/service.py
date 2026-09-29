@@ -232,8 +232,8 @@ class ViewerService:
                 mid = active[kind]
                 entry["model_id"] = mid
                 if mid is None:
-                    entry.update(available=False, reason=f"No {kind} model is active. "
-                                 "Promote one with python -m pinny.models.registry promote.")
+                    entry.update(available=False, reason=f"No {kind} model is active yet. An admin "
+                                 "can train one and promote it on the Models page.")
                 elif not self._models_importable(kind):
                     entry.update(available=False, reason="torch or the model code is not "
                                  "installed; install the train extra.")
@@ -254,8 +254,8 @@ class ViewerService:
         if model_id is None:
             raise ViewerError("model_not_active",
                               f"Scan mode {mode!r} needs an active {kind} model, and none is "
-                              "promoted. Promote one with 'python -m pinny.models.registry "
-                              "promote <model_id> --evidence <report>', or use 'template'.",
+                              "promoted yet. Use the Template mode, or ask an admin to train and "
+                              "promote a model on the Models page.",
                               409)
         key = (kind, model_id)
         with self._model_lock:
@@ -652,6 +652,20 @@ class ViewerService:
                          interrupted=False)
                 self._batch_jobs[batch_id] = self._batch_exec.submit(self._run_batch, batch_id)
         return self.batch_state(batch_id)
+
+    def resume_interrupted_batches(self) -> List[str]:
+        """On startup: continue every batch a restart cut off (a deploy, a
+        crash, the evening shutdown). Its pages were left pending or running."""
+        resumed = []
+        for b in self._db(self.store.list_batches):
+            if b.cancelled_at is None and any(p.status in (_store.BATCH_PENDING, _store.BATCH_RUNNING)
+                                              for p in b.pages):
+                try:
+                    self.resume_batch(b.batch_id)
+                    resumed.append(b.batch_id)
+                except Exception:  # noqa: BLE001 - one bad batch must not stop the site starting
+                    _log.exception("could not resume batch %s", b.batch_id)
+        return resumed
 
     def cancel_batch(self, batch_id: str) -> dict:
         """Skip every page not yet started. The page being scanned finishes."""

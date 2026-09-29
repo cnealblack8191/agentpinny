@@ -48,6 +48,7 @@ UMask=0007
 
 # Defaults; the pool drop-ins set MemoryMax and CPUQuota.
 MemoryMax=2G
+OOMScoreAdjust=300
 CPUQuota=100%
 TasksMax=64
 

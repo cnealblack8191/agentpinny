@@ -445,3 +445,23 @@ def test_build_dataset_skips_deleted_drawings(site):
     total_pos = sum(c["pos"] for c in j["result"]["counts"]["verifier"].values())
     assert total_pos == 4  # only the kept drawing's four approved pins
     assert "deleted drawings" in j["log_tail"]
+
+
+def test_a_rescan_supersedes_the_old_scan_for_marking_and_the_queue(site):
+    """Found by review: pins of an earlier scan of the same page blocked
+    "mark fully reviewed" and showed up in the label queue, inviting reviewers
+    to reject duplicates that sit on real receptacles."""
+    base, _, svc = site
+    v, old = scanned(base, svc)
+    doc = {"document_version": v}
+    code, new = post(base, "/api/scans", {"document_version": v, "page_index": 0, "request_id": rid(),
+                                          "template_box": _template_for(doc, svc.frame(v, 0))}, who=REVIEWER)
+    assert code == 201 and new["scan_id"] != old["scan_id"]
+    q = get(base, "/api/training/queue", who=REVIEWER)[1]
+    assert {i["scan_id"] for i in q["items"]} == {new["scan_id"]}  # nothing from the old scan
+    assert q["pages"][0]["unreviewed"] == 5 and q["pages"][0]["scans"] == 2
+    for p in new["pins"]:
+        act(base, new["scan_id"], p["pin_id"], "approve")
+    code, out = post(base, "/api/training/pages/complete", {"document_version": v, "page_index": 0},
+                     who=REVIEWER)
+    assert code == 200 and out["status"] == "complete", out

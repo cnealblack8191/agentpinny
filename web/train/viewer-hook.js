@@ -21,6 +21,20 @@ btn.onclick = async () => {
   }
   btn.disabled = true;
   try {
+    // Approvals and rejections are saved in the background: wait for them,
+    // or the server still sees those pins as unreviewed.
+    const outbox = () => (window.__pinny ? window.__pinny.queue() : []);
+    const deadline = Date.now() + 30000;
+    while (outbox().some((e) => e.status === 'pending' || e.status === 'sending') && Date.now() < deadline) {
+      status.textContent = 'Saving your last changes first…';
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (outbox().some((e) => e.status === 'failed')) {
+      throw new Error('Some changes could not be saved. Retry or discard them (left panel), then mark the page again.');
+    }
+    if (outbox().some((e) => e.status === 'pending' || e.status === 'sending')) {
+      throw new Error('Your last changes are still being saved. Try again in a moment.');
+    }
     await training.markReviewed(cur.version, cur.page);
     status.textContent = `Page ${cur.page + 1} is marked fully reviewed.`;
     status.className = 'status ok';

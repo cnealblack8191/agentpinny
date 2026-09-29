@@ -167,18 +167,22 @@ class TrainingService:
         docs = self._documents()
         items: List[Dict[str, Any]] = []
         pages: Dict[str, Dict[str, Any]] = {}
-        for scan in self._db(self.viewer.store.list_scans):
-            if scan.document_version not in docs:
-                continue  # deleted drawing
+        all_scans = [s for s in self._db(self.viewer.store.list_scans) if s.document_version in docs]
+        latest: Dict[str, str] = {}
+        counts: Dict[str, int] = {}
+        for scan in all_scans:  # list_scans is oldest first
+            latest[scan.canonical_page_id] = scan.scan_id
+            counts[scan.canonical_page_id] = counts.get(scan.canonical_page_id, 0) + 1
+        for scan in all_scans:
             page_id = scan.canonical_page_id
+            if latest[page_id] != scan.scan_id:
+                continue  # superseded by a rescan: its pins are not the page's to review
             st = self._db(self.viewer.store.load_scan, scan.scan_id)
             page = pages.setdefault(page_id, {
                 "canonical_page_id": page_id, "document_version": scan.document_version,
                 "page_index": scan.page_index, "filename": docs[scan.document_version]["filename"],
-                "unreviewed": 0, "scans": 0, "latest_scan_id": None, "best_margin": None,
-                "first_pin": None})
-            page["scans"] += 1
-            page["latest_scan_id"] = scan.scan_id  # list_scans is oldest first
+                "unreviewed": 0, "scans": counts[page_id], "latest_scan_id": scan.scan_id,
+                "best_margin": None, "first_pin": None})
             unreviewed = [p for p in st.pins if p.origin == "machine" and p.state == "unreviewed"]
             if not unreviewed:
                 continue
@@ -230,9 +234,9 @@ class TrainingService:
         except _store.NotFound:
             raise ViewerError("page_not_scanned", "That page has not been scanned yet.", 404) from None
         except _store.InvalidTransition:
-            n = sum(1 for s in self._db(self.viewer.store.list_scans, document_version=v, page_index=page_index)
-                    for p in self._db(self.viewer.store.load_scan, s.scan_id).pins
-                    if p.origin == "machine" and p.state == "unreviewed")
+            scans = self._db(self.viewer.store.list_scans, document_version=v, page_index=page_index)
+            n = sum(1 for p in self._db(self.viewer.store.load_scan, scans[-1].scan_id).pins
+                    if p.origin == "machine" and p.state == "unreviewed")  # the latest scan only
             raise ViewerError("page_has_unreviewed_pins",
                               f"This page still has {n} unreviewed pin(s). Approve or reject every pin "
                               "before marking the page fully reviewed.", 409) from None

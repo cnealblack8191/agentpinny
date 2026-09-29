@@ -28,10 +28,13 @@ from .sitedb import ADMIN, REVIEWER, SESSION_MAX_S, SiteDB
 PUBLIC = "public"
 ROLE_RANK = {PUBLIC: 0, REVIEWER: 1, ADMIN: 2}
 
-# Wrong passwords from one address, across all accounts (the per-account
-# lock is in SiteDB).
+# Wrong passwords, counted per client address (across all emails) and per
+# email *and* address. Both are in memory and keyed by the address, so an
+# attacker elsewhere cannot lock a member out, and a blocked attempt gets the
+# same answer whether or not the email has an account.
 IP_FAILURES = 30
 IP_WINDOW_S = 15 * 60
+PAIR_FAILURES = 10  # wrong passwords for one email from one address, per window
 
 _BAD_LOGIN = "That email and password don't match. Try again, or ask an admin for a new set-password link."
 
@@ -81,6 +84,7 @@ class Authenticator:
         self.enabled = settings.production if login is None else (login or settings.production)
         self.clock = clock
         self._ip_failures = _FailureWindow(IP_FAILURES, IP_WINDOW_S)
+        self._pair_failures = _FailureWindow(PAIR_FAILURES, IP_WINDOW_S)
 
     @property
     def cookie_name(self) -> str:
@@ -124,23 +128,19 @@ class Authenticator:
         if not isinstance(email, str) or not isinstance(password, str) or len(password) > passwords.MAX_LENGTH:
             raise ViewerError("bad_login", _BAD_LOGIN, 401)
         email = email.strip().lower()
-        if self._ip_failures.blocked(client, now):
+        pair = f"{email}\n{client}"
+        if self._ip_failures.blocked(client, now) or self._pair_failures.blocked(pair, now):
             raise ViewerError("too_many_attempts",
-                              "Too many wrong passwords from this network. Wait 15 minutes and try again.", 429)
+                              "Too many wrong passwords. Wait 15 minutes and try again, or ask an admin "
+                              "for a new set-password link.", 429)
         rec = self.sitedb.password_record(email) if self.sitedb.member(email) else None
-        if rec is None:
-            passwords.burn_time(password)
+        ok = passwords.verify_password(password, rec["hash"]) if rec else passwords.burn_time(password)
+        if not ok:
             self._ip_failures.hit(client, now)
+            self._pair_failures.hit(pair, now)
+            if rec is not None and self._pair_failures.blocked(pair, now):
+                self.sitedb.audit(None, "account_locked", email, {"client": client, "minutes": IP_WINDOW_S // 60})
             raise ViewerError("bad_login", _BAD_LOGIN, 401)
-        if rec["locked_until"] > now:
-            minutes = max(1, int((rec["locked_until"] - now + 59) // 60))
-            raise ViewerError("account_locked", f"Too many wrong passwords for this account. Try again in "
-                              f"{minutes} minute{'s' if minutes != 1 else ''}, or ask an admin to reset it.", 429)
-        if not passwords.verify_password(password, rec["hash"]):
-            self._ip_failures.hit(client, now)
-            self.sitedb.record_login_failure(email, now)
-            raise ViewerError("bad_login", _BAD_LOGIN, 401)
-        self.sitedb.clear_login_failures(email)
         member = self.sitedb.member(email)
         return Identity(member.email, member.role, self.sitedb.create_session(email, now))
 

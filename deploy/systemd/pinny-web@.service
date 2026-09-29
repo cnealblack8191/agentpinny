@@ -34,6 +34,9 @@ UMask=0007
 
 # Resources: a 2 vCPU / 8 GB instance shared by both profiles.
 MemoryMax=1536M
+# If the machine runs out of memory, the kernel kills job workers before the
+# web process (a job is retried; a dead web process drops every open page).
+OOMScoreAdjust=-200
 CPUQuota=100%
 TasksMax=256
 

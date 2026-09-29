@@ -187,6 +187,29 @@ def test_interrupted_batch_resumes_after_restart(tmp_path, monkeypatch):
         s.close()
 
 
+def test_interrupted_batch_resumes_by_itself_on_startup(tmp_path, monkeypatch):
+    """Found by review: after a restart nothing resumed batches, so they sat at
+    "running" with pending pages forever unless the same request was repeated."""
+    monkeypatch.setenv("PINNY_REVIEWER", "tester")
+    s = ViewerService(tmp_path)
+    doc = s.upload(drawing_set(5, 2, 1), "set.pdf")
+    orig = s._batch_exec.submit
+    s._batch_exec.submit = lambda *a, **k: orig(lambda: None)  # the restart cuts it off
+    b = _start(s, doc, request_id=rid())
+    s._db(s.store.next_batch_page, b["batch_id"])
+    s._batch_exec.submit = orig
+    s.close()
+
+    s = ViewerService(tmp_path)
+    try:
+        assert s.resume_interrupted_batches() == [b["batch_id"]]
+        out = s.wait_batch(b["batch_id"], timeout=120)
+        assert [p["status"] for p in out["pages"]] == ["done", "done", "done"]
+        assert s.resume_interrupted_batches() == []  # nothing left to resume
+    finally:
+        s.close()
+
+
 def test_cancel_skips_remaining_pages(svc, doc):
     gate = threading.Event()
     real = svc.detector.detect

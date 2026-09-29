@@ -1211,8 +1211,8 @@ class LearningStore:
     def mark_page_complete(self, canonical_page_id: str, *, reviewer: Any = _AUTO,
                            allow_unreviewed: bool = False) -> PageReview:
         """Mark a page fully reviewed: every receptacle on it is pinned, so the
-        rest of the page is safe background. Refuses while a scan of the page
-        still has unreviewed machine pins unless ``allow_unreviewed``.
+        rest of the page is safe background. Refuses while the page's latest
+        scan still has unreviewed machine pins unless ``allow_unreviewed``.
         Idempotent: an already complete page is returned unchanged."""
         reviewer = self.default_reviewer if reviewer is _AUTO else reviewer
         with self._tx() as db:
@@ -1224,9 +1224,14 @@ class LearningStore:
                              (canonical_page_id,)).fetchone()
             if cur is not None and cur["status"] == PAGE_COMPLETE:
                 return self._page_review(cur)
-            n = db.execute("SELECT COUNT(*) FROM pins p JOIN scans s ON s.scan_id=p.scan_id"
-                           " WHERE s.canonical_page_id=? AND p.origin='machine' AND p.state='unreviewed'",
-                           (canonical_page_id,)).fetchone()[0]
+            # Only the page's latest scan counts: a rescan supersedes earlier
+            # ones (training uses the latest too), and their leftover pins must
+            # not block the page or tempt reviewers into false rejections.
+            latest = db.execute("SELECT scan_id FROM scans WHERE canonical_page_id=?"
+                                " ORDER BY recorded_at DESC, rowid DESC LIMIT 1",
+                                (canonical_page_id,)).fetchone()["scan_id"]
+            n = db.execute("SELECT COUNT(*) FROM pins WHERE scan_id=? AND origin='machine'"
+                           " AND state='unreviewed'", (latest,)).fetchone()[0]
             if n and not allow_unreviewed:
                 raise InvalidTransition(f"page {canonical_page_id} still has {n} unreviewed machine pin(s); "
                                         f"review them or pass allow_unreviewed=True")

@@ -638,6 +638,9 @@ def main(argv=None) -> int:
             jobs.recover(stale_after=0)
             workers = WorkerPool(jobs, settings.data_dir, require_isolation=settings.production).start()
     service = ViewerService(settings.data_dir, version=settings.version, jobs=jobs)
+    resumed = service.resume_interrupted_batches()
+    if resumed:
+        print(f"Resumed {len(resumed)} interrupted batch scan(s).", flush=True)
     httpd = make_server(service, args.host, args.port, args.verbose, settings=settings)
     host, port = httpd.server_address[:2]
     print(f"Pinny viewer on http://{host}:{port}/  ({settings.env}, jobs: {settings.jobs}, "

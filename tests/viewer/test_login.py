@@ -14,11 +14,11 @@ import pytest
 
 from pinny.viewer import ViewerService
 from pinny.viewer import passwords
-from pinny.viewer.auth import IP_FAILURES, Authenticator
+from pinny.viewer.auth import IP_FAILURES, PAIR_FAILURES, Authenticator
 from pinny.viewer.members import main as members_main
 from pinny.viewer.server import Site, SiteServer
 from pinny.viewer.settings import Settings
-from pinny.viewer.sitedb import LOCK_AFTER, SESSION_IDLE_S, SETUP_LINK_S, SiteDB
+from pinny.viewer.sitedb import SESSION_IDLE_S, SETUP_LINK_S, SiteDB
 
 ORIGIN = "https://pinny.test"
 ADMIN = "boss@example.com"
@@ -147,20 +147,41 @@ def test_wrong_passwords_look_the_same_and_lock_the_account(site):
                for e, p in ((ADMIN, "wrong password!"), ("nobody@example.com", GOOD), (REVIEWER, GOOD))]
     assert {(c, o["error"]["code"], o["error"]["message"]) for c, _, o in answers} == {
         (401, "bad_login", answers[0][2]["error"]["message"])}
-    for _ in range(LOCK_AFTER - 1):
+    for _ in range(PAIR_FAILURES - 1):
         call(base, "POST", "/api/login", {"email": ADMIN, "password": "wrong password!"})
     code, _, out = call(base, "POST", "/api/login", {"email": ADMIN, "password": GOOD})
-    assert code == 429 and out["error"]["code"] == "account_locked"
+    assert code == 429 and out["error"]["code"] == "too_many_attempts"
+    # An email with no account locks the same way, so a lock reveals nothing.
+    for _ in range(PAIR_FAILURES):
+        call(base, "POST", "/api/login", {"email": "nobody@example.com", "password": "wrong password!"})
+    code2, _, out2 = call(base, "POST", "/api/login", {"email": "nobody@example.com", "password": GOOD})
+    assert (code2, out2["error"]) == (code, dict(out["error"], request_id=out2["error"]["request_id"]))
     clock.t += 16 * 60
     assert call(base, "POST", "/api/login", {"email": ADMIN, "password": GOOD})[0] == 200
     assert any(e["action"] == "account_locked" for e in s.sitedb.audit_log())
+
+
+def test_an_attacker_elsewhere_cannot_lock_a_member_out(tmp_path):
+    """Found by review: failures from one address locked the account for
+    everyone, so an attacker could keep all members locked out."""
+    import time as _t
+    st = settings(tmp_path)
+    db = SiteDB(st.data_dir)
+    db.ensure_admins((ADMIN,))
+    auth = Authenticator(st, db)
+    tok, _ = db.issue_setup_link(ADMIN, actor="t", now=_t.time())
+    auth.complete_setup(tok, GOOD)
+    for _ in range(PAIR_FAILURES * 3):
+        with pytest.raises(Exception):
+            auth.login(ADMIN, "wrong password!", "203.0.113.9")
+    assert auth.login(ADMIN, GOOD, "198.51.100.7").email == ADMIN  # the member, from their own network
 
 
 def test_too_many_failures_from_one_address(site):
     base, s, clock = site
     first_password(base, s, clock)
     s.auth._ip_failures.limit = 5  # keep the test fast; production uses IP_FAILURES
-    assert IP_FAILURES >= LOCK_AFTER
+    assert IP_FAILURES >= PAIR_FAILURES
     for i in range(5):
         call(base, "POST", "/api/login", {"email": f"guess{i}@example.com", "password": "x" * 12})
     code, _, out = call(base, "POST", "/api/login", {"email": ADMIN, "password": GOOD})

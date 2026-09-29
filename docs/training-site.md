@@ -36,11 +36,13 @@ to the app on `127.0.0.1`. Nothing else can reach the app.
   use, and after 30 days regardless.
 * **Wrong passwords.** Every failure gives the same answer, whether the
   email is unknown, has no password yet, or the password is wrong, and
-  takes the same time. 10 wrong passwords in a row lock that account for
-  15 minutes (`account_locked` audit event). 30 failures from one client
-  address in 15 minutes block that address for the rest of the window.
-  The client address is the one Caddy reports (`X-Forwarded-For` is
-  trusted only from `127.0.0.1`).
+  takes the same time. 10 wrong passwords for one email from one client
+  address, or 30 from one address across all emails, block that address
+  (for that email) for 15 minutes, with the same `too_many_attempts`
+  answer whether or not the account exists. Blocks are per address, so an
+  attacker elsewhere cannot lock a member out. An `account_locked` audit
+  event records blocks on real accounts. The client address is the one
+  Caddy reports (`X-Forwarded-For` is trusted only from `127.0.0.1`).
 * **Forgot password:** an admin clicks *Reset password* on the Members panel
   (or runs `python -m pinny.viewer.members reset EMAIL`). That removes the
   password, signs the person out everywhere, and gives a new link.
@@ -119,7 +121,7 @@ The site is one origin, `PINNY_ORIGIN` (for example
 | Method and path | Role | Body / query | Notes |
 |---|---|---|---|
 | `GET /healthz` | public | | `{"ok": true, "version"}`, no data |
-| `POST /api/login` | public | `{email, password}` | sets the session cookie; 401 `bad_login`, 429 `account_locked` / `too_many_attempts` |
+| `POST /api/login` | public | `{email, password}` | sets the session cookie; 401 `bad_login`, 429 `too_many_attempts` |
 | `POST /api/logout` | public | `{}` | ends the session, clears the cookie |
 | `POST /api/setup/check` | public | `{token}` | `{email}`; 400 `bad_setup_link` |
 | `POST /api/setup` | public | `{token, password}` | sets the password, signs in; 400 `weak_password` |
