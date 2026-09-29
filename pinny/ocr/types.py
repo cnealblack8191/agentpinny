@@ -9,7 +9,10 @@ original page raster, never in a cropped intermediate.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
+
+#: Quarter-turns the engine may read text at (see ``OcrSettings.rotations``).
+ALLOWED_ROTATIONS: Tuple[int, ...] = (0, 90, 180, 270)
 
 try:  # docs/contracts.md section 7; pinny/errors.py is owned by the foundation.
     from pinny.errors import PinnyError as _ErrorBase
@@ -82,10 +85,23 @@ class OcrSettings:
     page_segmentation_mode: int = 11
     #: Words scoring below this (0-100) are dropped from the result.
     min_confidence: float = 0.0
-    #: The canonical raster DPI (contracts section 2), passed to the engine.
+    #: The canonical raster DPI (contracts section 2).
     dpi: int = 200
+    #: Enlarge the image to this DPI before OCR (Tesseract is tuned for about
+    #: 300). Boxes are mapped back to canonical px. ``None`` reads at ``dpi``.
+    upscale_to_dpi: Optional[int] = 300
+    #: Clockwise quarter-turns applied to the page before each OCR pass, so
+    #: text drawn at that angle reads upright. Results are merged; each word
+    #: records the rotation it was read at. Every extra rotation is one more
+    #: full engine pass.
+    rotations: Tuple[int, ...] = ALLOWED_ROTATIONS
+    #: Words read at different rotations are duplicates when their overlap
+    #: covers more than this fraction of the smaller box.
+    duplicate_overlap_ratio: float = 0.5
+    #: Bounds the OCR area before upscaling.
     max_page_pixels: int = 60_000_000
-    max_runtime_seconds: float = 120.0
+    #: Total for all rotations.
+    max_runtime_seconds: float = 300.0
 
     def validate(self) -> None:
         lang = self.language
@@ -100,9 +116,28 @@ class OcrSettings:
             raise OcrError("invalid_settings", "min_confidence must be between 0 and 100.")
         if self.dpi <= 0 or self.max_page_pixels <= 0 or self.max_runtime_seconds <= 0:
             raise OcrError("invalid_settings", "dpi, max_page_pixels and max_runtime_seconds must be positive.")
+        if self.upscale_to_dpi is not None and not (self.dpi <= self.upscale_to_dpi <= 4 * self.dpi):
+            raise OcrError(
+                "invalid_settings",
+                f"upscale_to_dpi must be None or between dpi ({self.dpi}) and 4x dpi, got {self.upscale_to_dpi}.",
+            )
+        rotations = tuple(self.rotations)
+        if not rotations or len(set(rotations)) != len(rotations) or any(r not in ALLOWED_ROTATIONS for r in rotations):
+            raise OcrError(
+                "invalid_settings",
+                f"rotations must be distinct values from {ALLOWED_ROTATIONS}, got {self.rotations!r}.",
+            )
+        if not (0.0 < self.duplicate_overlap_ratio <= 1.0):
+            raise OcrError("invalid_settings", "duplicate_overlap_ratio must be in (0, 1].")
+
+    @property
+    def scale(self) -> float:
+        return 1.0 if self.upscale_to_dpi is None else self.upscale_to_dpi / self.dpi
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d["rotations"] = list(self.rotations)
+        return d
 
 
 @dataclass(frozen=True)
@@ -113,6 +148,9 @@ class OcrWord:
     confidence: float
     #: Tesseract's (block, paragraph, line) numbers, for grouping words into lines.
     line_key: Tuple[int, int, int] = (0, 0, 0)
+    #: Clockwise quarter-turn applied to the page when this word was read, so
+    #: the text itself runs at ``-rotation`` on the page (90 = reads bottom to top).
+    rotation: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -120,7 +158,33 @@ class OcrWord:
             "box": self.box.to_dict(),
             "confidence": self.confidence,
             "line_key": list(self.line_key),
+            "rotation": self.rotation,
         }
+
+
+@dataclass(frozen=True)
+class OcrLine:
+    words: Tuple[OcrWord, ...]
+
+    @property
+    def text(self) -> str:
+        return " ".join(w.text for w in self.words)
+
+    @property
+    def rotation(self) -> int:
+        return self.words[0].rotation
+
+    @property
+    def box(self) -> OcrBox:
+        x0 = min(w.box.x for w in self.words)
+        y0 = min(w.box.y for w in self.words)
+        x1 = max(w.box.x2 for w in self.words)
+        y1 = max(w.box.y2 for w in self.words)
+        return OcrBox(x0, y0, x1 - x0, y1 - y0)
+
+    @property
+    def confidence(self) -> float:
+        return sum(w.confidence for w in self.words) / len(self.words)
 
 
 @dataclass(frozen=True)
@@ -133,17 +197,17 @@ class OcrResult:
     region: Optional[OcrBox] = None
     warnings: Tuple[str, ...] = field(default_factory=tuple)
 
+    def lines(self) -> List[OcrLine]:
+        """Words grouped into the engine's lines, per rotation, in word order."""
+        groups: dict = {}
+        for word in self.words:
+            groups.setdefault((word.rotation, word.line_key), []).append(word)
+        return [OcrLine(tuple(ws)) for ws in groups.values()]
+
     @property
     def text(self) -> str:
         """Words joined with spaces within a line and newlines between lines."""
-        lines: list = []
-        last = None
-        for word in self.words:
-            if word.line_key != last:
-                lines.append([])
-                last = word.line_key
-            lines[-1].append(word.text)
-        return "\n".join(" ".join(line) for line in lines)
+        return "\n".join(line.text for line in self.lines())
 
     def to_dict(self) -> dict:
         return {

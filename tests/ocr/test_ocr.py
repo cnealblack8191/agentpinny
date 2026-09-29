@@ -31,6 +31,14 @@ HAVE_TESSERACT = TesseractEngine().is_available()
 needs_tesseract = pytest.mark.skipif(not HAVE_TESSERACT, reason="Tesseract executable not installed")
 
 
+@pytest.fixture(autouse=True)
+def isolated_settings(monkeypatch, tmp_path):
+    """Never read or write the developer's real Pinny settings."""
+    monkeypatch.setenv("PINNY_DATA_DIR", str(tmp_path / "pinny-data"))
+    monkeypatch.delenv(OCR_ENGINE_ENV, raising=False)
+    monkeypatch.delenv(TESSERACT_CMD_ENV, raising=False)
+
+
 # -- selection: off by default ---------------------------------------------
 
 def test_ocr_is_off_by_default(monkeypatch):
@@ -84,6 +92,8 @@ def test_engine_satisfies_protocol():
 @pytest.mark.parametrize("kwargs", [
     {"language": ""}, {"language": "eng;rm"}, {"language": "eng+"},
     {"page_segmentation_mode": 14}, {"min_confidence": 101}, {"dpi": 0},
+    {"rotations": ()}, {"rotations": (0, 45)}, {"rotations": (90, 90)},
+    {"upscale_to_dpi": 150}, {"upscale_to_dpi": 1000}, {"duplicate_overlap_ratio": 0},
 ])
 def test_invalid_settings(kwargs):
     with pytest.raises(OcrError) as err:

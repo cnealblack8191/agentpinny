@@ -14,11 +14,14 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
+from dataclasses import replace
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from . import geometry
 from .types import OcrBox, OcrError, OcrResult, OcrSettings, OcrTimeout, OcrUnavailable, OcrWord
 
 TESSERACT_CMD_ENV = "PINNY_TESSERACT_CMD"
@@ -116,9 +119,26 @@ class TesseractEngine:
                 "matching traineddata (e.g. 'apt install tesseract-ocr-<lang>').",
             )
 
-        tsv = self._run_tsv(image, settings)
+        started = time.monotonic()
+        area = (image.shape[1], image.shape[0])
+        gray = _upscale(_to_gray(image), settings.scale)
+        scaled = (gray.shape[1], gray.shape[0])
         dx, dy = (region.x, region.y) if region else (0, 0)
-        words, warnings = parse_tsv(tsv, dx, dy, settings.min_confidence)
+        by_rotation = {}
+        warnings: List[str] = []
+        for rotation in settings.rotations:
+            remaining = settings.max_runtime_seconds - (time.monotonic() - started)
+            if remaining <= 0:
+                raise _timeout(settings)
+            tsv = self._run_tsv(geometry.rotate_image(gray, rotation), settings, remaining)
+            raw, row_warnings = parse_tsv(tsv, min_confidence=settings.min_confidence)
+            warnings.extend(f"rotation {rotation}: {w}" for w in row_warnings)
+            mapped = []
+            for word in raw:
+                box = geometry.unscale_box(geometry.unrotate_box(word.box, scaled, rotation), settings.scale, area)
+                mapped.append(replace(word, box=OcrBox(box.x + dx, box.y + dy, box.width, box.height), rotation=rotation))
+            by_rotation[rotation] = mapped
+        words = geometry.merge_rotations(by_rotation, tuple(settings.rotations), settings.duplicate_overlap_ratio)
         return OcrResult(
             engine=self.name,
             engine_version=self.version(),
@@ -128,7 +148,7 @@ class TesseractEngine:
             warnings=tuple(warnings),
         )
 
-    def _run_tsv(self, image: np.ndarray, settings: OcrSettings) -> str:
+    def _run_tsv(self, image: np.ndarray, settings: OcrSettings, timeout: float) -> str:
         cmd = self._require_command()
         with tempfile.TemporaryDirectory(prefix="pinny-ocr-") as tmp:
             src = Path(tmp) / "page.pnm"
@@ -137,19 +157,16 @@ class TesseractEngine:
                 cmd, str(src), "stdout",
                 "-l", settings.language,
                 "--psm", str(settings.page_segmentation_mode),
-                "--dpi", str(settings.dpi),
+                "--dpi", str(settings.upscale_to_dpi or settings.dpi),
                 "tsv",
             ]
             try:
                 proc = subprocess.run(
-                    args, capture_output=True, text=True, timeout=settings.max_runtime_seconds,
+                    args, capture_output=True, text=True, timeout=timeout,
                     env={**os.environ, "OMP_THREAD_LIMIT": os.environ.get("OMP_THREAD_LIMIT", "1")},
                 )
             except subprocess.TimeoutExpired as exc:
-                raise OcrTimeout(
-                    f"Tesseract took longer than {settings.max_runtime_seconds} s. Pass a smaller "
-                    "region or raise max_runtime_seconds."
-                ) from exc
+                raise _timeout(settings) from exc
             except OSError as exc:
                 raise OcrUnavailable(f"Could not run Tesseract at {cmd!r}: {exc}.") from exc
         if proc.returncode != 0:
@@ -180,6 +197,36 @@ def parse_tsv(tsv: str, dx: int = 0, dy: int = 0, min_confidence: float = 0.0) -
             continue
         words.append(OcrWord(text=text, box=OcrBox(left + dx, top + dy, w, h), confidence=conf, line_key=line_key))
     return words, warnings
+
+
+def _timeout(settings: OcrSettings) -> OcrTimeout:
+    return OcrTimeout(
+        f"OCR took longer than {settings.max_runtime_seconds} s for {len(settings.rotations)} "
+        "rotation(s). Pass a smaller region, fewer rotations or raise max_runtime_seconds."
+    )
+
+
+def _to_gray(image: np.ndarray) -> np.ndarray:
+    """ITU-R BT.601 luma, the same weights as OpenCV's RGB->GRAY."""
+    if image.ndim == 2:
+        return image
+    rgb = image.astype(np.float32)
+    gray = rgb[:, :, 0] * 0.299 + rgb[:, :, 1] * 0.587 + rgb[:, :, 2] * 0.114
+    return np.clip(np.rint(gray), 0, 255).astype(np.uint8)
+
+
+def _upscale(gray: np.ndarray, scale: float) -> np.ndarray:
+    if scale == 1.0:
+        return gray
+    try:
+        import cv2
+    except ImportError as exc:  # pragma: no cover - cv2 is a declared dependency
+        raise OcrUnavailable(
+            "Upscaling needs opencv-python-headless. Install it or set upscale_to_dpi=None."
+        ) from exc
+    h, w = gray.shape
+    size = (max(1, round(w * scale)), max(1, round(h * scale)))
+    return cv2.resize(gray, size, interpolation=cv2.INTER_CUBIC)
 
 
 def _as_rgb_or_gray(page: np.ndarray) -> np.ndarray:
