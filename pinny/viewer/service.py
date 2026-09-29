@@ -40,6 +40,7 @@ from pinny.detection import (BoundingBox, DetectionError, OpenCVTemplateDetector
 from pinny.jobs.queue import PRIORITY_BATCH, PRIORITY_INTERACTIVE, JobQueue
 
 from .errors import ViewerError
+from .legend import LegendService
 from .render_client import JobRenderClient
 
 _log = logging.getLogger("pinny.viewer")
@@ -134,6 +135,8 @@ class ViewerService:
         self._batch_jobs: Dict[str, Future] = {}
         self._batch_lock = threading.Lock()
         self._closing = threading.Event()
+        # The legend workflow: legend reading, whole-set scans and counts.
+        self.legend = LegendService(self)
 
     def _db(self, fn, *args, **kwargs):
         return self._exec.submit(fn, *args, **kwargs).result()
@@ -143,6 +146,7 @@ class ViewerService:
         # pending and resume when the batch is started or resumed again.
         self._closing.set()
         self._batch_exec.shutdown(wait=True, cancel_futures=True)
+        self.legend.close()
         self._db(self.store.close)
         self._exec.shutdown()
 
@@ -167,6 +171,7 @@ class ViewerService:
         files (docs/training-site.md section 7). Scans, pins and review events
         stay; they are the labels and hold no drawing pixels."""
         info = self.document_info(document_version)  # 404s for an unknown version
+        self.legend.cancel_document(document_version)  # its legend and set scans go with the folder
         self.render.delete_version(document_version)
         crops = self._db(self.store.purge_document_crops, document_version)
         return dict(info, deleted=True, crops_deleted=crops)
@@ -773,6 +778,19 @@ class ViewerService:
         if expected is not None and (isinstance(expected, bool) or not isinstance(expected, int)):
             raise ViewerError("invalid_version", "expected_version must be an integer.")
         state = self.scan_state(scan_id)  # 404s for an unknown scan
+        class_label = body.get("class_label")
+        if class_label is not None:
+            # A legend tag (docs/set-scanning.md): for a pin added by hand, or
+            # an approval that corrects the symbol.
+            if action not in ("add_manual", "approve"):
+                raise ViewerError("invalid_class_label", "A tag can be given only when adding or approving a pin.")
+            if not isinstance(class_label, str):
+                raise ViewerError("invalid_class_label", "class_label must be a legend tag.")
+            tags = self.legend.tags(state["document"]["document_version"])
+            if not tags:
+                raise ViewerError("invalid_class_label", "This drawing has no legend, so pins have no tags.")
+            if class_label not in tags:
+                raise ViewerError("unknown_tag", f"{class_label} is not a tag in this drawing's legend.")
         kw = {"request_id": request_id, "source": SOURCE}
         if reviewer is not None:
             kw["reviewer"] = reviewer
@@ -780,12 +798,14 @@ class ViewerService:
             if action == "add_manual":
                 frame = state["coordinate_frame"]
                 x, y = _point(body, frame)
-                res = self._db(self.store.add_manual, scan_id, x, y, **kw)
+                res = self._db(self.store.add_manual, scan_id, x, y, class_label=class_label, **kw)
             else:
                 pin_id = body.get("pin_id")
                 if not isinstance(pin_id, str) or not pin_id:
                     raise ViewerError("missing_pin", "pin_id is required for this action.")
                 method = getattr(self.store, action)
+                if class_label is not None:
+                    kw["class_label"] = class_label
                 res = self._db(method, scan_id, pin_id, expected_version=expected, **kw)
         except _store.NotFound:
             raise ViewerError("unknown_pin", "That pin does not exist in this scan.", 404) from None
@@ -931,7 +951,7 @@ def _pin_dict(p, scores: dict, rotations: dict, extras: Optional[dict] = None) -
            "box": box, "detection_id": p.detection_id,
            "score": scores.get(p.detection_id) if p.detection_id else None,
            "rotation": rotations.get(p.detection_id) if p.detection_id else None,
-           "version": p.version, "updated_at": p.updated_at}
+           "version": p.version, "updated_at": p.updated_at, "class_label": p.class_label}
     if extras and p.detection_id:
         out.update(extras.get(p.detection_id) or {})
     return out

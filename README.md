@@ -13,6 +13,8 @@ internet-facing training site.
 * Viewer: `docs/viewer.md`
 * Phase 2 (learning models): `docs/phase2-contracts.md`, `docs/phase2-ownership.md`
 * Detection: `docs/detection.md`, vector matcher `docs/vector-matching.md`
+* Legend reader and whole-set scans: `docs/legend-reader.md`, `docs/set-scanning.md`
+  (in the viewer: `docs/viewer.md` "Legend and whole set")
 * Learning store and loop: `docs/learning-store.md`, `docs/learning-loop.md`
 * Evaluation: `evaluation/README.md`
 * Ownership: `docs/agent-ownership.md`
@@ -58,11 +60,12 @@ python -m pytest tests evaluation/tests               # every Python suite
 PYTHONPATH=evaluation python -m pinny_eval score-corpus \
   --manifest evaluation/fixtures/corpus_mini/manifest.json \
   --baseline evaluation/fixtures/corpus_mini/baseline.json --max-drop 0.01   # evaluator gate
-node --test tests/viewer/test_transform.mjs tests/viewer/test_edits.mjs tests/viewer/test_batch.mjs tests/viewer/test_training.mjs  # viewer JS units
+node --test tests/viewer/test_transform.mjs tests/viewer/test_edits.mjs tests/viewer/test_batch.mjs tests/viewer/test_training.mjs tests/viewer/test_legend.mjs  # viewer JS units
 node tests/viewer/test_modes_browser.mjs                                     # Chromium, fake models
 node tests/viewer/test_batch_browser.mjs                                     # Chromium, batch scans
 node tests/viewer/test_site_browser.mjs                                      # Chromium, signed-in site
 node tests/viewer/test_training_browser.mjs                                  # Chromium, training pages
+node tests/viewer/test_legend_browser.mjs                                    # Chromium, legend and whole-set scan
 ```
 
 Tests that need `torch` or `onnxruntime` skip when those extras are not

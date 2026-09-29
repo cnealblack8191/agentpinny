@@ -1,0 +1,42 @@
+/* Legend workflow (web/legend.js). Tag colours: keep in step with PALETTE in web/legend-core.js. */
+.legend-buttons { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 4px 0; }
+.legend-small { font-size: 12px; }
+.legend-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+.legend-table td, .legend-table th { text-align: left; padding: 2px 4px; border-bottom: 1px solid #eee; vertical-align: top; }
+#legend-table tbody tr, #sheets-table tbody tr { cursor: pointer; }
+#legend-table tr.selected, #sheets-table tr.current { background: #e6f0ff; }
+#legend-table tr.needs-look { background: #fff4f4; }
+#legend-table tr.selected.needs-look { background: #ffe3e3; }
+.legend-symbol { width: 56px; height: 36px; border: 1px solid #ddd; background: #fff; display: block; }
+.legend-flag { color: #b00020; font-weight: bold; }
+.legend-note { color: #7a5200; }
+.legend-editor { border: 1px solid #ccd; padding: 6px; margin: 6px 0; background: #fafbff; }
+.legend-editor label { display: block; margin-top: 4px; font-size: 13px; }
+.legend-editor input[type=text] { width: 100%; }
+.legend-editor select { max-width: 160px; }
+#legend-engineer { width: 100%; }
+#legend-library { margin-top: 8px; }
+#setscan-body h3 { font-size: 13px; margin: 12px 0 4px; }
+#setscan-progress { width: 100%; }
+#sheets-table td.ok, .legend-table td.ok { color: #1b6e20; }
+.counts-table td.num, .counts-table th:not(:first-child) { text-align: right; }
+.counts-table td.strong { font-weight: bold; }
+.counts-table tfoot td { border-top: 2px solid #ccc; font-weight: bold; }
+.counts-table { font-size: 12px; }
+.tag-tools { margin: 4px 0; font-size: 13px; }
+.tag-tools select { max-width: 100%; }
+.tag-key { margin-top: 4px; font-size: 12px; line-height: 1.8; }
+#viewport.mode-legendbox { cursor: crosshair; }
+.tag-chip { display: inline-block; padding: 0 4px; border-radius: 3px; font-size: 11px; font-weight: bold;
+  line-height: 15px; min-width: 16px; text-align: center; }
+.tag-c0 { background: #1f5fbf; color: #ffffff; }
+.tag-c1 { background: #c62828; color: #ffffff; }
+.tag-c2 { background: #6a3d9a; color: #ffffff; }
+.tag-c3 { background: #8c564b; color: #ffffff; }
+.tag-c4 { background: #00838f; color: #ffffff; }
+.tag-c5 { background: #9e9d24; color: #111111; }
+.tag-c6 { background: #d81b60; color: #ffffff; }
+.tag-c7 { background: #283593; color: #ffffff; }
+.tag-c8 { background: #ef6c00; color: #111111; }
+.tag-c9 { background: #37474f; color: #ffffff; }
+#legend-details summary { cursor: pointer; font-size: 13px; margin: 4px 0; }

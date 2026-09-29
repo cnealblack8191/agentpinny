@@ -26,12 +26,17 @@ The scan refuses to start when:
 
 The legend page is skipped unless `skip_legend_page=False`.
 
+`progress(page_index, done, total)` is called as each sheet is finished;
+`matched(page_index, done, total)` as each sheet's matching (the slow part)
+finishes, before the size search, so a caller can show progress while the
+sheets are searched.
+
 ## How each sheet is scanned
 
 | Sheet | Method |
 |---|---|
 | Vector (CAD export) | The sheet is loaded and indexed once, then every legend symbol is matched against it with the vector matcher. Block reuse (the same Form XObject as the legend's) gives exact matches. Otherwise flattened line work is matched at any quarter turn or mirror, tolerating wires drawn through symbols. |
-| Scanned | The sheet is rendered at 200 DPI (PDFium, contracts §2) and every legend symbol is matched with the raster template matcher. |
+| Scanned | The sheet is rendered at 200 DPI (PDFium, contracts §2) and every legend symbol is matched with the raster template matcher. The sheet is finished at once, so only one page raster is held at a time. |
 | Mixed | Both, merged. |
 
 **Legend symbols as examples**
@@ -105,5 +110,41 @@ a label in the legend screen.
 * **Tests:** all results so far come from synthetic sets. Before trusting
   counts, run the evaluator (`pinny_eval score-corpus`) on real, labelled
   sheets.
-* **Storing and reviewing:** results aren't written to the learning store
-  yet, and there is no review screen for them. Both are next.
+* **Tags corrected after the scan:** pins keep the tag they were scanned
+  with. Renaming a tag in the legend afterwards needs a new whole-set scan
+  for the counts to use the new tag.
+
+## Storing and reviewing (in the viewer)
+
+Built: the viewer runs the whole workflow (docs/viewer.md "Legend and
+whole set", docs/training-site.md sections 3-5).
+
+* **Legend.** `read_legend` (a sandboxed job) reads the legend; the web
+  process stores it as `documents/<sha256>/legend.json` (`pinny.legend` v1)
+  and applies the reviewer's edits, each logged with who made it. The
+  legend's edit log also records `read` and `confirm_legend`; a legend is
+  confirmed while its last edit is a confirmation, so any later change
+  needs a new one.
+* **Scan.** `scan_set` (a sandboxed job in the `scan` pool) scans every
+  sheet with a snapshot of the confirmed legend,
+  `documents/<sha256>/set_scans/<run_id>/legend.json`, and writes
+  `result.json` (`pinny.set_scan` v1) beside it. Its payload is ids only
+  (`document_version`, `run_id`, `legend_sha256`); the child has no access to
+  the learning store.
+* **Recording.** When the job is done, the web process records one ordinary
+  scan per sheet: `detector.name` `pinny-set-scan`, `detector.version` the
+  build's version when the scan started, and `settings` with the legend's
+  sha256, legend page, sizes (`scales`), warnings, method and the vector and
+  raster settings. Scan result `mode` is `legend`; there is no template.
+  Each detection carries `class_label` (the legend tag) and `legend_entry`,
+  so each pin starts with `class_label` = its tag (learning store
+  `Detection.class_label`, additive). Scan ids derive from the run id and
+  the page, and the content from the run, so recording again after a
+  restart repeats nothing (`LegendService.resume_interrupted` on startup).
+* **Frames.** Each sheet's frame from the job must equal the render
+  service's frame for that page, or the sheet is not saved; the tests check
+  that pins land on the symbols in the viewer's raster on a `/Rotate 90`
+  sheet.
+* **Review and training.** The pins are reviewed like any scan's; "Mark
+  page fully reviewed" applies per sheet, and a new whole-set scan reopens
+  the sheets it scans. Datasets use them like any other reviewed scan.

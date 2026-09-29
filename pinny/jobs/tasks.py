@@ -178,8 +178,9 @@ def run(kind: str, payload: Dict[str, Any], data_dir: str, *, job_id: Optional[s
     """Run one job. Training kinds (``pinny.jobs.train_tasks``) also need the
     job id, which names their output and progress directories, and report
     through ``progress`` (by default a ``Progress`` in the job's directory)."""
+    from . import legend_tasks
     from .train_tasks import TRAIN_TASKS
-    if kind in TRAIN_TASKS:
+    if kind in TRAIN_TASKS or kind == "scan_set":
         from .progress import Progress, job_dir
         try:
             directory = job_dir(data_dir, job_id)
@@ -187,5 +188,9 @@ def run(kind: str, payload: Dict[str, Any], data_dir: str, *, job_id: Optional[s
             raise TaskError("invalid_job", "Bad job id.") from None
         if progress is None:
             progress = Progress(directory, data_dir=data_dir)
+        if kind == "scan_set":
+            return legend_tasks.scan_set(payload, Path(data_dir), progress)
         return TRAIN_TASKS[kind](payload, Path(data_dir), progress, job_id)
+    if kind == "read_legend":
+        return legend_tasks.read_legend(payload, Path(data_dir))
     return _TASKS[kind](payload, Path(data_dir))

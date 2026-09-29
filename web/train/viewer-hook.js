@@ -38,6 +38,7 @@ btn.onclick = async () => {
     await training.markReviewed(cur.version, cur.page);
     status.textContent = `Page ${cur.page + 1} is marked fully reviewed.`;
     status.className = 'status ok';
+    document.dispatchEvent(new CustomEvent('pinny:page-reviewed', { detail: cur }));
   } catch (err) {
     status.textContent = err.message;
     status.className = 'status error';

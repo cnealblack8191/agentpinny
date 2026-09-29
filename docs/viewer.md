@@ -137,6 +137,55 @@ In the browser:
 5. **Stop** skips pages not yet started; **Retry failed pages** runs failed
    pages again. The batch shown is kept in the URL, so a reload returns to it.
 
+## Legend and whole set
+
+For a vector drawing set with a symbol legend, Pinny can count every legend
+symbol on every sheet without anyone drawing a template
+(`docs/legend-reader.md`, `docs/set-scanning.md`). The section **Legend:
+count the whole set** (web/legend.js) sits under Document:
+
+1. **Find legend.** Pinny looks for the legend page (a heading such as
+   LEGEND or SYMBOLS), opens it, and lists its rows: a picture of each
+   symbol (cut from the legend page's raster in the browser), its tag, name
+   and group, and a **Count** box. Rows that need a look are marked **!**
+   with the reason: two drawings in one row (Split, or Looks right), a
+   description that ran onto two lines, a tag used twice, a tag Pinny made
+   up, or two symbols drawn the same. If Pinny picked the wrong page, open
+   the legend page and press **Read legend on page N**. A drawing without a
+   legend, or with a scanned (image) legend, gets a plain message pointing
+   to the template workflow.
+2. **Check it.** Click a row to bring its symbol to the middle of the view
+   and edit it: name, tag, group, Looks right, Split, Delete, or "Same
+   symbol as ... Merge". Tick or untick Count. **Add a missing symbol**,
+   then drag a box around it on the legend page (**Add anyway** if its row
+   was read already). Every change is saved on the server with who made it;
+   two people editing at once get "Someone else changed the legend".
+3. **Confirm legend** once nothing needs a look. Any later change needs a
+   new confirmation. The symbol table then folds away.
+4. **Scan whole set.** Scans every sheet except the legend page on the
+   server; the progress bar counts sheets searched. Each sheet gets one
+   ordinary scan (mode `legend`), so everything below works as for any scan.
+5. **Review sheet by sheet.** The **sheets** list shows each sheet's count,
+   what is left to review and its status (to review, ready to mark reviewed,
+   reviewed); click a row or **Next sheet to review**. Each pin carries a
+   small label with its tag in the tag's colour; the key, a **Show** filter
+   by tag, the **Tag for new pins** (last used, else the sheet's most common
+   tag) and **Approve as ...** (the pin is another symbol) are under Review.
+   The pin list has a Tag column. Approve, reject, add and "Mark page fully
+   reviewed" work as usual, per sheet.
+6. **Counts** per tag for the whole set or one sheet: found by Pinny,
+   approved, rejected, added by hand, total (approved + added) and left to
+   review, with **Download counts (CSV)**. "Found" stays under the tag
+   Pinny gave a pin; approving it as another tag moves the approval.
+
+**Engineer's standard legend** (folded under the legend): save the
+confirmed legend as an engineer's standard; for a later set, enter the
+engineer and press Compare to see which symbols match, are new, changed or
+missing.
+
+Template scans are unchanged: the tag tools appear only on legend scans, and
+pins added to a template scan have no tag.
+
 ## Sign-in and security
 
 The HTTP layer is Starlette on uvicorn (`server.py`). In development it is
@@ -160,7 +209,7 @@ Delete button for drawings (uploader or admin).
 | `GET /api/documents/{version}/pages/{i}/scans` | scans of the page, oldest first |
 | `POST /api/scans` `{document_version, page_index, template_box, request_id, threshold?}` | run and record a scan; the scan id is derived from `request_id`, so a retry returns the same scan |
 | `GET /api/scans/{id}` | scan plus current pins |
-| `POST /api/scans/{id}/actions` `{action, request_id, pin_id?, x?, y?, expected_version?}` | review action |
+| `POST /api/scans/{id}/actions` `{action, request_id, pin_id?, x?, y?, expected_version?, class_label?}` | review action; `class_label` (a tag of the document's legend) with `add_manual` or `approve` |
 | `GET /api/scans/{id}/report` | report download |
 | `POST /api/batches` `{document_version, request_id, template_box, template_page_index?, page_indexes?, mode?, threshold?, model_threshold?}` | start a batch scan (202); see "Batch scans" |
 | `GET /api/batches/{id}` | batch status, per-page status and pin counts |
@@ -168,6 +217,16 @@ Delete button for drawings (uploader or admin).
 | `POST /api/batches/{id}/cancel` | skip pages not yet started |
 | `POST /api/batches/{id}/resume` `{retry_failed?}` | resume interrupted pages, optionally retry failed ones |
 | `GET /api/documents/{version}/batches` | batches of a document version |
+| `GET /api/documents/{version}/legend` | `{legend, set_scan}`: the legend (or null) and the latest whole-set scan |
+| `POST /api/documents/{version}/legend/read` `{page_index?}` | find (or read from that page) and store the legend |
+| `POST /api/documents/{version}/legend/edit` `{op, entry_id?, expected_version?, ...}` | one legend edit: `rename {name}`, `set_tag {tag}`, `set_group {group}`, `set_count {count}`, `confirm`, `split`, `merge {into}`, `delete`, `add {box, force?}`, `set_engineer {engineer}` |
+| `POST /api/documents/{version}/legend/confirm` `{expected_version?}` | confirm the legend (409 `legend_needs_review`) |
+| `POST /api/documents/{version}/legend/save-standard` `{engineer}` | save as the engineer's standard legend |
+| `GET /api/legend-library` | saved standard legends |
+| `POST /api/documents/{version}/set-scans` `{request_id}` | scan every sheet with the confirmed legend (202); the run id is derived from `request_id` |
+| `GET /api/documents/{version}/set-scans` | whole-set scans, oldest first, with progress and per-sheet scan ids |
+| `GET /api/documents/{version}/counts` | counts per tag, per sheet and for the set, from the latest whole-set scan |
+| `GET /api/documents/{version}/counts.csv` | the same as a CSV download |
 
 Errors are `{"error": {"code", "message"}}` (§7).
 
@@ -182,8 +241,9 @@ carry the document identity and the frame.
 
 ```
 python -m pytest tests/viewer                       # service + HTTP (21)
-node --test tests/viewer/test_transform.mjs tests/viewer/test_edits.mjs tests/viewer/test_batch.mjs
+node --test tests/viewer/test_transform.mjs tests/viewer/test_edits.mjs tests/viewer/test_batch.mjs tests/viewer/test_legend.mjs
 node tests/viewer/test_batch_browser.mjs            # batch scans in Chromium
+node tests/viewer/test_legend_browser.mjs           # legend and whole-set scan in Chromium
 node tests/viewer/test_site_browser.mjs             # signed-in site in Chromium
 node tests/viewer/browser_e2e.mjs                   # Chromium end-to-end (90 checks)
 ```

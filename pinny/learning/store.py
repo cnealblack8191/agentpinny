@@ -265,6 +265,9 @@ class Detection:
     x: Optional[float] = None
     y: Optional[float] = None
     raw: Dict[str, Any] = field(default_factory=dict)  # any extra keys, kept verbatim
+    # Symbol class of the detection (v1.1 additive, e.g. a legend tag). Its
+    # pin starts with this ``class_label``.
+    class_label: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -310,7 +313,8 @@ class Scan:
             dets = [Detection(detection_id=e["id"], box=e["box"], score=e["score"],
                               rotation=int(e.get("rotation", 0)), source=e.get("source", "detector"),
                               x=e.get("x"), y=e.get("y"),
-                              raw={k: v for k, v in e.items() if k not in known})
+                              raw={k: v for k, v in e.items() if k not in known},
+                              class_label=e.get("class_label"))
                     for e in d.get("detections", [])]
         except (KeyError, TypeError, ValueError) as e:
             raise InvalidArgument(f"malformed scan result: {e!r}") from e
@@ -608,7 +612,7 @@ class LearningStore:
                     raise ValueError(f"detection {d.detection_id}: rotation {d.rotation} not in 0/90/180/270")
                 if not all(math.isfinite(v) for v in (x, y, float(d.score))):
                     raise ValueError(f"detection {d.detection_id}: non-finite value")
-                norm.append((d, box, x, y))
+                norm.append((d, box, x, y, _clean_label(d.class_label)))
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             raise InvalidArgument(f"invalid scan {scan.scan_id}: {e}") from e
         ids = [d.detection_id for d, *_ in norm]
@@ -622,8 +626,11 @@ class LearningStore:
             "detector": [scan.detector_name, scan.detector_version, scan.detector_settings],
             "created_at": scan.created_at,
             "metadata": scan.metadata,
+            # A class label is appended only when set, so fingerprints of
+            # scans recorded before labels existed stay the same.
             "detections": [[d.detection_id, b.to_dict(), x, y, d.score, d.rotation, d.source, d.raw]
-                           for d, b, x, y in norm],
+                           + ([label] if label is not None else [])
+                           for d, b, x, y, label in norm],
         }
         if scan.template_id is not None:  # absent key keeps schema-2 fingerprints stable
             fp["template_id"] = scan.template_id
@@ -650,7 +657,7 @@ class LearningStore:
                  scan.detector_name, scan.detector_version, _canon(scan.detector_settings),
                  _sha(scan.detector_settings), _canon(scan.metadata), fingerprint,
                  scan.created_at or now, now, scan.template_id))
-            for d, b, x, y in norm:
+            for d, b, x, y, label in norm:
                 db.execute("INSERT INTO detections(scan_id, detection_id, x0, y0, x1, y1, x, y, score,"
                            " rotation, source, raw) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                            (scan.scan_id, d.detection_id, *b.edges(), x, y, float(d.score),
@@ -660,7 +667,7 @@ class LearningStore:
                     " version, created_at, updated_at, class_label, rotation)"
                     " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (scan.scan_id, d.detection_id, MACHINE, UNREVIEWED, d.detection_id,
-                     x, y, *b.edges(), 1, now, now, None, d.rotation))
+                     x, y, *b.edges(), 1, now, now, label, d.rotation))
             # A new scan supersedes the page's earlier ones, including any pins
             # added by hand there, so "every receptacle is pinned" no longer
             # holds: reopen the page's review until it is marked again.

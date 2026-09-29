@@ -94,6 +94,10 @@ A scan is immutable once written. Corrections never modify it.
   `"vector-xobject"` or `"vector-path"` and may carry `angle` for a
   non-quarter-turn placement.
 
+* *v1.3 additive:* a detection may carry `class_label` (for example a
+  legend tag, `docs/set-scanning.md`); its pin starts with that
+  `class_label` (section 5). Whole-set scans use `detector.name`
+  `"pinny-set-scan"` and have no template.
 * `score` is the raw matching score, **not** a probability. Evaluator
   exports copy it into `confidence`.
 * The export for the evaluator is exactly `pinny.detections` v1 (see

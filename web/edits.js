@@ -197,7 +197,7 @@ export function projectPins(serverPins, entries, scanId) {
       const id = 'tmp:' + e.request_id;
       if (!byId.has(id)) {
         const p = { pin_id: id, origin: 'manual', state: 'added', x: e.x, y: e.y, box: null,
-          score: null, version: 0, temp: true, request_id: e.request_id,
+          score: null, version: 0, temp: true, request_id: e.request_id, class_label: e.class_label || null,
           pending: !failed, failed: failed ? e.error : null };
         pins.push(p);
         byId.set(id, p);
@@ -212,6 +212,7 @@ export function projectPins(serverPins, entries, scanId) {
     }
     p.pending = true;
     p.state = nextState(p, e.action);
+    if (e.class_label && e.action === 'approve') p.class_label = e.class_label;
   }
   return pins;
 }
