@@ -42,6 +42,10 @@ mode (a tap selects a pin within 22 px). Two fingers pan and pinch-zoom in
 every mode; a box or drag the first finger had started is dropped when the
 second lands, and the finger left after a pinch keeps panning. In Pan mode,
 a double tap on the page zooms in 2x there.
+Selecting a pin also shows **Correct**, **Wrong** (**Delete** for a pin
+added by hand) and **Next** right beside it: the same actions as the side
+panel's Approve, Reject and Next unreviewed buttons. A reviewed pin stays
+selected with its state shown, so a mistake can be undone at once.
 Other keys: `+`/`-` zoom, `0` fit, `R` rotate the view 90°, `H` hide pins,
 `A` approve, `X`/`Delete` reject or delete, `N` next unreviewed, `Esc` cancel
 or deselect.

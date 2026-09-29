@@ -67,6 +67,7 @@ node tests/viewer/test_site_browser.mjs                                      # C
 node tests/viewer/test_training_browser.mjs                                  # Chromium, training pages
 node tests/viewer/test_legend_browser.mjs                                    # Chromium, legend and whole-set scan
 node tests/viewer/test_touch_browser.mjs                                     # Chromium, touch pan and pinch zoom
+node tests/viewer/test_pin_popup_browser.mjs                                 # Chromium, review popup beside a pin
 ```
 
 Tests that need `torch` or `onnxruntime` skip when those extras are not

@@ -22,6 +22,8 @@ const el = {
   scanStatus: $('scan-status'), scanSelect: $('scan-select'), counts: $('counts'),
   saveStatus: $('save-status'), failures: $('failures'), pinInfo: $('pin-info'),
   approveBtn: $('approve-btn'), rejectBtn: $('reject-btn'), nextBtn: $('next-btn'),
+  pinPop: $('pin-pop'), pinPopState: $('pin-pop-state'), pinPopOk: $('pin-pop-ok'),
+  pinPopWrong: $('pin-pop-wrong'), pinPopNext: $('pin-pop-next'),
   showHidden: $('show-hidden'), reportLink: $('report-link'), pinTable: $('pin-table'),
   zoomIn: $('zoom-in'), zoomOut: $('zoom-out'), zoomLabel: $('zoom-label'), fitBtn: $('fit-btn'),
   rotateBtn: $('rotate-btn'), hidePins: $('hide-pins'), cursorPos: $('cursor-pos'),
@@ -633,6 +635,7 @@ function render() {
     rafPending = false;
     draw();
     renderPanel();
+    positionPinPop();
     saveHash();
   });
 }
@@ -1057,6 +1060,40 @@ async function batchNext() {
 }
 
 // -------------------------------------------------------------- review
+const POP_STATE = { approved: 'Approved', rejected: 'Rejected', added: 'Added by hand', removed: 'Removed' };
+const POP_GAP = 14; // CSS px between the pin and the popup
+
+// The review popup beside the selected pin: the same actions (and the same
+// enabled rules, set in renderPanel) as the side panel's buttons. Hidden
+// while dragging or pinching, for a pin that is not drawn (hidden pins, a
+// rejected pin with "Show rejected" off) and when the pin is off screen.
+function positionPinPop() {
+  const sel = S.selected && S.frame && S.scanId && !S.drag && !S.pinch && !el.hidePins.checked
+    ? visiblePins().find((p) => p.pin_id === S.selected) : null;
+  const s = sel && T.toScreen(S.view, sel.x, sel.y);
+  if (!s || s.x < 0 || s.y < 0 || s.x > S.css.w || s.y > S.css.h) {
+    el.pinPop.hidden = true;
+    return;
+  }
+  el.pinPopOk.disabled = el.approveBtn.disabled;
+  el.pinPopOk.hidden = sel.origin !== 'machine';
+  el.pinPopWrong.disabled = el.rejectBtn.disabled;
+  el.pinPopWrong.textContent = sel.origin === 'manual' ? '\u2717 Delete' : '\u2717 Wrong';
+  el.pinPopNext.disabled = el.nextBtn.disabled;
+  el.pinPopState.textContent = POP_STATE[sel.state] || '';
+  el.pinPop.hidden = false;
+  // Right of the pin and vertically centred on it; flipped or clamped to stay inside.
+  const w = el.pinPop.offsetWidth;
+  const h = el.pinPop.offsetHeight;
+  let x = s.x + POP_GAP;
+  if (x + w > S.css.w - 4) x = s.x - POP_GAP - w;
+  x = Math.max(4, Math.min(x, S.css.w - w - 4));
+  let y = s.y - h / 2;
+  y = Math.max(4, Math.min(y, S.css.h - h - 4));
+  el.pinPop.style.left = `${Math.round(x)}px`;
+  el.pinPop.style.top = `${Math.round(y)}px`;
+}
+
 function selectedPin() {
   return displayPins().find((p) => p.pin_id === S.selected) || null;
 }
@@ -1313,6 +1350,13 @@ el.hidePins.onchange = render;
 el.showHidden.onchange = render;
 for (const r of document.querySelectorAll('input[name=mode]')) r.onchange = () => setMode(r.value);
 el.approveBtn.onclick = () => review('approve');
+el.pinPopOk.onclick = () => review('approve');
+el.pinPopWrong.onclick = () => review('delete');
+el.pinPopNext.onclick = selectNext;
+// The popup sits inside the viewport: keep its presses from panning or
+// deselecting, and give keyboard focus back so the shortcuts keep working.
+el.pinPop.addEventListener('pointerdown', (e) => e.stopPropagation());
+el.pinPop.addEventListener('click', () => el.viewport.focus({ preventScroll: true }));
 el.rejectBtn.onclick = () => review('delete');
 el.nextBtn.onclick = selectNext;
 el.scanBtn.onclick = runScan;
