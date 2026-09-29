@@ -29,7 +29,11 @@ check_profile() {
 env_value() {
   local line
   line=$(grep -E "^$2=" "$1" 2>/dev/null | tail -n 1) || return 1
-  printf '%s\n' "${line#*=}"
+  line=${line#*=}
+  # Values may be quoted (they must be when they contain spaces, so the file
+  # can also be sourced by a shell); systemd strips the quotes the same way.
+  case "$line" in \"*\") line=${line#\"}; line=${line%\"} ;; esac
+  printf '%s\n' "$line"
 }
 
 release_version() { env_value "$1/release.env" PINNY_VERSION; }
