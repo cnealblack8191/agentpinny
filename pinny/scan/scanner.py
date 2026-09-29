@@ -78,7 +78,8 @@ class SetScanSettings:
     #: Try other sizes for a symbol that matched nothing at legend size.
     scale_search: bool = True
     scale_candidates: Tuple[float, ...] = (0.5, 2 / 3, 0.75, 0.8, 1.25, 4 / 3, 1.5, 2.0)
-    #: Vector sheets used to choose a symbol's size before searching all sheets.
+    #: A symbol's size is chosen from the first this-many vector sheets it is
+    #: found on (at any candidate size), before every sheet is searched at it.
     scale_sample_pages: int = 3
     #: A label counts if its text is within this many symbol sizes of the symbol.
     label_radius: float = 1.5
@@ -350,14 +351,23 @@ def scan_set(
             missing = [sym for sym in symbols if sym.vector
                        and not any(s is sym for _k, found, *_ in raw_by_page.values() for s, _d in found)]
             if missing:
-                sample = vector_pages[: settings.scale_sample_pages]
+                # Sheets are sampled in order until each symbol has turned up on
+                # scale_sample_pages of them, so a symbol found only on later
+                # sheets (a lighting plan after the power plans) still gets a size.
                 tally: Dict[str, Dict[float, int]] = {sym.entry.id: {} for sym in missing}
-                for p in sample:
+                hit_pages: Dict[str, int] = {sym.entry.id: 0 for sym in missing}
+                for p in vector_pages:
+                    todo = [sym for sym in missing if hit_pages[sym.entry.id] < settings.scale_sample_pages]
+                    if not todo:
+                        break
                     prepared = prepare_page(path, p, settings.vector)
-                    for sym in missing:
+                    for sym in todo:
+                        hit = False
                         for f in settings.scale_candidates:
                             n = len(_vector_matches(prepared, sym, [v.scaled(f) for v in sym.vector], settings, p, f))
                             tally[sym.entry.id][f] = tally[sym.entry.id].get(f, 0) + n
+                            hit = hit or n > 0
+                        hit_pages[sym.entry.id] += hit
                     del prepared
                 chosen = {}
                 for sid, counts in tally.items():

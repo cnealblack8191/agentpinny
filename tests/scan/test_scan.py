@@ -240,3 +240,30 @@ def test_cli(vector_set, tmp_path, capsys):
     assert "GFCI receptacle" in text and json.loads(out.read_text())["counts"]["G"] == 3
     assert cli([str(path), "--pages", "x"]) == 64
     assert cli([str(tmp_path / "missing.pdf")]) == 2
+
+
+def test_legend_size_found_on_later_sheets(tmp_path):
+    # The size search must reach sheets after the first few: here three
+    # sheets without the symbols come before the plan that has them.
+    leg = Canvas()
+    leg.text(50, 58, "LEGEND", size=12)
+    leg.text(55, 74, "SYMBOL", size=7); leg.text(112, 74, "TAG", size=7); leg.text(150, 74, "DESCRIPTION", size=7)
+    for i, (k, t, desc) in enumerate([("duplex", "D", "DUPLEX RECEPTACLE"), ("quad", "Q", "QUAD RECEPTACLE")]):
+        y = 100 + 34 * i
+        place(leg, k, 75, y, 0, scale=1.5)
+        leg.text(112, y + 3, t); leg.text(150, y + 3, desc)
+    empty = []
+    for _ in range(3):
+        e = Canvas()
+        e.rect(80, 80, 1000, 600)
+        empty.append(e)
+    p = Canvas()
+    p.rect(80, 80, 1000, 600)
+    for k, x, y, r in [("duplex", 150, 100, 0), ("duplex", 300, 100, 0), ("quad", 500, 100, 0)]:
+        place(p, k, x, y, r)
+    path = tmp_path / "late.pdf"
+    build([(leg, 0, None)] + [(e, 0, None) for e in empty] + [(p, 0, None)], str(path))
+    legend = read_legend(path)
+    res = scan_set(path, legend)
+    assert res.counts() == {"D": 2, "Q": 1}
+    assert all(abs(f - 2 / 3) < 1e-9 for f in res.scales.values())
