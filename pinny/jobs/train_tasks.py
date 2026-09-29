@@ -104,6 +104,32 @@ class _CountingRender:
         return page
 
 
+def _without_deleted_documents(export: Dict[str, Any], render) -> "tuple[Dict[str, Any], int]":
+    """Drop scans (and their pins) of drawings that were deleted. Their labels
+    stay in the learning store (docs/training-site.md section 7), but the
+    pixels are gone, and a deleted drawing must not be trained on."""
+    alive: Dict[str, bool] = {}
+
+    def exists(version: str) -> bool:
+        if version not in alive:
+            try:
+                render.get_version(version)
+                alive[version] = True
+            except Exception as exc:  # noqa: BLE001 - only "not found" means deleted
+                if getattr(exc, "code", None) != "document_version_not_found":
+                    raise
+                alive[version] = False
+        return alive[version]
+
+    scans = export.get("scans", [])
+    keep = [s for s in scans if exists(s["document"]["document_version"])]
+    if len(keep) == len(scans):
+        return export, 0
+    ids = {s["scan_id"] for s in keep}
+    out = dict(export, scans=keep, examples=[ex for ex in export.get("examples", []) if ex["scan_id"] in ids])
+    return out, len(scans) - len(keep)
+
+
 def build_dataset(p: Dict[str, Any], data_dir: Path, progress: Progress, job_id: str) -> Dict[str, Any]:
     from pinny.learning import LearningStore
     from pinny.render import RenderService
@@ -115,13 +141,17 @@ def build_dataset(p: Dict[str, Any], data_dir: Path, progress: Progress, job_id:
     progress.update(0.02, "exporting reviews from the learning store")
     with LearningStore(data_dir) as store:
         export = store.export(document_version=version)
+    render_service = RenderService(data_dir, cache_size=2)
+    export, skipped = _without_deleted_documents(export, render_service)
+    if skipped:
+        progress.update(0.05, f"left out {skipped} scan(s) of deleted drawings")
     pages = {s["canonical_page_id"] for s in export.get("scans", [])}
     labelled = sum(1 for ex in export.get("examples", []) if ex.get("label") in ("positive", "negative"))
     progress.update(0.1, f"{len(export.get('scans', []))} scans on {len(pages)} pages, {labelled} labelled pins")
     if not pages:
         raise TaskError("nothing_to_build", "There are no scans to build a dataset from yet. Scan and review "
                         "some pages first.", 422)
-    render = _CountingRender(RenderService(data_dir, cache_size=2), progress, len(pages))
+    render = _CountingRender(render_service, progress, len(pages))
     res = _build(export, render, Path(data_dir) / "datasets")
     info = summarize(res.manifest)
     info["reused"] = res.reused

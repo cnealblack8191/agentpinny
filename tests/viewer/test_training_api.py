@@ -419,3 +419,29 @@ def test_train_benchmark_and_gate_on_a_synthetic_dataset(site):
     c, out = post(base, "/api/training/promote", {"benchmark_job_id": b["job_id"]})
     assert c == 409 and out["error"]["code"] == "promotion_not_recommended"
     assert s.service.registry.active("verifier") is None
+
+
+def test_build_dataset_skips_deleted_drawings(site):
+    """Found on the first real server: once any reviewed drawing was deleted,
+    every dataset build failed with document_version_not_found."""
+    from pdfgen import make_pdf
+
+    base, s, svc = site
+    versions = []
+    for tag in ("keep", "gone"):
+        doc = upload(base, who=REVIEWER, pdf=make_pdf(tag=tag), name=f"{tag}.pdf")
+        v = doc["document_version"]
+        code, st = post(base, "/api/scans", {"document_version": v, "page_index": 0, "request_id": rid(),
+                                             "template_box": _template_for(doc, svc.frame(v, 0))}, who=REVIEWER)
+        assert code == 201, st
+        for i, p in enumerate(st["pins"]):
+            act(base, st["scan_id"], p["pin_id"], "approve" if i else "reject")
+        versions.append(v)
+    code, _, raw = call(base, "DELETE", f"/api/documents/{versions[1]}", who=ADMIN)
+    assert code == 200, raw
+    code, out = post(base, "/api/training/datasets", {})
+    j = wait_job(base, out["job_id"])
+    assert j["status"] == "done", j
+    total_pos = sum(c["pos"] for c in j["result"]["counts"]["verifier"].values())
+    assert total_pos == 4  # only the kept drawing's four approved pins
+    assert "deleted drawings" in j["log_tail"]
