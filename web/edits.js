@@ -29,6 +29,7 @@ export class EditQueue {
     this.now = now;
     this.setTimer = setTimer;
     this.entries = [];
+    this.done = new Set(); // request ids this tab saved or discarded
     this.running = false;
     this.timer = null;
     this.load();
@@ -51,9 +52,27 @@ export class EditQueue {
       e.status === 'sending' ? { ...e, status: 'pending', retryAt: 0 } : e);
   }
 
+  // Another tab of the same person shares this storage key. Keep the edits
+  // it stored that this tab does not know about (they are its to send), so
+  // saving here never erases another tab's unsaved work.
+  othersStored() {
+    let list = [];
+    try {
+      const raw = this.storage && this.storage.getItem(this.storageKey);
+      list = raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      list = [];
+    }
+    const mine = new Set(this.entries.map((e) => e.request_id));
+    return (Array.isArray(list) ? list : []).filter((e) => e && e.request_id
+      && !mine.has(e.request_id) && !this.done.has(e.request_id));
+  }
+
   persist() {
     try {
-      if (this.storage) this.storage.setItem(this.storageKey, JSON.stringify(this.entries));
+      if (this.storage) {
+        this.storage.setItem(this.storageKey, JSON.stringify([...this.entries, ...this.othersStored()]));
+      }
       this.storageOk = true;
     } catch (e) {
       this.storageOk = false;
@@ -99,6 +118,7 @@ export class EditQueue {
   discard(requestId) {
     const e = this.find(requestId);
     if (!e || e.status === 'sending') return;
+    this.done.add(e.request_id);
     this.entries = this.entries.filter((x) => x !== e);
     this.changed();
   }
@@ -143,6 +163,7 @@ export class EditQueue {
         this.changed();
         try {
           const result = await this.send(e);
+          this.done.add(e.request_id);
           this.entries = this.entries.filter((x) => x !== e);
           this.changed();
           this.onSaved(e, result);

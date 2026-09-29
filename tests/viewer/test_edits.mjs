@@ -136,3 +136,27 @@ test('each signed-in person has their own outbox', () => {
   assert.equal(qa.entries.length, 1);
   assert.throws(() => qa.useStorageKey(storageKeyFor('b@x.com')), /not empty/);
 });
+
+test("two tabs of the same person never erase each other's unsaved edits", async () => {
+  // Found by review: each tab wrote only its own list over the shared key.
+  const storage = new MemStorage();
+  const never = () => new Promise(() => {}); // the server is slow: nothing is confirmed yet
+  const a = new EditQueue({ storage, send: never, setTimer: () => {} });
+  const b = new EditQueue({ storage, send: never, setTimer: () => {} });
+  a.enqueue({ scan_id: 's', action: 'approve', pin_id: 'p1', request_id: 'A1' });
+  b.enqueue({ scan_id: 's', action: 'reject', pin_id: 'p2', request_id: 'B1' });
+  a.enqueue({ scan_id: 's', action: 'approve', pin_id: 'p3', request_id: 'A2' });
+  const stored = JSON.parse(storage.getItem(STORAGE_KEY)).map((e) => e.request_id).sort();
+  assert.deepEqual(stored, ['A1', 'A2', 'B1']);
+  // A reload in either tab picks every one of them up.
+  const c = new EditQueue({ storage, send: never, setTimer: () => {} });
+  assert.deepEqual(c.entries.map((e) => e.request_id).sort(), ['A1', 'A2', 'B1']);
+});
+
+test("a saved edit leaves storage even when another tab still lists it", async () => {
+  const storage = new MemStorage();
+  const a = new EditQueue({ storage, send: async () => ({ pin: {} }), setTimer: () => {} });
+  a.enqueue({ scan_id: 's', action: 'approve', pin_id: 'p1', request_id: 'A1' });
+  await a.pump();
+  assert.deepEqual(JSON.parse(storage.getItem(STORAGE_KEY)), []);
+});
