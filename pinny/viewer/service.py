@@ -22,6 +22,8 @@ import importlib
 import importlib.util
 import math
 import os
+import shutil
+import json
 import subprocess
 import threading
 import logging
@@ -128,18 +130,48 @@ class ViewerService:
         self._exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pinny-store")
         self.store = self._db(_store.LearningStore, self.data_dir,
                               crop_renderer=self.render.crop_renderer,
-                              default_reviewer=_store.local_reviewer_identity())
+                              default_reviewer=_store.local_reviewer_identity(),
+                              crops_after_review=False)
+        # Training crops are cut on their own thread with their own store
+        # connection: cutting one decodes a whole page image (0.4-1.3 s on
+        # big sheets), which must not hold up everyone's review clicks.
+        self._crop_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pinny-crops")
+        self._crop_store = self._crop_exec.submit(
+            _store.LearningStore, self.data_dir, crop_renderer=self.render.crop_renderer,
+            default_reviewer=_store.local_reviewer_identity()).result()
+        self._closing = threading.Event()
+        self._crop_lock = threading.Lock()
+        self._crop_scheduled = False
+        self._schedule_crops()  # crops left pending before a restart
         # Batch scans run one at a time, one page at a time, on this worker,
         # which bounds memory to one page raster plus the detector's work.
         self._batch_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pinny-batch")
         self._batch_jobs: Dict[str, Future] = {}
         self._batch_lock = threading.Lock()
-        self._closing = threading.Event()
         # The legend workflow: legend reading, whole-set scans and counts.
         self.legend = LegendService(self)
 
     def _db(self, fn, *args, **kwargs):
         return self._exec.submit(fn, *args, **kwargs).result()
+
+    def _schedule_crops(self) -> None:
+        with self._crop_lock:
+            if self._crop_scheduled or self._closing.is_set():
+                return
+            self._crop_scheduled = True
+        self._crop_exec.submit(self._run_crops)
+
+    def _run_crops(self) -> None:
+        with self._crop_lock:
+            self._crop_scheduled = False
+        try:
+            self._crop_store.process_pending_crops(verify_written=False)
+        except Exception:  # noqa: BLE001 - failures stay recorded per crop and are retried
+            _log.exception("writing training crops failed")
+
+    def wait_crops(self) -> None:
+        """Block until the crops queued so far are written (tests, deletion)."""
+        self._crop_exec.submit(lambda: None).result()
 
     def close(self) -> None:
         # Stop between pages: the page being scanned finishes, later pages stay
@@ -147,6 +179,8 @@ class ViewerService:
         self._closing.set()
         self._batch_exec.shutdown(wait=True, cancel_futures=True)
         self.legend.close()
+        self._crop_exec.submit(self._crop_store.close).result()
+        self._crop_exec.shutdown()
         self._db(self.store.close)
         self._exec.shutdown()
 
@@ -173,8 +207,29 @@ class ViewerService:
         info = self.document_info(document_version)  # 404s for an unknown version
         self.legend.cancel_document(document_version)  # its legend and set scans go with the folder
         self.render.delete_version(document_version)
+        self.wait_crops()  # a crop being cut now must not outlive the purge
         crops = self._db(self.store.purge_document_crops, document_version)
-        return dict(info, deleted=True, crops_deleted=crops)
+        datasets = self._purge_datasets(document_version)
+        return dict(info, deleted=True, crops_deleted=crops, datasets_deleted=datasets)
+
+    def _purge_datasets(self, document_version: str) -> List[str]:
+        """Datasets hold page images of the drawings they were built from, so
+        a dataset that includes this drawing is removed (it can be built
+        again from the reviews; models already trained keep working)."""
+        root = self.data_dir / "datasets"
+        prefix = f"{document_version}#p"
+        gone = []
+        for manifest in sorted(root.glob("*/manifest.json")) if root.is_dir() else []:
+            try:
+                m = json.loads(manifest.read_text(encoding="utf-8"))
+                entries = list(m.get("detector") or []) + list(m.get("verifier") or [])
+                uses = any(str(e.get("canonical_page_id", "")).startswith(prefix) for e in entries)
+            except (OSError, ValueError, AttributeError):
+                continue
+            if uses:
+                shutil.rmtree(manifest.parent, ignore_errors=True)
+                gone.append(manifest.parent.name)
+        return gone
 
     def frame(self, document_version: str, page_index: int) -> dict:
         frame = dict(self.render.page_frame(document_version, page_index))
@@ -817,6 +872,8 @@ class ViewerService:
             raise ViewerError("invalid_transition", str(exc), 409) from None
         except _store.IdempotencyConflict as exc:
             raise ViewerError("request_conflict", str(exc), 409) from None
+        if not res.replayed:
+            self._schedule_crops()
         by_det = {p["detection_id"]: p for p in state["pins"] if p["detection_id"]}
         scores = {k: p.get("score") for k, p in by_det.items()}
         rotations = {k: p.get("rotation") for k, p in by_det.items()}

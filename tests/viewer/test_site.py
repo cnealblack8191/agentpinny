@@ -277,6 +277,7 @@ def test_delete_document(site, tmp_path):
     st = json.loads(call(base, "POST", "/api/scans", who=REVIEWER, body=body)[2])
     call(base, "POST", f"/api/scans/{st['scan_id']}/actions", who=REVIEWER,
          body={"action": "approve", "pin_id": st["pins"][0]["pin_id"], "request_id": str(uuid.uuid4())})
+    svc.wait_crops()  # cut on their own thread, off the review click
     assert svc._db(svc.store.crop_status_counts) == {"written": 1}
     crop_files = list((tmp_path / "crops").rglob("*.png"))
     assert len(crop_files) == 1

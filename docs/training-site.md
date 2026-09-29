@@ -404,6 +404,8 @@ learning store (`review_events`) with the reviewer's email.
    `document_deleted`, so they are never regenerated;
 3. writes a tombstone (`deleted_documents`) and a `document_deleted` audit
    event.
+4. removes saved datasets built from it (they hold its page images; build
+   a new one from the reviews), and its legend and whole-set scan files.
 
 Scans, pins and review events stay, because they are the labels; they
 hold coordinates and scores, not drawing pixels. A deleted version reads

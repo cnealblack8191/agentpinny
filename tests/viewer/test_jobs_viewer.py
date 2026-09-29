@@ -61,6 +61,7 @@ def test_upload_render_scan_review_delete_without_opening_a_pdf(svc, tmp_path):
     # Review: the training crop is cut from the PNG the job wrote.
     r = svc.act(st["scan_id"], {"action": "approve", "pin_id": st["pins"][0]["pin_id"], "request_id": rid()})
     assert r["pin"]["state"] == "approved"
+    svc.wait_crops()  # cut on their own thread, off the review click
     assert svc._db(svc.store.crop_status_counts) == {"written": 1}
     svc.delete_document(v)
     with pytest.raises(Exception):

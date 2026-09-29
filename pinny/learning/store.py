@@ -499,7 +499,12 @@ class LearningStore:
                  crop_renderer: Optional[CropRenderer] = None,
                  default_reviewer: Any = _AUTO,
                  clock: Callable[[], str] = _utcnow,
-                 renderer_version: Optional[str] = None) -> None:
+                 renderer_version: Optional[str] = None,
+                 crops_after_review: bool = True) -> None:
+        """``crops_after_review=False`` leaves new crops pending after a review
+        action, for a separate store instance (another thread) to write with
+        ``process_pending_crops``: rendering a crop decodes a page image."""
+        self.crops_after_review = crops_after_review
         self.data_dir = Path(data_dir) if data_dir is not None else default_data_dir()
         self.crops_dir = self.data_dir / CROPS_DIRNAME
         self.exports_dir = self.data_dir / EXPORTS_DIRNAME
@@ -926,7 +931,7 @@ class LearningStore:
                 result = ReviewResult(event=ev, pin=pin, replayed=False)
 
         # Best effort after commit; failures stay recoverable in the crops table.
-        if crop_key is not None:
+        if crop_key is not None and self.crops_after_review:
             self._materialize(crop_key)
         return result
 

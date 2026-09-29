@@ -494,3 +494,43 @@ def test_a_sandboxed_dataset_build_has_missing_pages_rendered_by_the_workers(sit
     info = train_tasks.build_dataset({}, data, Progress(None, data_dir=data), job_id)
     assert asked == [(v, 0)]
     assert sum(c["pos"] for c in info["counts"]["verifier"].values()) == 4
+
+
+def test_deleting_a_drawing_removes_datasets_built_from_it(site):
+    """Found by review: datasets keep whole-page images, so a deleted drawing
+    lived on in datasets/<id>/detector/*.png and in every backup."""
+    base, s, svc = site
+    v, st = scanned(base, svc)
+    for i, p in enumerate(st["pins"]):
+        act(base, st["scan_id"], p["pin_id"], "approve" if i else "reject")
+    code, out = post(base, "/api/training/datasets", {})
+    j = wait_job(base, out["job_id"])
+    ds = s.settings.data_dir / "datasets" / j["result"]["dataset_id"]
+    assert ds.is_dir()
+    code, _, raw = call(base, "DELETE", f"/api/documents/{v}", who=ADMIN)
+    assert code == 200 and json.loads(raw)["datasets_deleted"] == [j["result"]["dataset_id"]]
+    assert not ds.exists()
+
+
+def test_review_clicks_do_not_wait_for_training_crops(site, monkeypatch):
+    """Found by review: every approve/reject decoded a page image on the one
+    store thread. Crops are now cut on their own thread."""
+    import threading as _th
+    base, s, svc = site
+    v, st = scanned(base, svc)
+    gate = _th.Event()
+    real = svc._crop_store.crop_renderer
+
+    def slow(spec):
+        gate.wait(10)
+        return real(spec)
+
+    svc._crop_store.crop_renderer = slow
+    t0 = time.time()
+    act(base, st["scan_id"], st["pins"][0]["pin_id"], "approve")
+    act(base, st["scan_id"], st["pins"][1]["pin_id"], "reject")
+    assert time.time() - t0 < 5  # neither click waited for the (blocked) crop
+    gate.set()
+    svc.wait_crops()
+    svc.wait_crops()
+    assert svc._db(svc.store.crop_status_counts) == {"written": 2}
