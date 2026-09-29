@@ -153,3 +153,26 @@ def test_raster_is_rgb_not_bgr(render_service):
     s = CANONICAL_DPI / 72
     px = rgb[int((792 - 510) * s), int(110 * s)]
     assert tuple(px) == (255, 0, 0)
+
+
+def test_ingest_works_across_filesystems(render_service, monkeypatch):
+    """Deployed workers see tmp/ and documents/ as separate mounts, where a
+    rename between them fails with EXDEV (found on the first real server)."""
+    import errno
+    import os as _os
+
+    import pinny.render.service as svc_mod
+
+    real = _os.replace
+
+    def replace(src, dst):
+        if str(src).endswith(".part"):
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real(src, dst)
+
+    monkeypatch.setattr(svc_mod.os, "replace", replace)
+    data = build_pdf([PageSpec()])
+    v = render_service.ingest_pdf(data, original_filename="cross.pdf")
+    src = render_service._version_dir(v.document_version) / "source.pdf"
+    assert src.read_bytes() == data
+    assert not list(src.parent.glob(".*.tmp"))

@@ -16,6 +16,7 @@ display metadata and never touch the filesystem.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -65,6 +66,30 @@ def _display_name(raw: str | None) -> str:
     name = (raw or "").replace("\\", "/").rsplit("/", 1)[-1]
     name = "".join(c for c in unicodedata.normalize("NFC", name) if unicodedata.category(c)[0] != "C").strip()
     return name[:255] or "upload.pdf"
+
+
+def _move_into(src: Path, dest: Path) -> None:
+    """Move a file into place atomically, also across filesystems.
+
+    Deployed workers see ``tmp/`` and ``documents/`` as separate mounts
+    (systemd ``ReadWritePaths``), where a rename fails with EXDEV. Then copy
+    next to the destination, fsync, and rename there instead."""
+    try:
+        os.replace(src, dest)
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+    tmp = dest.with_name(f".{dest.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(src, "rb") as fin, open(tmp, "wb") as fout:
+            shutil.copyfileobj(fin, fout, 1024 * 1024)
+            fout.flush()
+            os.fsync(fout.fileno())
+        os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+    src.unlink(missing_ok=True)
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
@@ -202,7 +227,7 @@ class RenderService:
                 )
                 vdir = self._version_dir(version)
                 (vdir / "pages").mkdir(parents=True, exist_ok=True)
-                os.replace(staged, vdir / "source.pdf")
+                _move_into(staged, vdir / "source.pdf")
                 _write_atomic(vdir / "version.json", json.dumps(meta.to_dict(), indent=2).encode())
                 return meta
         finally:
