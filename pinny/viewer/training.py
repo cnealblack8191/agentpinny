@@ -95,46 +95,41 @@ class TrainingService:
         return {d["document_version"]: d for d in self.viewer.documents()}
 
     def dashboard(self) -> Dict[str, Any]:
-        export = self._db(self.viewer.store.export, include_heldout=True)
+        summary = self._db(self.viewer.store.pin_summary)
         docs = self._documents()
+        live = [sc for sc in summary["scans"] if sc["document_version"] in docs]  # deleted drawings don't train
         labels = {"positive": 0, "negative": 0, "unlabeled": 0, "withdrawn": 0}
-        reviewed = 0
+        reviewed = total_pins = 0
         pos_docs, neg_docs, labelled_docs = set(), set(), set()
-        scans = {s["scan_id"]: s for s in export["scans"]}
-        for ex in export["examples"]:
-            doc_id = scans[ex["scan_id"]]["document"]["document_id"]
-            if ex["label"] == "positive":
-                labels["positive"] += 1
-                pos_docs.add(doc_id)
-            elif ex["label"] == "negative":
-                labels["negative"] += 1
-                neg_docs.add(doc_id)
-            elif ex["label_status"] == "unlabeled":
-                labels["unlabeled"] += 1
-            else:
-                labels["withdrawn"] += 1
-            if ex["label"] is not None:
-                labelled_docs.add(doc_id)
-            if ex["pin_state"] != "unreviewed":
-                reviewed += 1
+        for sc in live:
+            n = sc["pins"].get
+            pos = n("machine:approved", 0) + n("manual:added", 0)
+            neg = n("machine:rejected", 0)
+            labels["positive"] += pos
+            labels["negative"] += neg
+            labels["unlabeled"] += n("machine:unreviewed", 0)
+            labels["withdrawn"] += n("manual:removed", 0)
+            total_pins += sum(sc["pins"].values())
+            reviewed += sum(v for k, v in sc["pins"].items() if not k.endswith(":unreviewed"))
+            if pos:
+                pos_docs.add(sc["document_id"])
+            if neg:
+                neg_docs.add(sc["document_id"])
+            if pos or neg:
+                labelled_docs.add(sc["document_id"])
         # Detector pages (P3): marked fully reviewed, and the latest scan has zero unreviewed pins.
         latest: Dict[str, dict] = {}
-        for s in export["scans"]:  # record order
-            latest[s["canonical_page_id"]] = s
-        by_scan: Dict[str, List[dict]] = {}
-        for ex in export["examples"]:
-            by_scan.setdefault(ex["scan_id"], []).append(ex)
+        for sc in live:  # record order
+            latest[sc["canonical_page_id"]] = sc
+        reviews = summary["page_reviews"]
         complete_pages, complete_points, complete_docs = 0, 0, set()
-        reviews = export["page_reviews"]
-        for page_id, s in latest.items():
-            exs = by_scan.get(s["scan_id"], [])
-            if (reviews.get(page_id) or {}).get("status") != "complete" or any(
-                    ex["label_status"] == "unlabeled" for ex in exs):
+        for page_id, sc in latest.items():
+            if reviews.get(page_id) != "complete" or sc["pins"].get("machine:unreviewed", 0):
                 continue  # detector pages must be marked fully reviewed (see pinny.training.dataset)
             complete_pages += 1
-            complete_points += sum(1 for ex in exs if ex["label"] == "positive")
-            complete_docs.add(s["document"]["document_id"])
-        marked = sum(1 for r in export["page_reviews"].values() if r["status"] == "complete")
+            complete_points += sc["pins"].get("machine:approved", 0) + sc["pins"].get("manual:added", 0)
+            complete_docs.add(sc["document_id"])
+        marked = sum(1 for page_id in latest if reviews.get(page_id) == "complete")
 
         def check(name, have, need):
             return {"name": name, "have": have, "need": need, "ok": have >= need}
@@ -148,10 +143,10 @@ class TrainingService:
         return {
             "labels": labels,
             "pins_reviewed": reviewed,
-            "pins_total": len(export["examples"]),
+            "pins_total": total_pins,
             "pages": {"scanned": len(latest), "fully_reviewed": marked, "detector_eligible": complete_pages},
             "documents": {"uploaded": len(docs), "with_labels": len(labelled_docs),
-                          "scanned": len({s["document"]["document_id"] for s in export["scans"]})},
+                          "scanned": len({sc["document_id"] for sc in live})},
             "readiness": {"verifier": {"ready": all(c["ok"] for c in verifier), "checks": verifier},
                           "detector": {"ready": all(c["ok"] for c in detector), "checks": detector},
                           "promotion_gate": {"test_documents": GATE_TEST_DOCUMENTS,

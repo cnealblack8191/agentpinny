@@ -1263,6 +1263,26 @@ class LearningStore:
             return self._page_review(db.execute("SELECT * FROM page_reviews WHERE canonical_page_id=?",
                                                 (canonical_page_id,)).fetchone())
 
+    def pin_summary(self) -> Dict[str, Any]:
+        """Per scan, in record order, pin counts by origin and state, plus every
+        page review. A few aggregate queries, for dashboards that must stay fast
+        however much history there is (labels follow ``interpret_pin``: a
+        machine pin's state is its latest approve/reject)."""
+        with self._read() as db:
+            scans: Dict[str, Dict[str, Any]] = {}
+            for r in db.execute("SELECT scan_id, canonical_page_id, document_id, document_version, page_index"
+                                " FROM scans ORDER BY recorded_at, rowid"):
+                scans[r["scan_id"]] = {"scan_id": r["scan_id"], "canonical_page_id": r["canonical_page_id"],
+                                       "document_id": r["document_id"],
+                                       "document_version": r["document_version"],
+                                       "page_index": r["page_index"], "pins": {}}
+            for r in db.execute("SELECT scan_id, origin, state, COUNT(*) n FROM pins GROUP BY scan_id, origin, state"):
+                if r["scan_id"] in scans:
+                    scans[r["scan_id"]]["pins"][f"{r['origin']}:{r['state']}"] = r["n"]
+            reviews = {r["canonical_page_id"]: r["status"] for r in db.execute(
+                "SELECT canonical_page_id, status FROM page_reviews")}
+        return {"scans": list(scans.values()), "page_reviews": reviews}
+
     def page_review_status(self, canonical_page_id: str) -> Optional[PageReview]:
         """``None`` when the page has never been marked."""
         r = self._db.execute("SELECT * FROM page_reviews WHERE canonical_page_id=?",
