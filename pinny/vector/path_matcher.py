@@ -417,11 +417,38 @@ class PathMatchStats:
     hypotheses_verified: int = 0
 
 
-def match_paths(index: PageIndex, box: Tuple[float, float, float, float],
-                params: PathParams, max_exemplar_primitives: int
+def exemplar_from_ctrl(ctrl: np.ndarray, kind: np.ndarray, params: PathParams) -> Exemplar:
+    """An exemplar from primitives taken off another page (canonical px of
+    that page; only their shape matters here)."""
+    t = params.tol_px
+    ctrl = np.asarray(ctrl, dtype=float)
+    kind = np.asarray(kind, dtype=np.uint8)
+    if ctrl.shape[0] == 0:
+        raise VectorMatchError("no_vector_geometry", "The exemplar has no line work.")
+    pts, _ = sample(ctrl, t)
+    segs, owner = flatten(ctrl, kind)
+    seg_len = np.linalg.norm(segs[:, 1] - segs[:, 0], axis=1)
+    fine, _ = sample(ctrl, t / 4.0)
+    lo, hi = fine.min(axis=0), fine.max(axis=0)
+    c, s = _centroid_scale(ctrl, t / 2.0)
+    hashes = descriptor_hashes(ctrl, c, s, params.descriptor_quantum)
+    canon = min(hashes)
+    return Exemplar(
+        ids=np.arange(ctrl.shape[0]), ctrl=ctrl, kind=kind, pts=pts, segs=segs,
+        length=float(seg_len.sum()),
+        bbox=(float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1])),
+        centroid=c, scale=s, canon_hash=canon, canon_dihedral=hashes.index(canon),
+    )
+
+
+def match_paths(index: PageIndex, box: Optional[Tuple[float, float, float, float]],
+                params: PathParams, max_exemplar_primitives: int,
+                exemplar: Optional[Exemplar] = None,
                 ) -> Tuple[List[RawDetection], PathMatchStats, Exemplar]:
+    """Match an exemplar boxed on this page (``box``), or one built
+    elsewhere (``exemplar``, e.g. from the legend sheet)."""
     stats = PathMatchStats(primitives=index.n)
-    ex = build_exemplar(index, box, params, max_exemplar_primitives)
+    ex = exemplar if exemplar is not None else build_exemplar(index, box, params, max_exemplar_primitives)
     stats.exemplar_primitives = int(ex.ids.size)
     allowed = _allowed_dihedral(params)
     allowed_set = set(allowed)

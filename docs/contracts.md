@@ -211,6 +211,9 @@ pinny/                 application package (one import root)
   detection/           detection session
   learning/            learning store (moved from top-level pinny_learning/)
   vector/              vector-first PDF symbol matcher (pikepdf)
+  model/               .pinny model packages: train on the website, run in the QC app
+  legend/              reads the drawing set's symbol legend; per-engineer saved legends
+  scan/                scans every sheet for the legend's symbols; interim 200 DPI renderer
   viewer/ (+ web/)     viewer session
 evaluation/            standalone, stdlib-only, must not import pinny
 tests/<module>/        per-module tests
@@ -224,7 +227,7 @@ directory has an `__init__.py`. unittest-style tests are fine; pytest runs them.
 Dependencies are declared once in the root `pyproject.toml`, which the
 foundation owns. Other sessions ask the coordinator for additions.
 Detection needs `numpy` and `opencv-python-headless`. The vector matcher
-(`pinny.vector`) needs `pikepdf` (MPL-2.0); its tests also use `pypdfium2`.
+(`pinny.vector`) needs `pikepdf` (MPL-2.0); the legend reader and set scanner also need `pypdfium2` (Apache/BSD).
 `onnxruntime` is optional (the ONNX embedding verifier, the `onnx` extra).
 Dev deps include `pytest`. Avoid AGPL dependencies (PyMuPDF, Ultralytics).
 

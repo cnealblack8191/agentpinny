@@ -286,3 +286,18 @@ else:
 PyMuPDF (AGPL) is deliberately not used. pdfminer.six was not needed,
 because pikepdf's content-stream parser gives exact geometry, including
 paths inside forms, with less overhead.
+
+## Exemplars from another page
+
+`make_exemplar(pdf, page, box)` turns a symbol on one page (usually the
+legend) into a `VectorExemplar`.
+* **Contents:** its primitives, plus its Form XObject identity when it is a
+  placed block.
+* **Finding it:** `detect_exemplar(pdf, other_page, exemplar)` finds it on
+  any page of the same file. `prepare_page` and `match_prepared` load a
+  page once and match many exemplars against it.
+* **Other sizes:** `VectorExemplar.scaled(f)` makes the same symbol at
+  another size, for legends drawn larger or smaller than the sheets.
+
+`pinny/scan` uses these to scan a whole set from its legend (see
+`set-scanning.md`).

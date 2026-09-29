@@ -12,7 +12,18 @@ All public coordinates are canonical raster px (contracts section 2).
 from .classify import PageKind, classify_page
 from .errors import RasterPageError, VectorMatchError
 from .frame import CANONICAL_DPI, PT_TO_PX, PageFrame
-from .matcher import VectorDetection, VectorMatcher, VectorResult, VectorSettings
+from .matcher import (
+    VectorDetection,
+    VectorExemplar,
+    VectorMatcher,
+    VectorResult,
+    VectorSettings,
+    PreparedPage,
+    detect_exemplar,
+    make_exemplar,
+    match_prepared,
+    prepare_page,
+)
 
 __all__ = [
     "CANONICAL_DPI",
@@ -21,9 +32,15 @@ __all__ = [
     "PageKind",
     "RasterPageError",
     "VectorDetection",
+    "VectorExemplar",
     "VectorMatchError",
     "VectorMatcher",
     "VectorResult",
     "VectorSettings",
     "classify_page",
+    "PreparedPage",
+    "detect_exemplar",
+    "make_exemplar",
+    "match_prepared",
+    "prepare_page",
 ]

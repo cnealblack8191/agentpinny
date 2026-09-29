@@ -92,14 +92,41 @@ def match_xobjects(
     if best is None or best_key[0] < min_iou:
         return None
 
-    ref_inv = np.linalg.inv(best.linear) if abs(np.linalg.det(best.linear)) > 1e-12 else None
+    found = match_xobject_key(
+        content, best.placement.group_key, best.linear, rotations=rotations, allow_mirrored=allow_mirrored,
+        angle_tolerance_deg=angle_tolerance_deg, prim_boxes=prim_boxes, placed=placed,
+    )
+    if found is None:
+        return None
+    dets, warnings = found
+    return XObjectMatch(exemplar=best, exemplar_iou=best_key[0], detections=dets, warnings=warnings)
+
+
+def match_xobject_key(
+    content: PageContent,
+    group_key: str,
+    ref_linear: np.ndarray,
+    *,
+    rotations: Sequence[int],
+    allow_mirrored: bool,
+    angle_tolerance_deg: float,
+    prim_boxes: Optional[np.ndarray] = None,
+    placed: Optional[List[PlacedForm]] = None,
+) -> Optional[Tuple[List[RawDetection], List[str]]]:
+    """Every placement of the XObject identified by ``group_key`` (from any
+    page of the same file), with rotation relative to ``ref_linear``."""
+    if placed is None:
+        if prim_boxes is None:
+            prim_boxes = primitive_boxes_px(content)
+        placed = place_forms(content, prim_boxes)
+    ref_inv = np.linalg.inv(ref_linear) if abs(np.linalg.det(ref_linear)) > 1e-12 else None
     if ref_inv is None:
         return None
     warnings: List[str] = []
     dets: List[RawDetection] = []
     n_off_angle = 0
     for pf in placed:
-        if pf.placement.group_key != best.placement.group_key:
+        if pf.placement.group_key != group_key:
             continue
         rel = pf.linear @ ref_inv
         angle, mirrored, scale = decompose(rel)
@@ -125,4 +152,4 @@ def match_xobjects(
             "rotation is snapped to the nearest quarter turn and the exact angle is "
             "reported as 'angle'."
         )
-    return XObjectMatch(exemplar=best, exemplar_iou=best_key[0], detections=dets, warnings=warnings)
+    return dets, warnings

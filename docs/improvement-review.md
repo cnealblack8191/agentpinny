@@ -152,6 +152,9 @@ deliberately left out of the app for now.
 | Learning store | All six integrity fixes; schema migrations (v3); page review status, templates, class labels, manual boxes, document splits; `review_stats`, `review_queue`, crop lists for the bank, COCO `export_dataset`. | `learning-store.md` |
 | Evaluator | F1, localization stats, relative tolerance, PR curve / AP / best-F1 threshold, `score-corpus`, dpi validation, runtime, `detector_assisted_reviewed` labels, `--baseline` gate, mini corpus, CSV converter. | `evaluation/README.md` |
 | Vector matcher | Page classification, exact PDF→canonical mapping for all `/Rotate`, Form XObject reuse matcher, flattened-path matcher tolerant of crossing wires. 500 symbols + 20k clutter segments: 2.2 s (paths), 0.6 s (XObject). | `vector-matching.md` |
+| Model packages | `pinny/model`: `.pinny` file format (template bank, negative veto, kNN or ONNX verifier, calibration, decision rule), integrity hashes, optional HMAC signing, `train_model`, `promotion_check`, CLI. | `model-package.md` |
+| Legend reader | `pinny/legend`: finds and reads the symbol legend (rows, symbol drawings, engineer's tags, sections, not-counted defaults), editable legend with an edit log, per-engineer saved legends with match/new/changed/missing comparison, CLI. | `legend-reader.md` |
+| Scanning from the legend | `pinny/scan`: every counted legend symbol on every sheet; vector sheets via cross-page exemplars (block reuse or line work), scanned sheets via raster templates cut from the legend; one symbol per spot by label, then detail; legend-size search; per-sheet and project counts; CLI. | `set-scanning.md` |
 | CI | `.github/workflows/tests.yml`: all suites + mini-corpus regression gate. | — |
 
 Still open:

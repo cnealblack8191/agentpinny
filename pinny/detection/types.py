@@ -17,6 +17,7 @@ Coordinate convention (all public values):
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
@@ -269,6 +270,31 @@ class ScanSettings:
             "max_coarse_peaks": self.max_coarse_peaks,
             "num_threads": self.num_threads,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ScanSettings":
+        """Inverse of :meth:`to_dict`. Unknown keys are rejected so a newer
+        settings dict is never silently misread; missing keys use defaults."""
+        if not isinstance(data, dict):
+            raise DetectionError("invalid_settings", "Scan settings must be a JSON object.")
+        known = {f.name for f in dataclasses.fields(cls)}
+        unknown = sorted(set(data) - known)
+        if unknown:
+            raise DetectionError(
+                "invalid_settings",
+                f"Unknown scan setting(s) {unknown}. They may come from a newer Pinny; upgrade it.",
+            )
+        kwargs = dict(data)
+        if "rotations" in kwargs:
+            kwargs["rotations"] = tuple(kwargs["rotations"])
+        region = kwargs.get("search_region")
+        if region is not None:
+            kwargs["search_region"] = BoundingBox(
+                int(region["x"]), int(region["y"]), int(region["width"]), int(region["height"])
+            )
+        settings = cls(**kwargs)
+        settings.validate()
+        return settings
 
 
 @dataclass(frozen=True)

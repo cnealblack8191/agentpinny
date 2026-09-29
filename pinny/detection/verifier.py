@@ -169,6 +169,30 @@ class _KnnVote:
     def fitted(self) -> bool:
         return self._feats is not None and len(self._feats) > 0
 
+    def export_state(self) -> Tuple[np.ndarray, np.ndarray]:
+        """The fitted examples as ``(features (N, D) float64, labels (N,)
+        int8)``, for saving in a model package."""
+        if not self.fitted:
+            raise DetectionError("verifier_not_fitted", "Call fit() before export_state().")
+        return self._feats.copy(), self._labels.copy()
+
+    def load_state(self, features: np.ndarray, labels: np.ndarray) -> "_KnnVote":
+        """Restore examples saved by :meth:`export_state` without refitting.
+        Features must come from the same embedding (see ``FEATURE_VERSION``)."""
+        feats = np.asarray(features, dtype=np.float64)
+        labs = np.asarray(labels, dtype=np.int8)
+        if feats.ndim != 2 or labs.shape != (feats.shape[0],) or feats.shape[0] == 0:
+            raise DetectionError(
+                "invalid_verifier_state",
+                f"Verifier state needs features (N, D) and labels (N,), got {feats.shape} and {labs.shape}.",
+            )
+        if not np.isin(labs, (0, 1)).all():
+            raise DetectionError("invalid_verifier_state", "Verifier labels must be 0 or 1.")
+        if not np.isfinite(feats).all():
+            raise DetectionError("invalid_verifier_state", "Verifier features must be finite.")
+        self._feats, self._labels = feats, labs
+        return self
+
     def fit(self, pos_crops: Sequence[np.ndarray], neg_crops: Sequence[np.ndarray] = ()) -> "_KnnVote":
         """Replace the labelled set. With ``augment_rotations`` each crop is
         also stored at 90/180/270 so candidates at any rotation match."""
@@ -229,6 +253,11 @@ class _KnnVote:
 class KnnVerifier(_KnnVote):
     """numpy/OpenCV-only kNN verifier over HOG + intensity features."""
 
+    #: Identifies the feature extraction. Change it whenever
+    #: :func:`hog_intensity_features` changes, so saved states are refused
+    #: instead of being compared against incompatible features.
+    FEATURE_VERSION = "hog64-intensity-v1"
+
     def __init__(
         self,
         k: int = 7,
@@ -261,7 +290,7 @@ class OnnxEmbeddingVerifier(_KnnVote):
 
     def __init__(
         self,
-        model_path: "os.PathLike[str] | str",
+        model_path: "os.PathLike[str] | str | bytes",
         input_size: int = 224,
         mean: Sequence[float] = _IMAGENET_MEAN,
         std: Sequence[float] = _IMAGENET_STD,
@@ -281,8 +310,12 @@ class OnnxEmbeddingVerifier(_KnnVote):
                 "OnnxEmbeddingVerifier needs the optional 'onnxruntime' package. Install it "
                 "with 'pip install onnxruntime', or use KnnVerifier (numpy/OpenCV only).",
             ) from exc
-        path = os.fspath(model_path)
-        if not os.path.isfile(path):
+        if isinstance(model_path, (bytes, bytearray)):
+            # Serialized model (e.g. from a model package): no file needed.
+            path = bytes(model_path)
+        else:
+            path = os.fspath(model_path)
+        if isinstance(path, str) and not os.path.isfile(path):
             raise DetectionError(
                 "model_not_found",
                 f"ONNX model file {path!r} does not exist. Export an image-embedding model "
