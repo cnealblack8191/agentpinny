@@ -148,3 +148,52 @@ whole set", docs/training-site.md sections 3-5).
 * **Review and training.** The pins are reviewed like any scan's; "Mark
   page fully reviewed" applies per sheet, and a new whole-set scan reopens
   the sheets it scans. Datasets use them like any other reviewed scan.
+
+## Learning each symbol type
+
+Each legend tag can have its own **learned package** (`pinny/model/`, see
+`model-package.md`), trained from that tag's reviews only, so light fixtures
+and receptacles learn separately.
+
+* **Training** (Training → Symbol types, admin; `POST
+  /api/training/symbols/train {tag}`): a `train_symbol` job in the `train`
+  pool (`pinny/jobs/symbol_tasks.py`). The examples are the contracts §6
+  crops of the tag's reviewed machine matches from every drawing: approved
+  ones are positives, rejected ones negatives. Pins added by hand are
+  counted but not learned from yet (their crop has no symbol box). The
+  package starts from the legend's drawing of the symbol, as the newest
+  whole-set scan cut it (`set_scans/<run>/symbols/<entry>.png`, listed in
+  `symbols.json`). It holds a template bank (the legend drawing plus
+  approved variants), a negative bank of rejected look-alikes and, with at
+  least 3 approved and 3 rejected examples, a kNN verifier.
+* **Check before use** (`pinny/model/judge.py`): each drawing (or each
+  sheet, when all reviews come from one drawing) is judged by a package
+  trained on the others. The package is switched on only if, on those
+  held-out reviews, it lost at most 5 % of the approved matches and threw
+  out at least one rejected match (and no fewer than it lost). Otherwise it
+  is saved but off, with the reason. An admin can switch a package off, and
+  back on only if it passed.
+* **Storage:** `models/symbols/index.json` (`pinny.symbol_models` v1) and one
+  `.pinny` file per tag, with its sha256 in the index.
+* **Scanning:** when a whole-set scan starts, the web tier copies the active
+  packages of the legend's counted tags into the run
+  (`set_scans/<run>/packages/`, listed with their sha256 in
+  `packages.json`), since the sandboxed scan worker cannot read `models/`.
+  The job checks each sha256 and loads them. A package is used only if its
+  copy of the legend drawing correlates at least 0.5 with this legend's
+  drawing of the symbol, so a tag that means another symbol in another
+  drawing set is left alone (`learned[tag].used` is false, with the reason).
+  On every sheet, before one symbol per spot is chosen, each match of a
+  learned type is judged on the sheet's 200 DPI raster: it is thrown out if
+  it resembles a rejected example more than any template, or if the
+  verifier (when it decides) scores it below 0.5. The approved variants
+  (templates other than the legend drawing) are also searched, and new
+  finds are added with `source: "learned"`. Each sheet's result records
+  `learned: {rejected: {tag: n}, added: {tag: n}}`, the run records which
+  packages it used, and the viewer's scan summary says what they did.
+* **Tested** on a drawing set whose crossed-out receptacles (demolished
+  devices) match the legend's duplex: after rejecting them on two sheets,
+  the package throws them out on an unreviewed sheet and keeps every real
+  receptacle (`tests/scan/test_learned.py`,
+  `tests/viewer/test_symbol_learning.py`, in-process and in sandboxed
+  workers). It has not yet been measured on real drawing sets.

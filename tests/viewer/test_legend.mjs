@@ -74,3 +74,14 @@ test('run and legend summaries', () => {
   assert.match(C.comparisonText({ engineer: 'HR', match: 3, new: [{ tag: 'X' }], changed: [], missing: [] }),
     /3 match, 1 new \(X\)/);
 });
+
+test('runText says what the learned symbol types did', () => {
+  const run = { status: 'done', sheets_total: 2, elapsed_seconds: 3, learned_tags: ['D', 'Q', 'G'],
+    learned: { D: { used: true }, Q: { used: true }, G: { used: false } },
+    sheets: [{ counts: { D: 5 }, learned: { rejected: { D: 2 } } },
+      { counts: { D: 5 }, learned: { rejected: { D: 1 }, added: { D: 1 } } }] };
+  const text = C.runText(run);
+  assert.match(text, /Learned from your reviews: D threw out 3 look-alike\(s\), added 1; Q changed nothing\./);
+  assert.match(text, /Not used \(different legend drawing\): G\./);
+  assert.equal(C.learnedText({ status: 'done', sheets: [] }), '');
+});

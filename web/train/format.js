@@ -2,7 +2,7 @@
 
 export const JOB_NAMES = {
   build_dataset: 'Build dataset', train_verifier: 'Train verifier', train_detector: 'Train detector',
-  benchmark: 'Benchmark',
+  benchmark: 'Benchmark', train_symbol: 'Train symbol type',
 };
 export const ACTIVE_STATES = new Set(['queued', 'running']);
 
@@ -58,6 +58,7 @@ export function jobOutcome(job) {
   if (job.status !== 'done' || !r) return '';
   if (job.kind === 'build_dataset') return `dataset ${shortId(r.dataset_id)}${r.reused ? ' (unchanged)' : ''}`;
   if (job.kind === 'benchmark') return r.promote ? 'gate: promote' : 'gate: do not promote';
+  if (job.kind === 'train_symbol') return `${r.tag}: ${r.active ? 'switched on' : 'saved, off'}`;
   return r.model_id || '';
 }
 

@@ -21,10 +21,19 @@ each location keeps one symbol:
 
 If a legend symbol finds nothing anywhere at its legend size, other sizes
 are tried (legends are sometimes drawn larger or smaller than the sheets).
+
+A symbol type can also have a **learned package** (``packages``, keyed by
+tag; see ``pinny.model.symbols``), trained from its reviews. On every sheet
+it throws out matches that look like that type's rejected examples and adds
+matches of the approved variants the legend drawing missed (source
+``"learned"``). A package is used only if its own copy of the legend drawing
+still looks like this legend's, so a tag that means another symbol in
+another drawing set is left alone.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import math
 import os
@@ -32,12 +41,14 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from pinny.detection import BoundingBox, OpenCVTemplateDetector, ScanSettings, Template
+from pinny.detection.template_bank import ncc
 from pinny.detection.types import DetectionError
+from pinny.detection.verifier import CROP_MARGIN_PX, crop_with_margin
 from pinny.legend.model import Legend, LegendEntry
 from pinny.legend.text import TextLine, lines_from_document, open_document
 from pinny.vector import (
@@ -53,6 +64,9 @@ from pinny.vector.content import get_page, open_pdf, page_frame
 from pinny.vector.geometry import control_length
 
 from .render import RENDERER_VERSION, render_page
+
+if TYPE_CHECKING:
+    from pinny.model import ModelPackage
 
 FORMAT = "pinny.set_scan"
 FORMAT_VERSION = 1
@@ -81,6 +95,9 @@ class SetScanSettings:
     #: A symbol's size is chosen from the first this-many vector sheets it is
     #: found on (at any candidate size), before every sheet is searched at it.
     scale_sample_pages: int = 3
+    #: A learned package is used only if its copy of the legend drawing has at
+    #: least this correlation with this legend's drawing of the symbol.
+    learned_min_legend_similarity: float = 0.5
     #: A label counts if its text is within this many symbol sizes of the symbol.
     label_radius: float = 1.5
     #: Padding, in px, around a legend symbol when cutting a raster template.
@@ -138,6 +155,8 @@ class SheetResult:
     warnings: List[str] = field(default_factory=list)
     #: Matches dropped because a required label was missing, or another symbol won the spot.
     dropped: Dict[str, int] = field(default_factory=dict)
+    #: What learned packages did here: ``{"rejected": {tag: n}, "added": {tag: n}}``.
+    learned: Dict[str, Dict[str, int]] = field(default_factory=dict)
 
     def counts(self) -> Dict[str, int]:
         out: Dict[str, int] = {}
@@ -151,6 +170,7 @@ class SheetResult:
             "counts": self.counts(), "detections": [d.to_dict() for d in self.detections],
             "dropped": dict(self.dropped), "elapsed_seconds": round(self.elapsed_seconds, 3),
             "warnings": list(self.warnings),
+            **({"learned": {k: dict(v) for k, v in self.learned.items()}} if self.learned else {}),
         }
 
 
@@ -165,6 +185,11 @@ class SetScanResult:
     elapsed_seconds: float
     warnings: List[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"))
+    #: Each symbol's raster template as cut from the legend (entry id ->
+    #: image): what a learned package starts from. Not in ``to_dict``.
+    symbol_templates: Dict[str, np.ndarray] = field(default_factory=dict)
+    #: Learned packages per tag: ``{"used": bool, "reason": str}``.
+    learned: Dict[str, Dict[str, object]] = field(default_factory=dict)
 
     def counts(self) -> Dict[str, int]:
         """Project total per tag, in legend order (zero included)."""
@@ -189,6 +214,7 @@ class SetScanResult:
             "settings": {"vector": self.settings.vector.to_dict(), "raster": self.settings.raster.to_dict(),
                          "scale_search": self.settings.scale_search, "label_radius": self.settings.label_radius},
             "elapsed_seconds": round(self.elapsed_seconds, 3), "warnings": list(self.warnings),
+            **({"learned": {k: dict(v) for k, v in self.learned.items()}} if self.learned else {}),
         }
 
 
@@ -268,6 +294,7 @@ def scan_set(
     settings: SetScanSettings = SetScanSettings(),
     progress: Optional[Callable[[int, int, int], None]] = None,
     matched: Optional[Callable[[int, int, int], None]] = None,
+    packages: Optional[Dict[str, "ModelPackage"]] = None,
 ) -> SetScanResult:
     """Find every counted legend symbol on the set's sheets.
 
@@ -306,6 +333,7 @@ def scan_set(
     try:
         symbols = _legend_symbols(path, legend, entries, settings, doc, warnings)
         _warn_lookalikes(symbols, warnings)
+        learned, learned_info = _usable_packages(symbols, packages or {}, settings)
         sheets: List[SheetResult] = []
         raw_by_page: Dict[int, Tuple[str, list, dict, List[str], float]] = {}
         images: Dict[int, np.ndarray] = {}
@@ -331,10 +359,11 @@ def scan_set(
                 for sym in symbols:
                     found.extend((sym, d) for d in _raster_matches(img, sym, settings, p, sheet_warnings))
                 if kind == "raster":
+                    found, lstats = _apply_learned(found, img, learned, symbols, settings, p, sheet_warnings)
                     kept, dropped = _resolve(found, [], settings, text_available=False, img=img)
                     kept.sort(key=lambda d: (d.tag, d.box.y, d.box.x))
                     finished[p] = SheetResult(p, kind, kept, frames[p].descriptor(), time.perf_counter() - t0,
-                                              sheet_warnings, dropped)
+                                              sheet_warnings, dropped, lstats)
                 else:
                     images[p] = img
                 del img
@@ -399,9 +428,16 @@ def scan_set(
             t1 = time.perf_counter()
             lines = lines_from_document(doc, p, frames[p]) if kind in ("vector", "mixed") else []
             img = images.pop(p, None)
+            lstats: Dict[str, Dict[str, int]] = {}
+            if learned:
+                if img is None:
+                    img = render_page(path, p, doc)
+                found, lstats = _apply_learned(found, img, learned, symbols, settings, p, sheet_warnings)
             kept, dropped = _resolve(found, lines, settings, text_available=bool(kind != "raster"), img=img)
             kept.sort(key=lambda d: (d.tag, d.box.y, d.box.x))
-            sheets.append(SheetResult(p, kind, kept, frame, elapsed + time.perf_counter() - t1, sheet_warnings, dropped))
+            sheets.append(SheetResult(p, kind, kept, frame, elapsed + time.perf_counter() - t1, sheet_warnings,
+                                      dropped, lstats))
+            del img
             if progress:
                 progress(p, k + 1, len(pages))
     finally:
@@ -416,7 +452,9 @@ def scan_set(
         for s in symbols
     ]
     return SetScanResult(sha, legend.page_index, entries_out, sheets, scales, settings,
-                         time.perf_counter() - start, warnings)
+                         time.perf_counter() - start, warnings,
+                         symbol_templates={s.entry.id: s.templates[0] for s in symbols if s.templates},
+                         learned=learned_info)
 
 
 def _legend_symbols(path: str, legend: Legend, entries: List[LegendEntry], settings: SetScanSettings,
@@ -467,6 +505,81 @@ def _legend_symbols(path: str, legend: Legend, entries: List[LegendEntry], setti
         out.append(_Symbol(e, vectors, templates, _labels_of(e), _detail(vectors, []), _detail([], templates),
                            label_tpls, len(out)))
     return out
+
+
+def _usable_packages(symbols: Sequence[_Symbol], packages: Dict[str, "ModelPackage"],
+                     settings: SetScanSettings) -> Tuple[Dict[str, "ModelPackage"], Dict[str, Dict[str, object]]]:
+    """The learned packages this legend can use (entry id -> package), and
+    per tag whether each one is used and why not."""
+    usable: Dict[str, "ModelPackage"] = {}
+    info: Dict[str, Dict[str, object]] = {}
+    for sym in symbols:
+        pkg = packages.get(sym.entry.tag)
+        if pkg is None:
+            continue
+        original = next((t.image for t in pkg.templates if t.is_original), None)
+        if not sym.templates or original is None:
+            info[sym.entry.tag] = {"used": False, "reason": "This legend symbol has no drawing to compare with."}
+            continue
+        sim = ncc(sym.templates[0], original)
+        if sim < settings.learned_min_legend_similarity:
+            info[sym.entry.tag] = {"used": False, "reason": f"The learned {sym.entry.tag} was trained on a "
+                                   "different legend drawing, so it was not used here."}
+            continue
+        usable[sym.entry.id] = pkg
+        info[sym.entry.tag] = {"used": True, "reason": "Used the learned examples of this symbol."}
+    return usable, info
+
+
+def _apply_learned(found: List[Tuple[_Symbol, SheetDetection]], img: np.ndarray, learned: Dict[str, "ModelPackage"],
+                   symbols: Sequence[_Symbol], settings: SetScanSettings, page_index: int,
+                   warnings: List[str]) -> Tuple[List[Tuple[_Symbol, SheetDetection]], Dict[str, Dict[str, int]]]:
+    """Judge each match of a learned symbol type (throwing out look-alikes of
+    rejected examples) and add matches of its learned variants."""
+    if not learned:
+        return found, {}
+    from pinny.model.judge import judge_crop
+
+    rejected: Dict[str, int] = {}
+    added: Dict[str, int] = {}
+    out: List[Tuple[_Symbol, SheetDetection]] = []
+    for sym, d in found:
+        pkg = learned.get(sym.entry.id)
+        if pkg is not None:
+            tight = img[d.box.y:d.box.y2, d.box.x:d.box.x2]
+            j = judge_crop(pkg, crop_with_margin(img, d.box, CROP_MARGIN_PX), rotation=int(d.rotation),
+                           mirrored=d.mirrored, tight=tight if tight.size else None)
+            if not j.accept:
+                rejected[d.tag] = rejected.get(d.tag, 0) + 1
+                continue
+        out.append((sym, d))
+    by_id = {s.entry.id: s for s in symbols}
+    for entry_id, pkg in learned.items():
+        variants = [t for t in pkg.templates if not t.is_original]
+        if not variants:
+            continue  # the legend drawing itself was already matched
+        sym = by_id[entry_id]
+        try:
+            res = dataclasses.replace(pkg, templates=variants).detect(img)
+        except Exception as exc:  # noqa: BLE001 - a learned extra must not stop the sheet
+            warnings.append(f"{sym.entry.tag}: learned variants could not be searched ({exc}).")
+            continue
+        for md in res.accepted:
+            c = md.candidate
+            cx, cy = c.box.center
+            short = min(c.box.width, c.box.height)
+            if any(math.hypot(cx - o.center[0], cy - o.center[1])
+                   < max(settings.same_spot_ratio * min(short, o.box.width, o.box.height), 1.0) for _s, o in out):
+                continue
+            out.append((sym, SheetDetection(entry_id, sym.entry.tag, page_index, c.box, float(c.score), int(c.rotation),
+                                            bool(getattr(c, "mirrored", False)), "learned")))
+            added[sym.entry.tag] = added.get(sym.entry.tag, 0) + 1
+    stats: Dict[str, Dict[str, int]] = {}
+    if rejected:
+        stats["rejected"] = rejected
+    if added:
+        stats["added"] = added
+    return out, stats
 
 
 def _warn_lookalikes(symbols: Sequence[_Symbol], warnings: List[str]) -> None:

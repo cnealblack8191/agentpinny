@@ -1,7 +1,7 @@
 // node --test tests/viewer/test_training.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canPromote, compareColumns, jobOutcome, jobSummary, latestBenchmark, pct, viewerLink } from '../../web/train/format.js';
+import { JOB_NAMES, canPromote, compareColumns, jobOutcome, jobSummary, latestBenchmark, pct, viewerLink } from '../../web/train/format.js';
 
 const side = (p, r) => ({ counts: { true_positives: 1, false_positives: 0, false_negatives: 0 },
   metrics: { precision: p, recall: r } });
@@ -48,4 +48,10 @@ test('job text', () => {
   assert.equal(jobOutcome({ kind: 'build_dataset', status: 'failed', error: { code: 'x', message: 'Nothing.' } }), 'Nothing.');
   assert.equal(pct(0.5), '50.0 %');
   assert.equal(pct(null), '–');
+});
+
+test('a symbol-type training job has a name and an outcome', () => {
+  assert.equal(JOB_NAMES.train_symbol, 'Train symbol type');
+  assert.equal(jobOutcome({ kind: 'train_symbol', status: 'done', result: { tag: 'D', active: true } }), 'D: switched on');
+  assert.equal(jobOutcome({ kind: 'train_symbol', status: 'done', result: { tag: 'Q', active: false } }), 'Q: saved, off');
 });

@@ -8,6 +8,11 @@ directory, the document version and the set-scan run id::
     documents/<sha256>/source.pdf                         the drawing set
     documents/<sha256>/set_scans/<run_id>/legend.json     legend to scan with (written by the web tier)
     documents/<sha256>/set_scans/<run_id>/result.json     pinny.set_scan v1 (written here)
+    documents/<sha256>/set_scans/<run_id>/packages.json   learned packages to use, by tag (web tier;
+                                                          the files are copied into packages/)
+    documents/<sha256>/set_scans/<run_id>/symbols.json    each legend symbol's raster template (written
+                                                          here, as symbols/<entry_id>.png): what a
+                                                          learned package of that symbol starts from
 
 The child has no access to the learning store: the web process records
 the result as one ordinary scan per sheet when the job has finished.
@@ -121,6 +126,60 @@ def _fill_signatures(path: Path, legend) -> None:
                                              for b in e.symbol_boxes[len(e.signatures):]]
 
 
+_ENTRY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_PACKAGE_FILE_RE = re.compile(r"^[0-9a-f]{32}\.pinny$")
+
+
+def _packages(rdir: Path) -> Dict[str, Any]:
+    """The learned packages the web tier chose for this run, checked against
+    the sha256 it recorded."""
+    from pinny.model import ModelPackage, ModelPackageError
+
+    try:
+        listed = json.loads((rdir / "packages.json").read_text())
+    except FileNotFoundError:
+        return {}
+    except ValueError:
+        raise TaskError("packages_unreadable", "The learned examples for this scan could not be read. "
+                        "Start the scan again.", 422) from None
+    out: Dict[str, Any] = {}
+    for tag, e in (listed.get("packages") or {}).items():
+        f, sha = e.get("file"), e.get("sha256")
+        if not isinstance(f, str) or not _PACKAGE_FILE_RE.match(f) or not isinstance(sha, str) or not _SHA_RE.match(sha):
+            raise TaskError("packages_unreadable", "The learned examples for this scan are malformed.", 422)
+        fp = rdir / "packages" / f
+        try:
+            data = fp.read_bytes()
+        except OSError:
+            raise TaskError("packages_unreadable", "The learned examples for this scan are missing. "
+                            "Start the scan again.", 409) from None
+        if hashlib.sha256(data).hexdigest() != sha:
+            raise TaskError("packages_changed", "The learned examples changed after the scan was started. "
+                            "Start it again.", 409)
+        try:
+            out[str(tag)] = ModelPackage.load(str(fp))
+        except ModelPackageError:
+            raise TaskError("packages_unreadable", "The learned examples for this scan could not be read.", 422) from None
+    return out
+
+
+def _write_symbol_templates(rdir: Path, legend, templates: Dict[str, Any]) -> None:
+    import cv2
+
+    tags = {e.id: e.tag for e in legend.entries}
+    sdir = rdir / "symbols"
+    sdir.mkdir(exist_ok=True)
+    listed = {}
+    for entry_id, img in templates.items():
+        if entry_id not in tags or not _ENTRY_RE.match(entry_id):
+            continue
+        ok, png = cv2.imencode(".png", cv2.cvtColor(img, cv2.COLOR_RGB2BGR) if img.ndim == 3 else img)
+        if ok:
+            (sdir / f"{entry_id}.png").write_bytes(png.tobytes())
+            listed[entry_id] = tags[entry_id]
+    write_json_atomic(rdir / "symbols.json", {"symbols": listed})
+
+
 def scan_set(p: Dict[str, Any], data_dir: Path, progress) -> Dict[str, Any]:
     from pinny.legend import Legend, LegendError
     from pinny.scan import ScanError, SetScanSettings
@@ -152,9 +211,11 @@ def scan_set(p: Dict[str, Any], data_dir: Path, progress) -> Dict[str, Any]:
     def finished(page_index: int, done: int, total: int) -> None:
         progress.update(0.9 + 0.1 * done / max(total, 1))
 
-    progress.update(0.0, "Scanning every sheet with the legend.")
+    packages = _packages(rdir)
+    progress.update(0.0, "Scanning every sheet with the legend"
+                    + (f" and the learned examples of {', '.join(sorted(packages))}." if packages else "."))
     try:
-        res = _scan_set(path, legend, SetScanSettings(), progress=finished, matched=matched)
+        res = _scan_set(path, legend, SetScanSettings(), progress=finished, matched=matched, packages=packages)
     except ScanError as exc:
         msg = _SCAN_MESSAGES.get(exc.code)
         if msg is None:
@@ -163,6 +224,7 @@ def scan_set(p: Dict[str, Any], data_dir: Path, progress) -> Dict[str, Any]:
     out = res.to_dict()
     # Signatures the scan filled in, so the web tier can keep them.
     out["legend_signatures"] = {e.id: list(e.signatures) for e in legend.entries}
+    _write_symbol_templates(rdir, legend, res.symbol_templates)
     write_json_atomic(rdir / "result.json", out)
     progress.update(1.0, f"Done: {len(res.sheets)} sheet(s) in {res.elapsed_seconds:.1f} s.")
     return {"sheets": len(res.sheets), "counts": res.counts(), "elapsed_seconds": round(res.elapsed_seconds, 3),
