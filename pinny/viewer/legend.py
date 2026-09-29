@@ -109,6 +109,21 @@ def _csv_cell(v: Any) -> Any:
     return v
 
 
+def _learned_stats(raw: Any, tags) -> Dict[str, Dict[str, int]]:
+    """A sheet's ``learned`` counts from the (sandboxed) job, kept to known
+    tags and whole numbers."""
+    out: Dict[str, Dict[str, int]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for kind in ("rejected", "added"):
+        v = raw.get(kind)
+        if isinstance(v, dict):
+            kept = {t: n for t, n in v.items() if t in tags and isinstance(n, int) and not isinstance(n, bool) and n >= 0}
+            if kept:
+                out[kind] = kept
+    return out
+
+
 def _tally() -> Dict[str, int]:
     return {"found": 0, "approved": 0, "rejected": 0, "added": 0, "confirmed": 0, "unreviewed": 0}
 
@@ -495,7 +510,8 @@ class LegendService:
     def _run_view(self, run: dict) -> Dict[str, Any]:
         out = {k: run.get(k) for k in ("run_id", "document_version", "status", "requested_by", "created_at",
                                        "finished_at", "legend_sha256", "legend_page_index", "error",
-                                       "warnings", "elapsed_seconds")}
+                                       "warnings", "elapsed_seconds", "learned")}
+        out["learned_tags"] = sorted(run.get("packages") or {})
         total = len(run.get("pages") or [])
         done = total if run.get("status") in (RUN_RECORDING, RUN_DONE) else 0
         fraction = 1.0 if run.get("status") == RUN_DONE else 0.0
@@ -544,16 +560,42 @@ class LegendService:
                 rdir = self._run_dir(version, run_id)
                 rdir.mkdir(parents=True, exist_ok=True)
                 (rdir / "legend.json").write_bytes(raw)
+                packages = self._copy_packages(rdir, legend)
                 run = {"run_id": run_id, "request_id": request_id, "document_version": version,
                        "document_id": info["document_id"], "status": RUN_QUEUED, "job_id": None,
                        "legend_sha256": hashlib.sha256(raw).hexdigest(), "legend_page_index": legend.page_index,
                        "pages": pages, "detector_version": self.viewer.detector_version,
                        "requested_by": requested_by, "created_at": _now(), "finished_at": None,
-                       "error": None, "warnings": [], "sheets": []}
+                       "error": None, "warnings": [], "sheets": [], "packages": packages}
                 self._write_run(run)
                 self._submit(run)
         self._watch(version, run_id)
         return self._run_view(self._read_run(version, run_id) or run)
+
+    def _copy_packages(self, rdir: Path, legend: Legend) -> Dict[str, str]:
+        """Copy the active learned packages of this legend's counted tags into
+        the run (the sandboxed scan cannot read models/). Returns tag -> sha256."""
+        from pinny.model.symbols import SymbolIndex
+
+        tags = {e.tag for e in legend.counted()}
+        try:
+            active = {t: e for t, e in SymbolIndex(self.viewer.data_dir).active().items() if t in tags}
+        except Exception:  # noqa: BLE001 - a damaged index means: scan without learned packages
+            _log.exception("reading the learned symbol index failed")
+            active = {}
+        listed = {}
+        if active:
+            pdir = rdir / "packages"
+            pdir.mkdir(exist_ok=True)
+            root = SymbolIndex(self.viewer.data_dir).root
+            for tag, e in active.items():
+                data = (root / e["file"]).read_bytes()
+                if hashlib.sha256(data).hexdigest() != e["sha256"]:
+                    continue
+                (pdir / e["file"]).write_bytes(data)
+                listed[tag] = {"file": e["file"], "sha256": e["sha256"]}
+        (rdir / "packages.json").write_text(json.dumps({"packages": listed}, sort_keys=True))
+        return {t: v["sha256"] for t, v in listed.items()}
 
     def _submit(self, run: dict) -> None:
         run["job_id"] = self.jobs.submit(
@@ -686,6 +728,9 @@ class LegendService:
             p = int(sheet["page_index"])
             row = {"page_index": p, "method": sheet.get("method"), "scan_id": None, "error": None,
                    "counts": sheet.get("counts") or {}}
+            learned = _learned_stats(sheet.get("learned"), run.get("_tags") or ())
+            if learned:
+                row["learned"] = learned
             try:
                 row["scan_id"] = self._record_sheet(run, result, sheet, scales)
             except Exception as exc:  # noqa: BLE001 - one sheet must not stop the others
@@ -699,6 +744,9 @@ class LegendService:
             sheets.append(row)
         self._keep_signatures(version, result)
         run.pop("_tags", None)
+        run["learned"] = {t: {"used": bool(v.get("used")), "reason": str(v.get("reason", ""))[:200]}
+                          for t, v in (result.get("learned") or {}).items()
+                          if t in set(run.get("packages") or {}) and isinstance(v, dict)}
         run.update(status=RUN_DONE, finished_at=_now(), sheets=sheets,
                    warnings=[str(w) for w in result.get("warnings", [])][:100],
                    elapsed_seconds=result.get("elapsed_seconds"))

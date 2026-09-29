@@ -266,3 +266,11 @@ def _metric_values(side: Dict[str, Any]) -> Dict[str, Optional[float]]:
 
 TRAIN_TASKS = {"build_dataset": build_dataset, "train_verifier": train_verifier,
                "train_detector": train_detector, "benchmark": benchmark}
+
+
+def _train_symbol(p: Dict[str, Any], data_dir: Path, progress: Progress, job_id: str) -> Dict[str, Any]:
+    from .symbol_tasks import train_symbol
+    return train_symbol(p, data_dir, progress, job_id)
+
+
+TRAIN_TASKS["train_symbol"] = _train_symbol

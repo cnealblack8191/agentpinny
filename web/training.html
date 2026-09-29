@@ -14,6 +14,7 @@
       <a href="index.html">Viewer</a>
       <a href="#dashboard" data-nav="dashboard">Dashboard</a>
       <a href="#queue" data-nav="queue">Label queue</a>
+      <a href="#symbols" data-nav="symbols">Symbol types</a>
       <a href="#datasets" data-nav="datasets" class="admin-only" hidden>Datasets</a>
       <a href="#runs" data-nav="runs" class="admin-only" hidden>Training runs</a>
       <a href="#models" data-nav="models">Models</a>
@@ -48,6 +49,23 @@
         <thead><tr><th>Drawing</th><th>Page</th><th>Score</th><th>Distance from threshold</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
+    </section>
+
+    <section id="page-symbols" data-page="symbols" hidden>
+      <h1>Symbol types</h1>
+      <p class="muted">Each legend symbol learns from its own reviews. Approve correct matches and reject wrong ones
+        from a whole-set scan, then press Train: the next whole-set scan throws out matches that look like that
+        symbol's rejected ones. A symbol's learning is switched on only after it proves itself on reviews it was
+        not trained on (it must not lose correct matches). Pins added by hand are counted but not learned from yet.</p>
+      <div class="actions admin-only" hidden><button id="train-all-btn">Train every symbol with reviews</button></div>
+      <p id="symbols-status" class="status" role="status"></p>
+      <table id="symbols-table" class="grid">
+        <thead><tr><th>Tag</th><th>Approved</th><th>Rejected</th><th>Added by hand</th><th>Sheets</th>
+          <th>Learning</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="symbols-empty" class="muted" hidden>No reviewed legend symbols yet. Scan a drawing set with its
+        legend and review some pins.</p>
     </section>
 
     <section id="page-datasets" data-page="datasets" hidden>

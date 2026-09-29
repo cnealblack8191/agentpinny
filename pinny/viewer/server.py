@@ -121,6 +121,10 @@ ROUTES = [
     ("POST", "/api/training/jobs/{j}/cancel", "training_cancel", ADMIN, "json"),
     ("POST", "/api/training/promote", "training_promote", ADMIN, "json"),
     ("POST", "/api/training/deactivate", "training_deactivate", ADMIN, "json"),
+    # Learned package per symbol type (docs/set-scanning.md "Learning each symbol type").
+    ("GET", "/api/training/symbols", "training_symbols", REVIEWER, None),
+    ("POST", "/api/training/symbols/train", "training_symbol_train", ADMIN, "json"),
+    ("POST", "/api/training/symbols/active", "training_symbol_active", ADMIN, "json"),
     ("GET", "/{path:path}", "static", PUBLIC, None),
 ]
 
@@ -633,6 +637,17 @@ class Site:
         out = self.training.deactivate(b)
         if out["deactivated"]:
             self.sitedb.audit(ident.email, "model_deactivated", out["deactivated"], {"kind": out["kind"]})
+        return self._json(out)
+
+    def h_training_symbols(self, request, ident, body):
+        return self._json(self.training.symbols())
+
+    def h_training_symbol_train(self, request, ident: Identity, b: dict):
+        return self._started(ident, "symbol_training_started", self.training.train_symbol(b, ident.email))
+
+    def h_training_symbol_active(self, request, ident: Identity, b: dict):
+        out = self.training.set_symbol_active(b)
+        self.sitedb.audit(ident.email, "symbol_model_switched", out["tag"], {"active": out["active"]})
         return self._json(out)
 
     def h_static(self, request, ident, body):

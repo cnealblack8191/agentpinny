@@ -240,6 +240,12 @@
     </div>
     <div id="viewport" tabindex="0" aria-label="Page view">
       <canvas id="canvas"></canvas>
+      <div id="pin-pop" class="pin-pop" hidden role="group" aria-label="Review this pin">
+        <span id="pin-pop-state" class="pin-pop-state"></span>
+        <button id="pin-pop-ok" class="pin-pop-ok" title="A">&#10003; Correct</button>
+        <button id="pin-pop-wrong" class="pin-pop-wrong" title="X">&#10007; Wrong</button>
+        <button id="pin-pop-next" title="N">Next &rsaquo;</button>
+      </div>
       <div id="view-message" class="view-message">Upload a PDF and choose a page.</div>
     </div>
   </main>

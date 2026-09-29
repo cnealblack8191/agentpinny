@@ -79,7 +79,30 @@ export function runText(run) {
   const bad = run.sheets.filter((s) => s.error).length;
   return `Scanned ${run.sheets.length} sheet(s) and found ${found} symbol(s)`
     + `${run.elapsed_seconds != null ? ` in ${Math.max(1, Math.round(run.elapsed_seconds))} s` : ''}.`
-    + (bad ? ` ${bad} sheet(s) could not be saved.` : ' Review each sheet, then mark it fully reviewed.');
+    + (bad ? ` ${bad} sheet(s) could not be saved.` : ' Review each sheet, then mark it fully reviewed.')
+    + learnedText(run);
+}
+
+// What the learned symbol types did in a finished run ('' when none were used).
+export function learnedText(run) {
+  const tags = (run && run.learned_tags) || [];
+  if (!tags.length) return '';
+  const threw = new Map();
+  const added = new Map();
+  for (const s of run.sheets || []) {
+    for (const [t, n] of Object.entries((s.learned && s.learned.rejected) || {})) threw.set(t, (threw.get(t) || 0) + n);
+    for (const [t, n] of Object.entries((s.learned && s.learned.added) || {})) added.set(t, (added.get(t) || 0) + n);
+  }
+  const used = tags.filter((t) => !run.learned || !run.learned[t] || run.learned[t].used);
+  const skipped = tags.filter((t) => run.learned && run.learned[t] && !run.learned[t].used);
+  const parts = used.map((t) => {
+    const bits = [];
+    if (threw.get(t)) bits.push(`threw out ${threw.get(t)} look-alike(s)`);
+    if (added.get(t)) bits.push(`added ${added.get(t)}`);
+    return `${t} ${bits.length ? bits.join(', ') : 'changed nothing'}`;
+  });
+  return (parts.length ? ` Learned from your reviews: ${parts.join('; ')}.` : '')
+    + (skipped.length ? ` Not used (different legend drawing): ${skipped.join(', ')}.` : '');
 }
 
 // The tag a new pin gets: the last one chosen, if still in the legend;

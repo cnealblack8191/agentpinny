@@ -6,7 +6,7 @@ import { training as api } from './train/api.js';
 import * as F from './train/format.js';
 
 const $ = (id) => document.getElementById(id);
-const PAGES = ['dashboard', 'queue', 'datasets', 'runs', 'models'];
+const PAGES = ['dashboard', 'queue', 'symbols', 'datasets', 'runs', 'models'];
 const ADMIN_PAGES = new Set(['datasets', 'runs']);
 const POLL_MS = 2000;
 
@@ -265,8 +265,51 @@ async function showModels() {
   $('models-empty').hidden = m.models.length > 0;
 }
 
+// --------------------------------------------------------- symbol types
+function learningCell(x) {
+  if (x.job) return h('td', {}, badge(x.job.status === 'running' ? 'training...' : 'queued', 'warn'));
+  const m = x.model;
+  if (!m || !m.trained) return h('td', { class: 'muted' }, m ? m.reason : 'Not trained yet');
+  const c = m.check || {};
+  return h('td', {},
+    m.active ? badge('on', 'ok') : badge('off', ''), ' ', m.reason,
+    h('div', { class: 'muted' }, `trained ${F.when(m.trained_at)}${m.trained_by ? ' by ' + m.trained_by : ''}; `
+      + `${m.templates} template(s), ${m.negatives} rejected example(s)${m.verifier ? ', verifier' : ''}`
+      + (c.skipped ? '' : `; check: kept ${c.approved_kept} of ${c.approved_kept + c.approved_lost} correct, `
+        + `caught ${c.rejected_caught} of ${c.rejected_caught + c.rejected_missed} wrong`)));
+}
+
+async function showSymbols() {
+  const d = await api.symbols();
+  S.active = d.symbols.some((x) => x.job);
+  rows($('symbols-table'), d.symbols.map((x) => {
+    const train = h('button', { dataset: { train: x.tag } }, x.model && x.model.trained ? 'Retrain' : 'Train');
+    train.hidden = !isAdmin();
+    train.disabled = !!x.job || !(x.approved > 0);
+    train.title = x.approved > 0 ? '' : 'Approve some correct matches of this symbol first.';
+    train.onclick = () => act(train, () => api.trainSymbol(x.tag), $('symbols-status'),
+      `Training ${x.tag}. It takes seconds to a few minutes.`);
+    const m = x.model;
+    const sw = h('button', { dataset: { switch: x.tag } }, m && m.active ? 'Switch off' : 'Switch on');
+    sw.hidden = !isAdmin() || !m || !m.trained || (!m.active && !m.passed_check);
+    sw.onclick = () => act(sw, () => api.setSymbolActive(x.tag, !m.active), $('symbols-status'),
+      (out) => `${x.tag} learning is ${out.active ? 'on' : 'off'}.`);
+    return h('tr', { dataset: { tag: x.tag } }, h('td', {}, h('strong', {}, x.tag)),
+      h('td', {}, x.approved), h('td', {}, x.rejected), h('td', {}, x.added), h('td', {}, x.sheets),
+      learningCell(x), h('td', { class: 'actions' }, train, ' ', sw));
+  }));
+  $('symbols-empty').hidden = d.symbols.length > 0;
+  const all = $('train-all-btn');
+  const todo = d.symbols.filter((x) => !x.job && x.approved > 0);
+  all.disabled = !todo.length;
+  all.onclick = () => act(all, async () => {
+    for (const x of todo) await api.trainSymbol(x.tag);
+  }, $('symbols-status'), `Training ${todo.map((x) => x.tag).join(', ')}.`);
+}
+
 // --------------------------------------------------------------- router
-const SHOW = { dashboard: showDashboard, queue: showQueue, datasets: showDatasets, runs: showRuns, models: showModels };
+const SHOW = { dashboard: showDashboard, queue: showQueue, symbols: showSymbols, datasets: showDatasets,
+  runs: showRuns, models: showModels };
 
 function route() {
   let page = location.hash.slice(1) || 'dashboard';

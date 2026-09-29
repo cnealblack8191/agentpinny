@@ -66,6 +66,21 @@ export function setZoomAt(view, zoom, sx, sy) {
   return zoomAt(view, clampZoom(zoom) / view.zoom, sx, sy);
 }
 
+// Two-finger pinch. `start` is the view when both fingers went down, a0/b0
+// the fingers' viewport points then and a1/b1 now. The zoom follows the
+// change in finger spacing, and the canonical point that was under the
+// fingers' midpoint stays under their midpoint, so the pinch also pans.
+// Always computed from the start view, so rounding cannot accumulate.
+export function pinch(start, a0, b0, a1, b1) {
+  const d0 = Math.hypot(b0.x - a0.x, b0.y - a0.y);
+  const d1 = Math.hypot(b1.x - a1.x, b1.y - a1.y);
+  const m0 = { x: (a0.x + b0.x) / 2, y: (a0.y + b0.y) / 2 };
+  const m1 = { x: (a1.x + b1.x) / 2, y: (a1.y + b1.y) / 2 };
+  const p = toCanonical(start, m0.x, m0.y);
+  const zoom = d0 > 0 && d1 > 0 ? clampZoom(start.zoom * d1 / d0) : start.zoom;
+  return placing({ ...start, zoom }, p, m1.x, m1.y);
+}
+
 export function panBy(view, dx, dy) {
   return { ...view, panX: view.panX + dx, panY: view.panY + dy };
 }

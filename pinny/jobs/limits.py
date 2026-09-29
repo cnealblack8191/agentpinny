@@ -41,9 +41,10 @@ POOLS = {
     "train_verifier": "train",
     "train_detector": "train",
     "benchmark": "train",
+    "train_symbol": "train",
 }
 
-TRAIN_KINDS = ("build_dataset", "train_verifier", "train_detector", "benchmark")
+TRAIN_KINDS = ("build_dataset", "train_verifier", "train_detector", "benchmark", "train_symbol")
 
 LIMITS = {
     "ingest": Limits(memory_mb=2048, cpu_s=120, wall_s=180),
@@ -72,6 +73,9 @@ LIMITS = {
                              threads=2),
     # Template matching plus the candidate model on every test page.
     "benchmark": Limits(memory_mb=5120, cpu_s=14400, wall_s=7200, open_files=256, max_attempts=1, threads=2),
+    # One symbol type's package from its reviewed crops (seconds to minutes:
+    # one package per sheet or drawing for the check, plus the final one).
+    "train_symbol": Limits(memory_mb=2048, cpu_s=3600, wall_s=3600, open_files=256, max_attempts=1),
 }
 
 HEARTBEAT_S = 3.0

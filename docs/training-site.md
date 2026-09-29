@@ -172,6 +172,9 @@ The site is one origin, `PINNY_ORIGIN` (for example
 | `POST /api/training/datasets` | admin | `{}` | 202, a `build_dataset` job; the same build already queued or running is returned instead |
 | `POST /api/training/train` | admin | `{kind: verifier or detector, dataset_id, epochs?, tiles_per_epoch? (detector)}` | 202, a `train_verifier` / `train_detector` job; epochs 1-200 |
 | `POST /api/training/benchmarks` | admin | `{model_id, dataset_id?, template_threshold?}` | 202, a `benchmark` job; the dataset defaults to the model's own; the template threshold (default: the detector's) applies to the baseline and the candidate alike |
+| `GET /api/training/symbols` | reviewer | | `{symbols [{tag, approved, added, rejected, sheets, documents, model {active, reason, trained, passed_check, trained_at, trained_by, templates, negatives, verifier, check} or null, job {job_id, status} or null}], gate}`; see docs/set-scanning.md "Learning each symbol type" |
+| `POST /api/training/symbols/train` | admin | `{tag}` | 202, a `train_symbol` job; the same tag already queued or running is returned instead |
+| `POST /api/training/symbols/active` | admin | `{tag, active}` | switch a tag's learned package off, or on again if it passed its check; 404 `unknown_symbol_model`, 409 `symbol_model_not_checked` |
 | `GET /api/training/jobs?limit=` | admin | | training jobs, newest first: `{jobs [{job_id, kind, status, progress, requested_by, created_at, started_at, finished_at, error, payload, result, cancel_requested}]}` |
 | `GET /api/training/jobs/{job_id}` | admin | | one job, plus `log_tail` (the job's own log, never its stderr) |
 | `POST /api/training/jobs/{job_id}/cancel` | admin | `{}` | queued: cancelled now; running: stopped at the next heartbeat |
@@ -386,8 +389,8 @@ append-only (trigger). Actions: `member_added`, `member_role_changed`,
 `account_locked`, `all_sessions_ended`, `document_uploaded`,
 `document_deleted`, `batch_started`, `legend_read`, `legend_confirmed`,
 `set_scan_started`, `dataset_build_started`,
-`training_started`, `benchmark_started`, `training_cancelled` (target: the
-job id; detail: kind and payload), `model_promoted` (target: the model id;
+`training_started`, `benchmark_started`, `symbol_training_started`, `training_cancelled` (target: the
+job id; detail: kind and payload), `symbol_model_switched` (target: the tag; detail: active), `model_promoted` (target: the model id;
 detail: kind, benchmark job id, evidence sha256) and `model_deactivated`.
 Marking a page fully reviewed is recorded in the learning store
 (`page_reviews`, with the reviewer). Review actions are already an append-only log in the

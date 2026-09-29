@@ -406,6 +406,78 @@ class TrainingService:
                 "evidence_sha256": entry["evidence_sha256"], "dataset_id": entry.get("dataset_id"),
                 "benchmark_job_id": job_id}
 
+    # ------------------------------------------------------ symbol types
+    def symbols(self) -> Dict[str, Any]:
+        """Per legend tag: its reviews, and its learned package (if any)."""
+        from pinny.model.judge import MAX_LOST_SHARE
+        from pinny.model.symbols import SymbolIndex, gate_ok
+
+        docs = self._documents()
+        alive = {d["document_id"] for d in docs.values()}
+        pos = self._db(self.viewer.store.template_bank_crops, include_heldout=True, written_only=False)
+        neg = self._db(self.viewer.store.negative_crops, include_heldout=True, written_only=False)
+        rows: Dict[str, Dict[str, Any]] = {}
+
+        def row(tag: str) -> Dict[str, Any]:
+            return rows.setdefault(tag, {"tag": tag, "approved": 0, "added": 0, "rejected": 0,
+                                         "_sheets": set(), "_docs": set()})
+        for r in pos + neg:
+            if not r.class_label or r.document_id not in alive:
+                continue
+            x = row(r.class_label)
+            if r.label == "negative":
+                x["rejected"] += 1
+            elif r.origin == "manual":
+                x["added"] += 1
+            else:
+                x["approved"] += 1
+            x["_sheets"].add(r.canonical_page_id)
+            x["_docs"].add(r.document_id)
+        try:
+            index = SymbolIndex(self.data_dir).read()
+        except Exception:  # noqa: BLE001 - a damaged index must not hide the reviews
+            index = {}
+        running = {}
+        for status in ("queued", "running"):
+            for j in self.jobs.list(status, limit=100, pool="train", kind="train_symbol"):
+                running[(j.payload or {}).get("tag")] = {"job_id": j.job_id, "status": j.status}
+        out = []
+        for tag in sorted(set(rows) | set(index)):
+            x = rows.get(tag) or row(tag)
+            e = index.get(tag)
+            x["sheets"] = len(x.pop("_sheets"))
+            x["documents"] = len(x.pop("_docs"))
+            x["model"] = None if e is None else {
+                k: e.get(k) for k in ("active", "reason", "trained_at", "trained_by", "templates", "negatives",
+                                      "verifier", "check")} | {"trained": bool(e.get("file")),
+                                                               "passed_check": gate_ok(e)}
+            x["job"] = running.get(tag)
+            out.append(x)
+        return {"symbols": out, "gate": {"max_lost_share": MAX_LOST_SHARE}}
+
+    def train_symbol(self, body: Dict[str, Any], requested_by: str) -> Dict[str, Any]:
+        from pinny.jobs.symbol_tasks import TAG_RE
+
+        tag = body.get("tag")
+        if not isinstance(tag, str) or not TAG_RE.match(tag):
+            raise ViewerError("invalid_tag", "tag must be a legend tag.")
+        return self._submit("train_symbol", {"tag": tag, "requested_by": requested_by}, requested_by,
+                            f"train_symbol:{tag}")
+
+    def set_symbol_active(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        from pinny.model import ModelPackageError
+        from pinny.model.symbols import SymbolIndex
+
+        tag, active = body.get("tag"), body.get("active")
+        if not isinstance(tag, str) or not isinstance(active, bool):
+            raise ViewerError("invalid_setting", "Send the tag and active: true or false.")
+        with self._lock:
+            try:
+                e = SymbolIndex(self.data_dir).set_active(tag, active)
+            except ModelPackageError as exc:
+                raise ViewerError(exc.code, str(exc), 404 if exc.code == "unknown_symbol_model" else 409) from None
+        return {"tag": tag, "active": e["active"]}
+
     def deactivate(self, body: Dict[str, Any]) -> Dict[str, Any]:
         kind = body.get("kind")
         if kind not in KINDS:
