@@ -103,6 +103,8 @@ def scan(p: Dict[str, Any], data_dir: Path) -> Dict[str, Any]:
     s = dict(p.get("settings") or {})
     if "rotations" in s:
         s["rotations"] = tuple(s["rotations"])
+    if "scales" in s:
+        s["scales"] = tuple(s["scales"])
     if "search_region" in s and s["search_region"] is not None:
         s["search_region"] = _box(s["search_region"])
     settings = ScanSettings(**s)

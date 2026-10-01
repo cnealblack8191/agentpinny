@@ -9,16 +9,19 @@ record) are defined in `docs/contracts.md` and take precedence over this file.
 ## Interface
 
 ```python
-from pinny.detection import OpenCVTemplateDetector, ScanSettings, Template, BoundingBox
+from pinny.detection import OpenCVTemplateDetector, ScanSettings, Template, BoundingBox, scale_range
 
 detector = OpenCVTemplateDetector()               # satisfies the `Detector` protocol
 template = Template.from_page_crop(page, BoundingBox(x, y, w, h))
 result = detector.detect(page, template, ScanSettings())
 for c in result.candidates:                       # best score first
-    c.score, c.box.x, c.box.y, c.box.width, c.box.height, c.center, c.rotation, c.mirrored
+    c.score, c.box.x, c.box.y, c.box.width, c.box.height, c.center, c.rotation, c.mirrored, c.scale
 result.skipped_orientations                       # orientations covered by symmetry
 result.to_dict()                                  # JSON-serialisable
 ScanSettings().to_dict()                          # for the scan's detector.settings
+
+# Symbols drawn up to 20% smaller or 25% larger than the template:
+result = detector.detect(page, template, ScanSettings(scales=scale_range(0.8, 1.25)))
 ```
 
 * `Detector` (`interface.py`) is a `typing.Protocol` with `name` and
@@ -45,6 +48,10 @@ ScanSettings().to_dict()                          # for the scan's detector.sett
 * New `ScanSettings` fields: `blur_sigma`, `include_mirrored`,
   `coarse_to_fine`, `coarse_slack`, `max_coarse_peaks` and `num_threads`
   (see Settings), plus `ScanSettings.to_dict()`.
+* Multi-scale search: `ScanSettings.scales` (default `(1.0,)`),
+  `Candidate.scale` (default 1.0) and `DetectionResult.scales_searched`, all
+  included in `to_dict()`; `scale_range()`, `MIN_SCALE`, `MAX_SCALE` and
+  `DEFAULT_SCALE_STEP`. See "Scale search".
 * The default `blur_sigma=1.0` changes scores slightly compared with v1.
   Exact copies still score about 1.0. Off-grid, rescaled or crossed symbols
   score higher.
@@ -63,6 +70,9 @@ cropped or rotated intermediate. The `search_region` offset is added back.
 * `mirrored` (v1.1, default `False`): the template was flipped horizontally
   (left-right) **before** the clockwise rotation. So `mirrored=True,
   rotation=180` is a vertical flip of the template.
+* `scale`: the template scale factor that produced the match (1.0 = the
+  template as cropped). The box is the scaled template's footprint, so its
+  size is `round(template side * scale)`, swapped at 90°/270°.
 * For a template that is symmetric under some orientations, the reported
   label is the **canonical** one (see step 3 below). For example, a
   180°-symmetric symbol drawn upside down is reported as `rotation=0`.
@@ -177,12 +187,44 @@ Thresholds well below the default (about ≤ 0.4) can report weak partial
 matches offset from a real symbol. These overlap it too little to count as
 duplicates.
 
+## Scale search
+
+`ScanSettings.scales` is a tuple of template scale factors in
+[`MIN_SCALE`, `MAX_SCALE`] = [0.25, 4.0]. The default `(1.0,)` is a
+single-scale search, so existing callers and stored settings are unchanged.
+`scale_range(low, high, step=DEFAULT_SCALE_STEP)` builds a geometric range
+that always contains 1.0 and both ends, with neighbours at most `step` apart.
+
+* The template (grayscale, before blur) is resized per scale: `INTER_AREA`
+  when shrinking, `INTER_LINEAR` when enlarging. The page is never resized,
+  so coordinates stay in canonical px. Scales that round to the same
+  template size are searched once, keeping the scale closest to 1.0, with a
+  warning. Every scaled template is validated like the original.
+* Symmetry skipping is decided once on the template as cropped; the same
+  orientations are searched at every scale.
+* Candidates from all scales and orientations are pooled before duplicate
+  suppression, so a symbol matched at neighbouring scales keeps only its
+  best-scoring scale.
+* `DEFAULT_SCALE_STEP = 1.04` keeps every size within about 2 % of a
+  searched scale. On synthetic line-art symbols redrawn at another size
+  with a fixed line weight, the blur alone already tolerates about ±12 %;
+  symbols at 0.8, 0.85, 1.2 and 1.25× are missed at one scale and found
+  with `scale_range(0.8, 1.25)` (`tests/detection/test_multiscale.py`).
+  A different line weight at the same size is still missed.
+* **Cost** grows linearly with the number of distinct scales: each is a
+  full pass per searched orientation. `scale_range(0.8, 1.25)` is 13 scales,
+  so budget about 13× the single-scale time against `max_runtime_seconds`,
+  and narrow the range, use a `search_region` or drop rotations that can't
+  occur on full sheets. The deadline is checked before every
+  (scale, orientation) pass.
+
 ## Settings
 
 | Setting | Default | Purpose |
 |---|---|---|
 | `threshold` | 0.80 | Minimum score to report |
 | `rotations` | (0, 90, 180, 270) | Quarter turns to search |
+| `scales` | (1.0,) | Template scale factors to search (see "Scale search") |
 | `search_region` | `None` | Page-space sub-region; results stay in page coordinates |
 | `nms_iou_threshold` / `duplicate_center_ratio` | 0.5 / 0.5 | Duplicate suppression |
 | `blur_sigma` | 1.0 | Gaussian σ (px) on page and template; 0 disables; max 10 |
@@ -194,7 +236,7 @@ duplicates.
 | `max_page_pixels` | 120,000,000 | Rejects oversized search areas before allocation. Covers Arch E (48×36 in = 9600×7200 px) and oversize sheets up to about 60×42 in at 200 DPI; a 60×42 in page measured ~650 MB peak RSS including the page itself |
 | `min_template_side` / `max_template_side` | 8 / 1024 px | Rejects tiny or oversized templates |
 | `min_template_stddev` | 4.0 (0–255 scale) | Rejects blank or near-uniform templates (measured before blur) |
-| `max_candidates_per_rotation` | 2000 | Bounds pre-suppression work, per orientation |
+| `max_candidates_per_rotation` | 2000 | Bounds pre-suppression work, per (scale, orientation) pass |
 | `max_candidates` | 500 | Bounds output; sets `truncated=True` and a warning |
 | `max_runtime_seconds` | 60 | Checked before each orientation and strip after the first |
 
@@ -228,8 +270,10 @@ the inputs take.
 
 ## Limitations
 
-* No scale search. The blur gives about ±5 % scale tolerance, so the
-  template must come from a raster at about the same resolution as the page.
+* Discrete scales only, the same in x and y: a symbol stretched on one axis
+  is not matched. Single-scale searches (the default) rely on the blur's
+  tolerance. Every scaled template must be at least `min_template_side`, so
+  a small template can't be shrunk far.
 * Quarter-turn rotations and mirroring only. There is no arbitrary-angle
   search.
 * A mirror image of an asymmetric symbol scores about 0.82 against the

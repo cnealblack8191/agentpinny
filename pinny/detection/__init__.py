@@ -8,7 +8,10 @@ from .interface import Detector
 from .opencv_matcher import OpenCVTemplateDetector
 from .types import (
     ALLOWED_ROTATIONS,
+    DEFAULT_SCALE_STEP,
     DEFAULT_SCORE_THRESHOLD,
+    MAX_SCALE,
+    MIN_SCALE,
     BoundingBox,
     Candidate,
     DetectionError,
@@ -17,11 +20,15 @@ from .types import (
     ScanSettings,
     SkippedOrientation,
     Template,
+    scale_range,
 )
 
 __all__ = [
     "ALLOWED_ROTATIONS",
+    "DEFAULT_SCALE_STEP",
     "DEFAULT_SCORE_THRESHOLD",
+    "MAX_SCALE",
+    "MIN_SCALE",
     "BoundingBox",
     "Candidate",
     "DetectionError",
@@ -32,4 +39,5 @@ __all__ = [
     "ScanSettings",
     "SkippedOrientation",
     "Template",
+    "scale_range",
 ]
