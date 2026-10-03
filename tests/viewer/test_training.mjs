@@ -1,7 +1,7 @@
 // node --test tests/viewer/test_training.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { JOB_NAMES, canPromote, compareColumns, jobOutcome, jobSummary, latestBenchmark, pct, viewerLink } from '../../web/train/format.js';
+import { JOB_NAMES, ago, canPromote, compareColumns, dailyActivity, dayKeys, jobOutcome, jobSummary, latestBenchmark, level, localDay, pct, viewerLink } from '../../web/train/format.js';
 
 const side = (p, r) => ({ counts: { true_positives: 1, false_positives: 0, false_negatives: 0 },
   metrics: { precision: p, recall: r } });
@@ -54,4 +54,42 @@ test('a symbol-type training job has a name and an outcome', () => {
   assert.equal(JOB_NAMES.train_symbol, 'Train symbol type');
   assert.equal(jobOutcome({ kind: 'train_symbol', status: 'done', result: { tag: 'D', active: true } }), 'D: switched on');
   assert.equal(jobOutcome({ kind: 'train_symbol', status: 'done', result: { tag: 'Q', active: false } }), 'Q: saved, off');
+});
+
+test('dayKeys lists the last n local days, oldest first', () => {
+  const now = new Date(2026, 9, 3, 15, 0);
+  assert.deepEqual(dayKeys(3, now), ['2026-10-01', '2026-10-02', '2026-10-03']);
+  assert.deepEqual(dayKeys(2, new Date(2026, 2, 1, 9)), ['2026-02-28', '2026-03-01']);
+});
+
+test('dailyActivity buckets UTC hours into local days per person', () => {
+  const hourUtc = (y, m, d, h) => new Date(Date.UTC(y, m, d, h)).toISOString().slice(0, 13);
+  const at = new Date(Date.UTC(2026, 9, 2, 12));
+  const keys = [localDay(new Date(at.getTime() - 86400000)), localDay(at)];
+  const out = dailyActivity([
+    { reviewer: 'a@x', hour: hourUtc(2026, 9, 2, 12), actions: 3 },
+    { reviewer: 'a@x', hour: hourUtc(2026, 9, 2, 12), actions: 2 },
+    { reviewer: null, hour: hourUtc(2026, 9, 1, 12), actions: 1 },
+    { reviewer: 'b@x', hour: '2020-01-01T00', actions: 9 },
+  ], keys);
+  assert.deepEqual(out.get('a@x'), [0, 5]);
+  assert.deepEqual(out.get(null), [1, 0]);
+  assert.equal(out.has('b@x'), false);
+});
+
+test('level shades relative to the busiest cell', () => {
+  assert.equal(level(0, 10), 0);
+  assert.equal(level(1, 10), 1);
+  assert.equal(level(10, 10), 4);
+  assert.equal(level(5, 0), 0);
+});
+
+test('ago says how long ago', () => {
+  const now = Date.parse('2026-10-03T12:00:00Z');
+  assert.equal(ago(null, now), '');
+  assert.equal(ago('2026-10-03T11:59:30Z', now), 'just now');
+  assert.equal(ago('2026-10-03T11:30:00Z', now), '30 min ago');
+  assert.equal(ago('2026-10-03T07:00:00Z', now), '5 h ago');
+  assert.equal(ago('2026-10-02T10:00:00Z', now), 'yesterday');
+  assert.equal(ago(now / 1000 - 3 * 86400, now), '3 days ago');
 });

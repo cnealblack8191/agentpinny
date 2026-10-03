@@ -42,3 +42,13 @@ pre.log { background: #f6f6f6; border: 1px solid #ddd; padding: 8px; max-height:
 table.compare td.num, table.compare th.num { text-align: right; }
 ul.conditions { margin: 4px 0; padding-left: 18px; font-size: 13px; }
 .nowrap { white-space: nowrap; }
+table.grid td.num, table.grid th.num { text-align: right; }
+table#team-table tbody tr { cursor: pointer; }
+.scroll-x { overflow-x: auto; }
+table.heat td, table.heat th { text-align: center; padding: 3px 4px; min-width: 2.2em; }
+table.heat td:first-child, table.heat th:first-child { text-align: left; white-space: nowrap; }
+table.heat td.l0 { color: #bbb; }
+table.heat td.l1 { background: #e3f0ff; }
+table.heat td.l2 { background: #b9d7ff; }
+table.heat td.l3 { background: #7fb2f5; }
+table.heat td.l4 { background: #3d82e0; color: #fff; }

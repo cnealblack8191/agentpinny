@@ -94,3 +94,54 @@ export function canPromote(model, role) {
   const b = latestBenchmark(model);
   return role === 'admin' && !!b && b.promote === true && !model.active;
 }
+
+// ------------------------------------------------------------ team progress
+// Local calendar day (YYYY-MM-DD) of a Date, in the browser's time zone.
+export function localDay(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// The last `days` local days, oldest first, ending today.
+export function dayKeys(days, now = new Date()) {
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    out.push(localDay(d));
+  }
+  return out;
+}
+
+// Review actions per person per local day from the server's UTC hour
+// buckets ({reviewer, hour: 'YYYY-MM-DDTHH', actions}). Returns a Map from
+// reviewer (null for unattributed) to an array aligned with `keys`.
+export function dailyActivity(hourly, keys) {
+  const index = new Map(keys.map((k, i) => [k, i]));
+  const out = new Map();
+  for (const b of hourly || []) {
+    const i = index.get(localDay(new Date(`${b.hour}:00:00Z`)));
+    if (i === undefined) continue;
+    if (!out.has(b.reviewer)) out.set(b.reviewer, keys.map(() => 0));
+    out.get(b.reviewer)[i] += b.actions;
+  }
+  return out;
+}
+
+// 0-4 shade for a heat-map cell, relative to the busiest cell.
+export function level(n, max) {
+  if (!n || !max) return 0;
+  return Math.min(4, 1 + Math.floor((3 * n) / max));
+}
+
+// "3 min ago", "5 h ago", "2 days ago"; '' for no time.
+export function ago(t, now = Date.now()) {
+  if (!t) return '';
+  const d = typeof t === 'number' ? t * 1000 : Date.parse(t);
+  if (isNaN(d)) return String(t);
+  const s = Math.max(0, (now - d) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  const n = Math.floor(s / 86400);
+  return n === 1 ? 'yesterday' : `${n} days ago`;
+}

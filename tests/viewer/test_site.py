@@ -268,6 +268,46 @@ def test_me_and_reviewer_identity(site):
     assert (REVIEWER, "document_uploaded") in actions and (DRAFTSMAN, "batch_started") in actions
 
 
+def test_team_progress_per_person(site):
+    base, s, svc = site
+    doc = upload(base, who=REVIEWER)
+    v = doc["document_version"]
+    body = {"document_version": v, "page_index": 0, "request_id": str(uuid.uuid4()),
+            "template_box": _template_for(doc, svc.frame(v, 0))}
+    st = json.loads(call(base, "POST", "/api/scans", who=DRAFTSMAN, body=body)[2])
+    pins = [p["pin_id"] for p in st["pins"]]
+    for action, pin in (("approve", pins[0]), ("reject", pins[0]), ("approve", pins[0])):
+        code, _, raw = call(base, "POST", f"/api/scans/{st['scan_id']}/actions", who=REVIEWER,
+                            body={"action": action, "pin_id": pin, "request_id": str(uuid.uuid4())})
+        assert code == 200, raw
+
+    code, _, raw = call(base, "GET", "/api/team/progress?days=7", who=REVIEWER)
+    assert code == 403  # admins only
+    for bad in ("0", "91", "x"):
+        code, _, raw = call(base, "GET", f"/api/team/progress?days={bad}")
+        assert code == 400 and err(raw)["code"] == "invalid_days"
+    code, _, raw = call(base, "GET", "/api/team/progress?days=7")
+    assert code == 200, raw
+    t = json.loads(raw)
+    assert t["days"] == 7 and t["since"].endswith("T00:00:00.000Z")
+    people = {p["email"]: p for p in t["people"]}
+    assert set(people) == {ADMIN, REVIEWER, DRAFTSMAN}  # every member, active or not
+    rev, draft, admin = people[REVIEWER], people[DRAFTSMAN], people[ADMIN]
+    assert rev["uploads"] == 1 and rev["scans"] == 0
+    assert rev["reviews"] == {"approved": 2, "rejected": 1, "added": 0, "removed": 0, "actions": 3,
+                              "pins": 1, "first_at": rev["reviews"]["first_at"]}
+    assert rev["last_active_at"] and rev["last_seen_at"] and rev["role"] == "reviewer"
+    assert draft["scans"] == 1 and draft["pages_scanned"] == 1 and draft["reviews"]["actions"] == 0
+    assert admin["uploads"] == 0 and admin["reviews"]["actions"] == 0
+    assert sum(b["actions"] for b in t["hourly"] if b["reviewer"] == REVIEWER) == 3
+
+    # A removed member's work stays listed, marked as a former member.
+    s.sitedb.remove_member(REVIEWER, actor=ADMIN)
+    t = json.loads(call(base, "GET", "/api/team/progress")[2])
+    gone = next(p for p in t["people"] if p["email"] == REVIEWER)
+    assert gone["member"] is False and gone["reviews"]["pins"] == 1 and t["days"] == 14
+
+
 def test_delete_document(site, tmp_path):
     base, s, svc = site
     doc = upload(base, who=REVIEWER)

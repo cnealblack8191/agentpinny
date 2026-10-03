@@ -36,6 +36,7 @@ from pinny.render.service import DEFAULT_MAX_UPLOAD_BYTES
 
 from .auth import PUBLIC, Authenticator, Identity
 from .errors import ViewerError
+from .progress import DAYS_DEFAULT, DAYS_MAX, since_for, team_progress
 from .service import ViewerService
 from .training import TrainingService
 from pinny.jobs.queue import JobQueue
@@ -101,6 +102,7 @@ ROUTES = [
     ("POST", "/api/members/remove", "member_remove", ADMIN, "json"),
     ("POST", "/api/members/setup-link", "member_setup_link", ADMIN, "json"),
     ("GET", "/api/audit", "audit", ADMIN, None),
+    ("GET", "/api/team/progress", "team_progress", ADMIN, None),
     # Training site (docs/training-site.md section 3): labelling progress for
     # reviewers; datasets, training, benchmarks and models for admins.
     ("GET", "/api/training/dashboard", "training_dashboard", REVIEWER, None),
@@ -552,6 +554,17 @@ class Site:
         if not limit.isdigit():
             raise ViewerError("invalid_limit", "limit must be a non-negative integer.")
         return self._json({"events": self.sitedb.audit_log(min(int(limit), 1000))})
+
+    def h_team_progress(self, request, ident, body):
+        days = request.query_params.get("days", str(DAYS_DEFAULT))
+        if not days.isdigit() or not 1 <= int(days) <= DAYS_MAX:
+            raise ViewerError("invalid_days", f"days must be a whole number from 1 to {DAYS_MAX}.")
+        days = int(days)
+        since = since_for(days, _dt.datetime.now(_dt.timezone.utc))
+        store = self.service._db(self.service.store.activity_by_person, since)
+        members = [self._member_dict(m) for m in self.sitedb.members()]
+        return self._json(team_progress(members, store, self.sitedb.activity_by_person(),
+                                        since=since, days=days))
 
     # --------------------------------------------------------------- training
     @staticmethod

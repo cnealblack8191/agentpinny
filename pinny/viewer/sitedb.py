@@ -347,6 +347,21 @@ class SiteDB:
                 db.execute("ROLLBACK")
                 raise
 
+    def activity_by_person(self) -> Dict[str, Any]:
+        """Per person: uploads, the newest live session's last request, and
+        audit actions (count and newest time per action). For the admin's
+        team progress page."""
+        db = self._db()
+        uploads = {r["uploaded_by"]: {"uploads": r["n"], "last_at": r["last"]} for r in db.execute(
+            "SELECT uploaded_by, COUNT(*) n, MAX(uploaded_at) last FROM uploads GROUP BY uploaded_by")}
+        seen = {r["email"]: r["last"] for r in db.execute(
+            "SELECT email, MAX(last_seen_at) last FROM sessions GROUP BY email")}
+        actions: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for r in db.execute("SELECT actor, action, COUNT(*) n, MAX(at) last FROM audit"
+                            " WHERE actor IS NOT NULL GROUP BY actor, action"):
+            actions.setdefault(r["actor"], {})[r["action"]] = {"count": r["n"], "last_at": r["last"]}
+        return {"uploads": uploads, "last_seen": seen, "actions": actions}
+
     # ----------------------------------------------------------------- audit
     def audit(self, actor: Optional[str], action: str, target: Optional[str] = None,
               detail: Optional[Dict[str, Any]] = None) -> None:

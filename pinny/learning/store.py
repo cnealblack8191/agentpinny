@@ -1295,6 +1295,35 @@ class LearningStore:
                 "SELECT canonical_page_id, status FROM page_reviews")}
         return {"scans": list(scans.values()), "page_reviews": reviews}
 
+    def activity_by_person(self, since: str) -> Dict[str, Any]:
+        """Who did what, for the admin's team progress page. All-time totals
+        per reviewer (review actions, distinct pins, pages marked fully
+        reviewed) and per scan requester, plus review actions per reviewer and
+        UTC hour (``YYYY-MM-DDTHH``) from ``since`` (an RFC3339 UTC time).
+        A reviewer or requester of ``None`` is work recorded without a
+        signed-in person (local development, the CLI, tests)."""
+        with self._read() as db:
+            reviews: Dict[Optional[str], Dict[str, Any]] = {}
+            for r in db.execute("SELECT reviewer, action, COUNT(*) n, MIN(created_at) first, MAX(created_at) last"
+                                " FROM review_events GROUP BY reviewer, action"):
+                d = reviews.setdefault(r["reviewer"], {"actions": {}, "pins": 0, "first_at": None, "last_at": None})
+                d["actions"][r["action"]] = r["n"]
+                d["first_at"] = min(filter(None, (d["first_at"], r["first"])))
+                d["last_at"] = max(filter(None, (d["last_at"], r["last"])))
+            for r in db.execute("SELECT reviewer, COUNT(*) n FROM"
+                                " (SELECT DISTINCT reviewer, scan_id, pin_id FROM review_events) GROUP BY reviewer"):
+                reviews[r["reviewer"]]["pins"] = r["n"]
+            pages = {r["reviewer"]: {"complete": r["n"], "last_at": r["last"]} for r in db.execute(
+                "SELECT reviewer, COUNT(*) n, MAX(completed_at) last FROM page_reviews"
+                " WHERE status='complete' GROUP BY reviewer")}
+            scans = {r["who"]: {"scans": r["n"], "pages": r["pages"], "last_at": r["last"]} for r in db.execute(
+                "SELECT json_extract(metadata, '$.requested_by') who, COUNT(*) n,"
+                " COUNT(DISTINCT canonical_page_id) pages, MAX(recorded_at) last FROM scans GROUP BY who")}
+            hourly = [{"reviewer": r["reviewer"], "hour": r["hour"], "actions": r["n"]} for r in db.execute(
+                "SELECT reviewer, substr(created_at, 1, 13) hour, COUNT(*) n FROM review_events"
+                " WHERE created_at >= ? GROUP BY reviewer, hour ORDER BY hour", (since,))]
+        return {"reviews": reviews, "pages": pages, "scans": scans, "hourly": hourly}
+
     def page_review_status(self, canonical_page_id: str) -> Optional[PageReview]:
         """``None`` when the page has never been marked."""
         r = self._db.execute("SELECT * FROM page_reviews WHERE canonical_page_id=?",

@@ -185,13 +185,26 @@ try {
     && e.target === server.good_model && e.detail.benchmark_job_id === server.good_job));
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'training-models.png') });
 
+  // ------------------------------------------------------------- team
+  await page.locator('[data-nav=team]').click();
+  await loaded(page, 'team');
+  const teamRows = await page.locator('#team-table tbody tr').count();
+  check('team: one row per member', teamRows >= 2, String(teamRows));
+  const teamText = await page.locator('#team-table').textContent();
+  check('team: lists the reviewer', teamText.includes(REVIEWER), teamText);
+  check('team: daily table', (await page.locator('#team-daily thead th').count()) === 16);
+  await page.locator(`#team-table tbody tr[data-person="${REVIEWER}"]`).click();
+  await waitFor(page, (who) => document.getElementById('team-recent-title').textContent.includes(who), REVIEWER);
+  check('team: picking a person filters recent actions', true);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'training-team.png') });
+
   // ---------------------------------------------------------- reviewer
   const rev = await signIn(REVIEWER);
   const rp = rev.page;
   await rp.goto(server.base + '/training.html#models');
   await loaded(rp, 'models');
-  check('reviewer: no Datasets or Training runs links', !(await rp.locator('[data-nav=datasets]').isVisible())
-    && !(await rp.locator('[data-nav=runs]').isVisible()));
+  check('reviewer: no Datasets, Training runs or Team links', !(await rp.locator('[data-nav=datasets]').isVisible())
+    && !(await rp.locator('[data-nav=runs]').isVisible()) && !(await rp.locator('[data-nav=team]').isVisible()));
   check('reviewer: models are listed', (await rp.locator('.model').count()) === 2);
   const visible = async (sel) => {
     for (const e of await rp.locator(sel).all()) if (await e.isVisible()) return true;
@@ -210,7 +223,7 @@ try {
   check('reviewer: sees the label queue', await rp.locator('#page-queue').isVisible());
 
   // ------------------------------------------------------- deactivate
-  await page.reload();
+  await page.goto(server.base + '/training.html#models');
   await loaded(page, 'models');
   await page.locator('button[data-deactivate=verifier]').click();
   await waitFor(page, () => document.getElementById('models-status').textContent.includes('No verifier is active'));

@@ -6,11 +6,11 @@ import { training as api } from './train/api.js';
 import * as F from './train/format.js';
 
 const $ = (id) => document.getElementById(id);
-const PAGES = ['dashboard', 'queue', 'symbols', 'datasets', 'runs', 'models'];
-const ADMIN_PAGES = new Set(['datasets', 'runs']);
+const PAGES = ['dashboard', 'queue', 'symbols', 'datasets', 'runs', 'models', 'team'];
+const ADMIN_PAGES = new Set(['datasets', 'runs', 'team']);
 const POLL_MS = 2000;
 
-const S = { me: null, page: null, jobId: null, loading: false, active: false, seq: 0 };
+const S = { me: null, page: null, jobId: null, loading: false, active: false, seq: 0, person: undefined };
 
 // ------------------------------------------------------------------ DOM
 function h(tag, attrs = {}, ...children) {
@@ -307,9 +307,81 @@ async function showSymbols() {
   }, $('symbols-status'), `Training ${todo.map((x) => x.tag).join(', ')}.`);
 }
 
+// ----------------------------------------------------------------- team
+const ACTION_NAMES = {
+  document_uploaded: 'Uploaded', document_deleted: 'Deleted a drawing', set_scan_started: 'Scanned a whole set',
+  batch_started: 'Scanned every page', legend_read: 'Read a legend', legend_confirmed: 'Checked a legend',
+  training_started: 'Started training', dataset_build_started: 'Built a dataset', benchmark_started: 'Started a benchmark',
+  symbol_training_started: 'Trained a symbol type', training_cancelled: 'Cancelled training', model_promoted: 'Promoted a model',
+  model_deactivated: 'Deactivated a model', symbol_model_switched: 'Switched symbol learning',
+  member_added: 'Added a member', member_removed: 'Removed a member', member_role_changed: 'Changed a role',
+  password_set: 'Set a password', password_reset: 'Reset a password', setup_link_issued: 'Issued a set-password link',
+  account_locked: 'Account locked', all_sessions_ended: 'Signed everyone out',
+};
+const personName = (p) => (p.email == null ? 'Not signed in (CLI / local)' : p.email);
+
+async function showTeam() {
+  const days = Number($('team-days').value) || 14;
+  const [t, audit] = await Promise.all([api.teamProgress(days), api.audit(200)]);
+  const people = t.people;
+  const sum = (f) => people.reduce((n, p) => n + f(p), 0);
+  const weekAgo = Date.now() - 7 * 86400 * 1000;
+  fill($('team-tiles'),
+    tile(people.filter((p) => p.member).length, 'members'),
+    tile(people.filter((p) => p.email != null && p.last_active_at && Date.parse(p.last_active_at) >= weekAgo).length,
+      'active this week'),
+    tile(sum((p) => p.uploads), 'drawings uploaded'),
+    tile(sum((p) => p.reviews.pins), 'pins reviewed'),
+    tile(sum((p) => p.pages_complete), 'pages fully reviewed'));
+
+  rows($('team-table'), people.map((p) => {
+    const r = p.reviews;
+    const role = p.member ? [p.role, p.has_password ? null : ' ', p.has_password ? null : badge('invite not used', 'warn')]
+      : [p.email == null ? '' : badge('former member', '')];
+    const tr = h('tr', { dataset: { person: p.email == null ? '' : p.email },
+      class: S.person === p.email ? 'selected' : '' },
+    h('td', {}, h('strong', {}, personName(p))),
+    h('td', {}, ...role),
+    h('td', { title: p.last_active_at ? F.when(p.last_active_at) : '' }, p.last_active_at ? F.ago(p.last_active_at) : 'never'),
+    h('td', { class: 'num' }, p.uploads),
+    h('td', { class: 'num' }, `${p.scans} (${p.pages_scanned})`),
+    h('td', { class: 'num' }, r.pins),
+    h('td', { class: 'num' }, `${r.approved} / ${r.rejected}`),
+    h('td', { class: 'num' }, `${r.added} / ${r.removed}`),
+    h('td', { class: 'num' }, p.pages_complete),
+    h('td', { class: 'num' }, p.actions.set_scan_started + p.actions.batch_started));
+    tr.onclick = () => { S.person = S.person === p.email ? undefined : p.email; refresh(); };
+    return tr;
+  }));
+  $('team-empty').hidden = people.some((p) => p.member);
+
+  const keys = F.dayKeys(days);
+  const daily = F.dailyActivity(t.hourly, keys);
+  const max = Math.max(0, ...[...daily.values()].flat());
+  const label = (k) => new Date(`${k}T12:00:00`).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+  fill($('team-daily').tHead, h('tr', {}, h('th', {}, ''), keys.map((k) => h('th', { title: k }, label(k))),
+    h('th', { class: 'num' }, 'Total')));
+  const dailyRows = people.filter((p) => p.member || daily.has(p.email)).map((p) => {
+    const counts = daily.get(p.email) || keys.map(() => 0);
+    return h('tr', {}, h('td', {}, personName(p)),
+      counts.map((n, i) => h('td', { class: `l${F.level(n, max)}`, title: `${keys[i]}: ${n}` }, n || '·')),
+      h('td', { class: 'num' }, counts.reduce((a, b) => a + b, 0)));
+  });
+  fill($('team-daily').tBodies[0], dailyRows);
+
+  const mine = (e) => S.person === undefined || e.actor === S.person;
+  const events = audit.events.filter(mine).slice(0, 100);
+  $('team-recent-title').textContent = S.person === undefined ? 'Recent actions (everyone)'
+    : `Recent actions: ${S.person == null ? 'not signed in' : S.person}`;
+  rows($('team-recent'), events.map((e) => h('tr', {},
+    h('td', { class: 'nowrap', title: F.when(e.at) }, F.ago(e.at)), h('td', {}, e.actor || ''),
+    h('td', {}, ACTION_NAMES[e.action] || e.action), h('td', { class: 'mono' }, e.target || ''))));
+  $('team-recent-empty').hidden = events.length > 0;
+}
+
 // --------------------------------------------------------------- router
 const SHOW = { dashboard: showDashboard, queue: showQueue, symbols: showSymbols, datasets: showDatasets,
-  runs: showRuns, models: showModels };
+  runs: showRuns, models: showModels, team: showTeam };
 
 function route() {
   let page = location.hash.slice(1) || 'dashboard';
@@ -373,6 +445,7 @@ async function start() {
   for (const e of document.querySelectorAll('.admin-only')) e.hidden = !isAdmin();
   $('build-dataset-btn').onclick = () => act($('build-dataset-btn'), () => api.buildDataset(), $('datasets-status'),
     'Building a dataset from the current reviews. Follow it on Training runs.');
+  $('team-days').onchange = () => refresh();
   window.addEventListener('hashchange', refresh);
   document.addEventListener('visibilitychange', poll);
   setInterval(poll, POLL_MS);

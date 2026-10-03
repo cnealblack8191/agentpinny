@@ -25,6 +25,8 @@ export const training = {
   promote: (benchmarkJobId) => request('POST', '/api/training/promote',
     { json: { benchmark_job_id: benchmarkJobId } }),
   deactivate: (kind) => request('POST', '/api/training/deactivate', { json: { kind } }),
+  teamProgress: (days) => request('GET', `/api/team/progress?days=${days}`),
+  audit: (limit = 200) => request('GET', `/api/audit?limit=${limit}`),
   symbols: () => request('GET', '/api/training/symbols'),
   trainSymbol: (tag) => request('POST', '/api/training/symbols/train', { json: { tag } }),
   setSymbolActive: (tag, active) => request('POST', '/api/training/symbols/active', { json: { tag, active } }),
