@@ -1,7 +1,7 @@
 {
-  "Name": "pinny-stop-weekdays",
-  "Description": "Stop the Pinny EC2 instance at 19:00 New York time, Monday to Friday",
-  "ScheduleExpression": "cron(0 19 ? * MON-FRI *)",
+  "Name": "pinny-stop-daily",
+  "Description": "Stop the Pinny EC2 instance at 19:00 New York time, every day",
+  "ScheduleExpression": "cron(0 19 * * ? *)",
   "ScheduleExpressionTimezone": "America/New_York",
   "FlexibleTimeWindow": {
     "Mode": "OFF"

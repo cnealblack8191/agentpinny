@@ -12,7 +12,7 @@ profile in $PINNY_PROFILES it checks:
 * failed jobs in jobs.sqlite3 since the last run (server-side failures only:
   error status 5xx or none; 4xx failures are the user's input, like a bad PDF,
   and jobs interrupted by a shutdown are expected);
-* the last successful backup is less than 80 hours old (weekday backups only).
+* the last successful backup is less than 80 hours old (daily backups; room for a day or two stopped by hand).
 
 New problems are emailed through the SNS topic $PINNY_ALERT_TOPIC_ARN in
 one message per run. A problem that continues is repeated at most every
@@ -40,8 +40,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 DISK_LIMIT_PCT = 80.0
 REPEAT_S = 6 * 3600  # an ongoing problem is repeated this often
 EVENT_REPEAT_S = 3600  # 5xx and failed-job alerts: at most one email per hour each
-# Backups run on weekdays only (the instance is off at night and at weekends),
-# so Friday's backup must last until Monday: 72 h plus a margin. A backup that
+# Backups run daily at 18:15 (the instance is off at night). The limit leaves
+# room for a day or two with the server stopped by hand. A backup that
 # fails sends its own alert at once (OnFailure=); this catches one that never ran.
 BACKUP_MAX_AGE_S = 80 * 3600
 # After a boot, give a missed backup (Persistent=true) time to catch up first.

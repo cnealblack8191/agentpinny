@@ -12,7 +12,7 @@ Implementation status is marked per section: **built** (on
 `claude/beautiful-brahmagupta-vqz21o` and later), or **planned**. The training API and
 pages (Step 7) are built. The deployment (Step 5) is `deploy/`, run as described in
 `docs/deployment.md`: Caddy and native systemd services on one instance
-that runs on weekdays 07:00-19:00 New York time.
+that runs every day 07:00-19:00 New York time.
 
 ## 1. Identity and roles (built)
 
@@ -338,8 +338,7 @@ it with `worker_lost` ("... for example because the server restarted").
 With `PINNY_JOBS=sandbox` the web process requeues immediately on
 startup, since its own workers are the only ones.
 
-**Shutdown** (the server stops at 7 PM Eastern on weekdays and over the
-weekend). A worker told to stop (SIGTERM from systemd, or the web process
+**Shutdown** (the server stops at 7 PM Eastern every day and starts at 7 AM). A worker told to stop (SIGTERM from systemd, or the web process
 stopping its own workers) kills its child and hands the job back:
 requeued if it has attempts left, otherwise failed as `interrupted`
 ("The job was interrupted because the server stopped ... start it
@@ -446,7 +445,7 @@ and the job queue (`jobs/`), and no read access to `site.sqlite3`,
 `pinny.sqlite3`, `crops/`, `exports/` or `models/`; the training worker
 needs the labels and models, so it runs as the web user (still without
 network); the single EC2 instance as a single point of failure (mitigated
-by daily weekday backups and weekly snapshots).
+by daily backups and weekly snapshots).
 
 ## 9. Seam between web and workers
 

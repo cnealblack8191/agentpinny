@@ -52,11 +52,11 @@ Contents:
  |  /srv/pinny/production/   documents/ models/ crops/ exports/ *.sqlite3               |
  |  /srv/pinny/staging/      the same, separate                                         |
  |                                                                                      |
- |  timers: backup (weekdays 18:15 New York) -> S3 bucket, 30 days                      |
+ |  timers: backup (daily 18:15 New York) -> S3 bucket, 30 days                         |
  |          health check every 5 min -> SNS topic -> email                              |
  |          restore test (first Monday of the month)                                    |
  +--------------------------------------------------------------------------------------+
-    EventBridge Scheduler: start 07:00, stop 19:00, Monday-Friday, New York time
+    EventBridge Scheduler: start 07:00, stop 19:00, every day, New York time
     Data Lifecycle Manager: weekly EBS snapshot, Friday 21:30 UTC, keep 4
 ```
 
@@ -84,8 +84,8 @@ and the job queue; every service runs with systemd's sandboxing
 caps); no AWS keys on disk (the instance role); backups encrypted in a
 private, versioned bucket.
 
-Rough monthly cost (us-east-1 prices, 2026): about **$40**. Compute about
-$26 (m7i.large for about 260 hours a month: 12 hours x ~21.7 weekdays),
+Rough monthly cost (us-east-1 prices, 2026): about **$52**. Compute about
+$37 (m7i.large for about 365 hours a month: 12 hours x ~30.4 days),
 disk $8 (100 GB gp3, charged all month), Elastic IP $3.65 (public IPv4
 addresses are charged all month, running or not), and a few dollars for
 S3 backups and EBS snapshots. SNS email, EventBridge Scheduler and Data
@@ -253,7 +253,7 @@ Caddy can only get certificates once both names resolve.
 
 On top of the daily backups, a weekly snapshot of the whole disk lets you
 rebuild the server in minutes. Snapshots must be taken while the instance
-runs (07:00-19:00 New York time on weekdays). DLM schedules are in UTC:
+runs (07:00-19:00 New York time). DLM schedules are in UTC:
 Friday **21:30 UTC** is 17:30 in New York in summer (EDT, UTC-4) and 16:30
 in winter (EST, UTC-5), inside the window either way.
 
@@ -272,8 +272,8 @@ aws dlm create-lifecycle-policy --region us-east-1 --state ENABLED \
 
 ### 2.9 Start and stop schedule (EventBridge Scheduler)
 
-The instance runs 07:00-19:00 New York time, Monday to Friday, and is
-stopped otherwise. Two schedules in EventBridge Scheduler call EC2
+The instance runs 07:00-19:00 New York time every day, and is stopped
+at night. Two schedules in EventBridge Scheduler call EC2
 directly (no Lambda). They need a role that may start and stop this one
 instance and nothing else.
 
@@ -285,12 +285,12 @@ Console:
    `deploy/aws/scheduler-role-policy.json` (with `ACCOUNT_ID`,
    `INSTANCE_ID`).
 2. Amazon EventBridge → Scheduler → Schedules → Create schedule:
-   name `pinny-start-weekdays`; recurring, cron-based,
-   `0 7 ? * MON-FRI *`; time zone **America/New_York**; flexible time
+   name `pinny-start-daily`; recurring, cron-based,
+   `0 7 * * ? *`; time zone **America/New_York**; flexible time
    window Off. Target: **All APIs** → search "EC2" → **StartInstances**;
    input `{"InstanceIds": ["INSTANCE_ID"]}`. Permissions: use existing role
    `pinny-scheduler`. Create.
-3. The same again: `pinny-stop-weekdays`, `0 19 ? * MON-FRI *`,
+3. The same again: `pinny-stop-daily`, `0 19 * * ? *`,
    America/New_York, target EC2 **StopInstances**, same input and role.
 
 CLI (edit `ACCOUNT_ID` and `INSTANCE_ID` in the four files first):
@@ -495,7 +495,7 @@ do this when the old release will not start otherwise.
 
 Page images (`documents/*/pages/`) are left out: Pinny renders them again from each PDF when a page is opened.
 
-* **When:** every weekday at 18:15 New York time (production; staging at
+* **When:** every day at 18:15 New York time (production; staging at
   18:35), before the 19:00 shutdown. If the server was off at that time, the
   backup runs a few minutes after the next start.
 * **What:** every `*.sqlite3` database, copied with SQLite's online backup
@@ -643,23 +643,22 @@ sudo systemctl list-timers 'pinny-*'                    # next backup, check, re
 ## 13. Working hours: the server is off at night
 
 EventBridge Scheduler (step 2.9) starts the instance at 07:00 and stops it
-at 19:00, Monday to Friday, New York time. While it is off, the sites do
+at 19:00 every day, New York time. While it is off, the sites do
 not answer (browsers show a connection error). The disk, the data and the
 Elastic IP stay, so everything comes back as it was at the next start.
 Caddy's certificates last for weeks, and it renews them well before they
 expire, during the hours the server runs.
 
-**Starting it by hand** (a weekend, a holiday, working late): console →
+**Starting it by hand** (working late, an early start): console →
 EC2 → Instances → `pinny` → Instance state → **Start**; or
 
 ```sh
 aws ec2 start-instances --instance-ids INSTANCE_ID --region us-east-1
 ```
 
-It is ready about two minutes later. The 19:00 schedule stops it again on
-weekdays; at a weekend, stop it yourself when done (Instance state →
-**Stop**, or `aws ec2 stop-instances --instance-ids INSTANCE_ID --region
-us-east-1`). A missed backup runs a few minutes after a start.
+It is ready about two minutes later. The 19:00 schedule stops it again; after
+19:00, stop it yourself when done (Instance state → **Stop**, or
+`aws ec2 stop-instances --instance-ids INSTANCE_ID --region us-east-1`). A missed backup runs a few minutes after a start.
 
 **What a stop does to Pinny.** The web process shuts down cleanly. Each
 worker stops its running job and hands it back: an upload, page or scan
@@ -677,7 +676,7 @@ enable it again afterwards).
 ## 14. Alerts: what each one means and what to do
 
 The health check runs every 5 minutes **on the server**, so it only runs
-while the server is up: there are no alerts at night or at weekends, and
+while the server is up: there are no alerts at night, and
 no alert says "the server is off" (that is expected; there is no outside
 uptime monitor). Alerts arrive by email from AWS Notifications. A problem
 that continues is repeated every 6 hours; when it clears you get one

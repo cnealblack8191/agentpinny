@@ -3,7 +3,7 @@ Description=Monthly Pinny restore test (%i)
 
 [Timer]
 # The first Monday of each month at 12:30 New York time, while the
-# instance is running (07:00-19:00 on weekdays). Persistent=true: if the
+# instance is running (07:00-19:00 every day). Persistent=true: if the
 # instance was off then, it runs a few minutes after the next boot.
 OnCalendar=Mon *-*-01..07 12:30:00 America/New_York
 RandomizedDelaySec=30min
