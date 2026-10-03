@@ -57,6 +57,9 @@ _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F
 CSP = ("default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; "
        "frame-ancestors 'none'; form-action 'self'")
 
+# Pinny uses none of these browser features; refuse them to every frame.
+PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+
 # (method, path, handler, minimum role, body kind). Body kind is what a
 # state-changing request must send: "json", "pdf" or None (no body).
 ROUTES = [
@@ -150,7 +153,8 @@ class SecurityHeaders:
                        (b"content-security-policy", CSP.encode()),
                        (b"referrer-policy", b"no-referrer"),
                        (b"x-content-type-options", b"nosniff"),
-                       (b"x-frame-options", b"DENY")]
+                       (b"x-frame-options", b"DENY"),
+                       (b"permissions-policy", PERMISSIONS_POLICY.encode())]
                 if self.production:
                     add.append((b"strict-transport-security", b"max-age=31536000"))
                 if is_api and b"cache-control" not in have:
@@ -644,8 +648,12 @@ class Site:
             raise ViewerError("not_found", f"No route for {request.method} /{path}.", 404)
         rel = path or "index.html"
         root = self.web_root.resolve()
-        target = (root / rel).resolve()
-        if (root not in target.parents and target != root) or not target.is_file():
+        try:
+            target = (root / rel).resolve()
+            found = (root in target.parents or target == root) and target.is_file()
+        except (ValueError, OSError):  # e.g. an embedded NUL byte (%00)
+            found = False
+        if not found:
             raise ViewerError("not_found", "Not found.", 404)
         ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         if target.suffix in (".js", ".mjs"):

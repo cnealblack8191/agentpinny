@@ -204,6 +204,7 @@ def test_security_headers_and_request_ids(site):
         assert "frame-ancestors 'none'" in low["content-security-policy"], path
         assert low["x-frame-options"] == "DENY" and low["x-content-type-options"] == "nosniff"
         assert low["referrer-policy"] == "no-referrer"
+        assert "camera=()" in low["permissions-policy"]
         assert low["strict-transport-security"].startswith("max-age=")
         assert len(low["x-request-id"]) == 16
         assert "server" not in low
@@ -211,6 +212,9 @@ def test_security_headers_and_request_ids(site):
             assert low["cache-control"] == "no-store"
     code, _, raw = call(base, "GET", "/healthz", who=None)
     assert code == 200 and json.loads(raw) == {"ok": True, "version": "test-1.0"}
+    for bad in ("/index.html%00.js", "/..%2f..%2fpyproject.toml", "/train/%2e%2e/%2e%2e/pyproject.toml"):
+        code, _, _ = call(base, "GET", bad, who=None)
+        assert code == 404, bad
 
 
 def test_internal_errors_do_not_leak(site):
