@@ -89,7 +89,8 @@ esac
 say "Installing Ubuntu packages"
 run apt-get update -q
 run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q ca-certificates curl gnupg git unzip \
-  python3.12 python3.12-venv sqlite3 debian-keyring debian-archive-keyring apt-transport-https
+  python3.12 python3.12-venv sqlite3 debian-keyring debian-archive-keyring apt-transport-https \
+  tesseract-ocr  # optional OCR (docs/ocr.md); unused until an admin turns OCR on
 
 if ! command -v caddy >/dev/null 2>&1; then
   say "Installing Caddy from its official apt repository"

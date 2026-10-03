@@ -43,6 +43,7 @@ from pinny.jobs.queue import PRIORITY_BATCH, PRIORITY_INTERACTIVE, JobQueue
 
 from .errors import ViewerError
 from .legend import LegendService
+from .ocr import OcrSiteService
 from .render_client import JobRenderClient
 
 _log = logging.getLogger("pinny.viewer")
@@ -150,6 +151,8 @@ class ViewerService:
         self._batch_lock = threading.Lock()
         # The legend workflow: legend reading, whole-set scans and counts.
         self.legend = LegendService(self)
+        # Optional OCR (docs/ocr.md): off until an admin turns it on.
+        self.ocr = OcrSiteService(self)
 
     def _db(self, fn, *args, **kwargs):
         return self._exec.submit(fn, *args, **kwargs).result()
@@ -210,6 +213,7 @@ class ViewerService:
         self.wait_crops()  # a crop being cut now must not outlive the purge
         crops = self._db(self.store.purge_document_crops, document_version)
         datasets = self._purge_datasets(document_version)
+        self.ocr.purge(document_version)
         return dict(info, deleted=True, crops_deleted=crops, datasets_deleted=datasets)
 
     def _purge_datasets(self, document_version: str) -> List[str]:

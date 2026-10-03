@@ -373,7 +373,7 @@ or both profiles: `sudo /usr/local/src/agentpinny/deploy/bin/pinny-bootstrap`
 (also the command that adds production later, after a staging-only start).
 
 It installs: Ubuntu packages (Python 3.12 and venv, git, sqlite3, curl,
-unzip); Caddy from Caddy's own apt repository (signing key checked by
+unzip, and `tesseract-ocr` for the optional OCR in docs/ocr.md); Caddy from Caddy's own apt repository (signing key checked by
 fingerprint); AWS CLI v2 (signature checked); the users `pinny-<profile>`,
 `pinny-<profile>-worker` and `pinny-ops`; the directories with their
 owners and modes; the settings files (only if missing); the scripts in

@@ -13,6 +13,7 @@ coordinator-approved PR.
 | Learning store | `pinny/learning/` (was `pinny_learning/`), `tests/learning/`, `docs/learning-store.md` | Pinny local persistence / `claude/great-cerf-hbzlrf` | done; merged |
 | Viewer and pin interface | `pinny/viewer/`, `web/` (if a front end), `tests/viewer/`, `docs/viewer.md` | Pinny viewer and pin interface / `claude/youthful-maxwell-gqfdiu` | done; on the real render service |
 | Evaluation | `evaluation/` | Pinny evaluation CLI / `claude/blissful-clarke-l1k2ns` | done; merged |
+| Optional OCR and sheet info | `pinny/ocr/`, `pinny/viewer/ocr.py`, `web/ocr.js`, `tests/ocr/`, `tests/viewer/test_ocr_*`, `docs/ocr.md` | Pinny OCR / `claude/ocr-sheet-info` | built; off by default |
 | Vector matcher; detection v1.1, learning loop, store schema 3, evaluator corpus/gate | `pinny/vector/`, `tests/vector/`, `docs/vector-matching.md`, `docs/learning-loop.md` (plus v1.1 changes in the areas above) | Pinny improvement / `claude/intelligent-wozniak-3kf3wk` | done; merged into `training-site` |
 
 Phase 2 (learning models) areas are listed in `docs/phase2-ownership.md`.
