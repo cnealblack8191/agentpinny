@@ -207,17 +207,19 @@ try {
   await settle(page);
   check('Esc hides the popup', await pop.isHidden());
 
-  // + Missed: from a pin's popup, one click marks a device the scan did not
-  // find, then the viewer is back in Pan with the new pin selected.
+  // + Missed: a button on the drawing (a missed device has no pin, so it is
+  // not in the pin popup). One click marks the device, then back to Pan.
   await page.locator('input[name=mode][value=pan]').check();
   const before = (await page.evaluate(() => window.__pinny.pins())).length;
   await clickPin(pins[3]);
-  check('the popup offers + Missed', await page.locator('#pin-pop-missed').isEnabled());
-  await page.locator('#pin-pop-missed').click();
+  check('the pin popup has no Missed button', (await page.locator('#pin-pop button').allTextContents())
+    .every((t) => !t.includes('Missed')));
+  const fab = page.locator('#missed-fab');
+  check('+ Missed is on the drawing', await fab.isVisible());
+  await fab.click();
   await settle(page);
   check('+ Missed switches to marking', await page.locator('input[name=mode][value=add]').isChecked()
-    && (await page.locator('#scan-status').textContent()).includes('Click the device the scan missed'),
-    `${await page.locator('input[name=mode]:checked').getAttribute('value')} | ${await page.locator('#scan-status').textContent()}`);
+    && (await fab.textContent()).includes('Tap the missed device'));
   await page.evaluate(([x, y]) => window.__pinny.lookAt(x, y, 1, 0), [fr.width / 2 + 60, fr.height / 2 + 40]);
   await settle(page);
   await page.mouse.click(r.x + r.width / 2, r.y + r.height / 2);
@@ -229,6 +231,12 @@ try {
     && newPin.state === 'added', `${before} -> ${after.length}`);
   check('after marking, the viewer is back in Pan', await page.locator('input[name=mode][value=pan]').isChecked());
   check('the popup calls it a missed device', (await page.locator('#pin-pop-state').textContent()).startsWith('Missed'));
+  await fab.click();
+  await settle(page);
+  await fab.click();
+  await settle(page);
+  check('pressing + Missed again cancels', await page.locator('input[name=mode][value=pan]').isChecked()
+    && (await fab.textContent()) === '+ Missed');
 
   // M with Esc: cancels without adding anything.
   await page.keyboard.press('Escape');

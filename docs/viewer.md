@@ -34,12 +34,12 @@ raise it if a sheet shows text false matches.
 | Mark missed (P) | nothing | adds a manual pin for a device the scan did not find (inside the page only); stays on for several clicks |
 
 **Correct, Wrong, Missed.** The popup beside a selected pin has **Correct**
-(A), **Wrong** (X) and **+ Missed** (M). Missed is for a device the scan did
-not find, which has no pin to click: press it, click the device, and the
-viewer marks it (a manual pin, counted as a correct example for training)
-and goes back to reviewing with the new pin selected. The side panel's
-**+ Missed device** button and the M key do the same with no pin selected;
-Esc cancels. "Mark missed (P)" in the toolbar stays on for several clicks.
+(A) and **Wrong** (X). A device the scan did not find has no pin to click,
+so **+ Missed** is a button on the drawing itself (bottom left, shown once
+the page is scanned; also M and the side panel's **+ Missed device**): press
+it, click the device, and the viewer marks it (a manual pin, counted as a
+correct example for training) and goes back to reviewing with the new pin
+selected. Pressing it again, or Esc, cancels. "Mark missed (P)" in the toolbar stays on for several clicks.
 
 In every mode, the wheel zooms about the cursor, and Space+drag or a
 middle-button drag pans. So a pan can never place a pin or change the

@@ -41,7 +41,12 @@ a.disabled { color: #999; pointer-events: none; }
 .pin-pop button { min-height: 36px; min-width: 44px; padding: 4px 10px; font-size: 14px; }
 .pin-pop-ok:not(:disabled) { background: #1e7e34; border-color: #1e7e34; color: #fff; }
 .pin-pop-wrong:not(:disabled) { background: #b00020; border-color: #b00020; color: #fff; }
-.pin-pop-missed:not(:disabled) { background: #8a5a00; border-color: #8a5a00; color: #fff; }
+/* Always on the drawing once it is scanned: a missed device has no pin to click. */
+.missed-fab { position: absolute; z-index: 2; left: 12px; bottom: 12px; min-height: 44px; min-width: 44px;
+  padding: 6px 16px; font-size: 15px; background: #8a5a00; border: 1px solid #8a5a00; color: #fff;
+  border-radius: 22px; box-shadow: 0 1px 4px rgba(0, 0, 0, .35); }
+.missed-fab[hidden] { display: none; }
+.missed-fab.active { background: #fff; color: #8a5a00; }
 .pin-pop-state { font-size: 12px; color: #444; padding: 0 4px; }
 .pin-pop-state:empty { display: none; }
 .view-message.error { color: #b00020; border-color: #b00020; }

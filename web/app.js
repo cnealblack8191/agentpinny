@@ -23,8 +23,8 @@ const el = {
   saveStatus: $('save-status'), failures: $('failures'), pinInfo: $('pin-info'),
   approveBtn: $('approve-btn'), rejectBtn: $('reject-btn'), nextBtn: $('next-btn'),
   pinPop: $('pin-pop'), pinPopState: $('pin-pop-state'), pinPopOk: $('pin-pop-ok'),
-  pinPopWrong: $('pin-pop-wrong'), pinPopNext: $('pin-pop-next'), pinPopMissed: $('pin-pop-missed'),
-  missedBtn: $('missed-btn'),
+  pinPopWrong: $('pin-pop-wrong'), pinPopNext: $('pin-pop-next'),
+  missedBtn: $('missed-btn'), missedFab: $('missed-fab'),
   showHidden: $('show-hidden'), reportLink: $('report-link'), pinTable: $('pin-table'),
   zoomIn: $('zoom-in'), zoomOut: $('zoom-out'), zoomLabel: $('zoom-label'), fitBtn: $('fit-btn'),
   rotateBtn: $('rotate-btn'), hidePins: $('hide-pins'), cursorPos: $('cursor-pos'),
@@ -443,6 +443,9 @@ function renderPanel() {
   el.nextBtn.disabled = !pins.some((p) => p.state === 'unreviewed');
   el.missedBtn.disabled = !S.scanId;
   el.missedBtn.classList.toggle('active', !!S.missedOnce);
+  el.missedFab.hidden = !S.scanId;
+  el.missedFab.classList.toggle('active', !!S.missedOnce);
+  el.missedFab.textContent = S.missedOnce ? 'Tap the missed device (Esc cancels)' : '+ Missed';
 
   // Report
   const canExport = S.scanId && !c.pending && !c.failed;
@@ -1083,7 +1086,6 @@ function positionPinPop() {
   el.pinPopWrong.disabled = el.rejectBtn.disabled;
   el.pinPopWrong.textContent = sel.origin === 'manual' ? '\u2717 Delete' : '\u2717 Wrong';
   el.pinPopNext.disabled = el.nextBtn.disabled;
-  el.pinPopMissed.disabled = el.missedBtn.disabled;
   el.pinPopState.textContent = POP_STATE[sel.state] || '';
   el.pinPop.hidden = false;
   // Right of the pin and vertically centred on it; flipped or clamped to stay inside.
@@ -1379,8 +1381,11 @@ el.approveBtn.onclick = () => review('approve');
 el.pinPopOk.onclick = () => review('approve');
 el.pinPopWrong.onclick = () => review('delete');
 el.pinPopNext.onclick = selectNext;
-el.pinPopMissed.onclick = markMissed;
 el.missedBtn.onclick = markMissed;
+// Pressing it again while marking cancels.
+el.missedFab.onclick = () => (S.missedOnce ? setMode('pan') : markMissed());
+el.missedFab.addEventListener('pointerdown', (e) => e.stopPropagation());
+el.missedFab.addEventListener('click', () => el.viewport.focus({ preventScroll: true }));
 // The popup sits inside the viewport: keep its presses from panning or
 // deselecting, and give keyboard focus back so the shortcuts keep working.
 el.pinPop.addEventListener('pointerdown', (e) => e.stopPropagation());
