@@ -163,6 +163,7 @@
         <button id="approve-btn" disabled title="A">Approve</button>
         <button id="reject-btn" disabled title="X or Delete">Reject / delete</button>
         <button id="next-btn" disabled title="N">Next unreviewed</button>
+        <button id="missed-btn" disabled title="M: then click a device the scan did not find">+ Missed device</button>
       </div>
       <label><input type="checkbox" id="show-hidden"> Show rejected and removed pins</label>
       <p><a id="report-link" class="disabled" aria-disabled="true">Export report (JSON)</a></p>
@@ -226,7 +227,7 @@
       <span class="group" id="modes">
         <label><input type="radio" name="mode" value="pan" checked> Pan / pick pin (V)</label>
         <label id="template-mode-label"><input type="radio" name="mode" value="template"> Template box (T)</label>
-        <label><input type="radio" name="mode" value="add"> Add pin (P)</label>
+        <label title="Click each device the scan did not find"><input type="radio" name="mode" value="add"> Mark missed (P)</label>
       </span>
       <span class="group">
         <button id="zoom-out" title="-">-</button>
@@ -244,6 +245,7 @@
         <span id="pin-pop-state" class="pin-pop-state"></span>
         <button id="pin-pop-ok" class="pin-pop-ok" title="A">&#10003; Correct</button>
         <button id="pin-pop-wrong" class="pin-pop-wrong" title="X">&#10007; Wrong</button>
+        <button id="pin-pop-missed" class="pin-pop-missed" title="M: then click a device the scan did not find">+ Missed</button>
         <button id="pin-pop-next" title="N">Next &rsaquo;</button>
       </div>
       <div id="view-message" class="view-message">Upload a PDF and choose a page.</div>

@@ -206,6 +206,40 @@ try {
   await page.keyboard.press('Escape');
   await settle(page);
   check('Esc hides the popup', await pop.isHidden());
+
+  // + Missed: from a pin's popup, one click marks a device the scan did not
+  // find, then the viewer is back in Pan with the new pin selected.
+  await page.locator('input[name=mode][value=pan]').check();
+  const before = (await page.evaluate(() => window.__pinny.pins())).length;
+  await clickPin(pins[3]);
+  check('the popup offers + Missed', await page.locator('#pin-pop-missed').isEnabled());
+  await page.locator('#pin-pop-missed').click();
+  await settle(page);
+  check('+ Missed switches to marking', await page.locator('input[name=mode][value=add]').isChecked()
+    && (await page.locator('#scan-status').textContent()).includes('Click the device the scan missed'),
+    `${await page.locator('input[name=mode]:checked').getAttribute('value')} | ${await page.locator('#scan-status').textContent()}`);
+  await page.evaluate(([x, y]) => window.__pinny.lookAt(x, y, 1, 0), [fr.width / 2 + 60, fr.height / 2 + 40]);
+  await settle(page);
+  await page.mouse.click(r.x + r.width / 2, r.y + r.height / 2);
+  await waitIdle(page);
+  const after = await page.evaluate(() => window.__pinny.pins());
+  const selNow = await page.evaluate(() => window.__pinny.selected());
+  const newPin = after.find((q) => q.pin_id === selNow);
+  check('one missed device was marked', after.length === before + 1 && !!newPin && newPin.origin === 'manual'
+    && newPin.state === 'added', `${before} -> ${after.length}`);
+  check('after marking, the viewer is back in Pan', await page.locator('input[name=mode][value=pan]').isChecked());
+  check('the popup calls it a missed device', (await page.locator('#pin-pop-state').textContent()).startsWith('Missed'));
+
+  // M with Esc: cancels without adding anything.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('m');
+  await settle(page);
+  check('M starts marking a missed device', await page.locator('input[name=mode][value=add]').isChecked()
+    && await page.locator('#missed-btn').evaluate((b) => b.classList.contains('active')));
+  await page.keyboard.press('Escape');
+  await settle(page);
+  check('Esc cancels marking', await page.locator('input[name=mode][value=pan]').isChecked()
+    && (await page.evaluate(() => window.__pinny.pins())).length === before + 1);
 } finally {
   await browser.close();
   if (server) server.proc.kill();

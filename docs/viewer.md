@@ -31,7 +31,15 @@ raise it if a sheet shows text false matches.
 |---|---|---|
 | Pan / pick pin (V) | pans | selects the nearest pin within 10 px |
 | Template box (T) | draws the template box | nothing |
-| Add pin (P) | nothing | adds a manual pin (inside the page only) |
+| Mark missed (P) | nothing | adds a manual pin for a device the scan did not find (inside the page only); stays on for several clicks |
+
+**Correct, Wrong, Missed.** The popup beside a selected pin has **Correct**
+(A), **Wrong** (X) and **+ Missed** (M). Missed is for a device the scan did
+not find, which has no pin to click: press it, click the device, and the
+viewer marks it (a manual pin, counted as a correct example for training)
+and goes back to reviewing with the new pin selected. The side panel's
+**+ Missed device** button and the M key do the same with no pin selected;
+Esc cancels. "Mark missed (P)" in the toolbar stays on for several clicks.
 
 In every mode, the wheel zooms about the cursor, and Space+drag or a
 middle-button drag pans. So a pan can never place a pin or change the
@@ -47,7 +55,7 @@ added by hand) and **Next** right beside it: the same actions as the side
 panel's Approve, Reject and Next unreviewed buttons. A reviewed pin stays
 selected with its state shown, so a mistake can be undone at once.
 Other keys: `+`/`-` zoom, `0` fit, `R` rotate the view 90°, `H` hide pins,
-`A` approve, `X`/`Delete` reject or delete, `N` next unreviewed, `Esc` cancel
+`A` approve, `X`/`Delete` reject or delete, `M` mark a missed device, `N` next unreviewed, `Esc` cancel
 or deselect.
 
 Pin colours: orange = unreviewed, green = approved, magenta = added

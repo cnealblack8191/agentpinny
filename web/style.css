@@ -15,6 +15,7 @@ section { border-top: 1px solid #eee; }
 .pages button[aria-pressed=true] { font-weight: bold; outline: 2px solid #333; }
 #failures .failure { border: 1px solid #b00020; padding: 4px; margin: 4px 0; font-size: 13px; }
 #pin-actions button { margin: 2px 2px 2px 0; }
+#missed-btn.active { background: #8a5a00; border-color: #8a5a00; color: #fff; }
 #pin-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
 #pin-table td, #pin-table th { text-align: left; padding: 2px 4px; border-bottom: 1px solid #eee; }
 #pin-table tr.selected { background: #e6f0ff; }
@@ -40,6 +41,7 @@ a.disabled { color: #999; pointer-events: none; }
 .pin-pop button { min-height: 36px; min-width: 44px; padding: 4px 10px; font-size: 14px; }
 .pin-pop-ok:not(:disabled) { background: #1e7e34; border-color: #1e7e34; color: #fff; }
 .pin-pop-wrong:not(:disabled) { background: #b00020; border-color: #b00020; color: #fff; }
+.pin-pop-missed:not(:disabled) { background: #8a5a00; border-color: #8a5a00; color: #fff; }
 .pin-pop-state { font-size: 12px; color: #444; padding: 0 4px; }
 .pin-pop-state:empty { display: none; }
 .view-message.error { color: #b00020; border-color: #b00020; }

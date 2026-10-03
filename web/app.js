@@ -23,7 +23,8 @@ const el = {
   saveStatus: $('save-status'), failures: $('failures'), pinInfo: $('pin-info'),
   approveBtn: $('approve-btn'), rejectBtn: $('reject-btn'), nextBtn: $('next-btn'),
   pinPop: $('pin-pop'), pinPopState: $('pin-pop-state'), pinPopOk: $('pin-pop-ok'),
-  pinPopWrong: $('pin-pop-wrong'), pinPopNext: $('pin-pop-next'),
+  pinPopWrong: $('pin-pop-wrong'), pinPopNext: $('pin-pop-next'), pinPopMissed: $('pin-pop-missed'),
+  missedBtn: $('missed-btn'),
   showHidden: $('show-hidden'), reportLink: $('report-link'), pinTable: $('pin-table'),
   zoomIn: $('zoom-in'), zoomOut: $('zoom-out'), zoomLabel: $('zoom-label'), fitBtn: $('fit-btn'),
   rotateBtn: $('rotate-btn'), hidePins: $('hide-pins'), cursorPos: $('cursor-pos'),
@@ -440,6 +441,8 @@ function renderPanel() {
     : sel.state === 'rejected' || sel.state === 'removed');
   el.rejectBtn.textContent = sel && sel.origin === 'manual' ? 'Delete pin' : 'Reject';
   el.nextBtn.disabled = !pins.some((p) => p.state === 'unreviewed');
+  el.missedBtn.disabled = !S.scanId;
+  el.missedBtn.classList.toggle('active', !!S.missedOnce);
 
   // Report
   const canExport = S.scanId && !c.pending && !c.failed;
@@ -1060,7 +1063,7 @@ async function batchNext() {
 }
 
 // -------------------------------------------------------------- review
-const POP_STATE = { approved: 'Approved', rejected: 'Rejected', added: 'Added by hand', removed: 'Removed' };
+const POP_STATE = { approved: 'Approved', rejected: 'Rejected', added: 'Missed (added by hand)', removed: 'Removed' };
 const POP_GAP = 14; // CSS px between the pin and the popup
 
 // The review popup beside the selected pin: the same actions (and the same
@@ -1080,6 +1083,7 @@ function positionPinPop() {
   el.pinPopWrong.disabled = el.rejectBtn.disabled;
   el.pinPopWrong.textContent = sel.origin === 'manual' ? '\u2717 Delete' : '\u2717 Wrong';
   el.pinPopNext.disabled = el.nextBtn.disabled;
+  el.pinPopMissed.disabled = el.missedBtn.disabled;
   el.pinPopState.textContent = POP_STATE[sel.state] || '';
   el.pinPop.hidden = false;
   // Right of the pin and vertically centred on it; flipped or clamped to stay inside.
@@ -1136,6 +1140,27 @@ function addPin(pt) {
   const e = queue.enqueue({ scan_id: S.scanId, action: 'add_manual', x: round3(p.x), y: round3(p.y),
     request_id: newRequestId(), ...(tag ? { class_label: tag } : {}) });
   S.selected = 'tmp:' + e.request_id;
+  if (S.missedOnce) {
+    // "Missed": one device per press, then back to reviewing with it selected.
+    S.missedOnce = false;
+    S.mode = 'pan';
+    setStatus(el.scanStatus, 'Missed device marked. Press M (or + Missed) for the next one.', 'ok');
+  }
+  render();
+}
+
+// "Missed" (M, or the + Missed buttons): the next click on the page marks a
+// device the scan did not find, then the viewer goes back to reviewing.
+function markMissed() {
+  if (!S.scanId) {
+    setStatus(el.scanStatus, 'Scan the page first; missed devices are marked on a scan.', 'error');
+    return;
+  }
+  S.missedOnce = true;
+  S.mode = 'add';
+  S.drag = null;
+  S.dragBox = null;
+  setStatus(el.scanStatus, 'Click the device the scan missed. Esc cancels.', '');
   render();
 }
 
@@ -1179,6 +1204,7 @@ function setMode(mode) {
     mode = 'pan';
   }
   S.mode = mode;
+  S.missedOnce = false;
   S.drag = null;
   S.dragBox = null;
   render();
@@ -1353,6 +1379,8 @@ el.approveBtn.onclick = () => review('approve');
 el.pinPopOk.onclick = () => review('approve');
 el.pinPopWrong.onclick = () => review('delete');
 el.pinPopNext.onclick = selectNext;
+el.pinPopMissed.onclick = markMissed;
+el.missedBtn.onclick = markMissed;
 // The popup sits inside the viewport: keep its presses from panning or
 // deselecting, and give keyboard focus back so the shortcuts keep working.
 el.pinPop.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -1441,8 +1469,8 @@ document.addEventListener('keydown', (e) => {
     0: () => el.fitBtn.onclick(), r: () => el.rotateBtn.onclick(),
     h: () => { el.hidePins.checked = !el.hidePins.checked; render(); },
     a: () => review('approve'), x: () => review('delete'), Delete: () => review('delete'),
-    Backspace: () => review('delete'), n: selectNext, b: batchNext,
-    Escape: () => { if (S.drag) { S.drag = null; S.dragBox = null; render(); } else if (S.selected) selectPin(null); else setMode('pan'); },
+    Backspace: () => review('delete'), n: selectNext, b: batchNext, m: markMissed,
+    Escape: () => { if (S.drag) { S.drag = null; S.dragBox = null; render(); } else if (S.missedOnce) { setMode('pan'); setStatus(el.scanStatus, ''); } else if (S.selected) selectPin(null); else setMode('pan'); },
   };
   const fn = actions[k] || actions[k.toLowerCase()];
   if (fn) {
