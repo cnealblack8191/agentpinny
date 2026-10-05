@@ -21,3 +21,4 @@ dist/
 node_modules/
 .next/
 .env*
+docs/guide/shots/*-crop.png

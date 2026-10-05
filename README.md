@@ -7,6 +7,7 @@ model scan modes in the viewer) with `claude/intelligent-wozniak-3kf3wk`
 evaluator corpus scoring and baseline gate). It is the base for the
 internet-facing training site.
 
+* **User guide (PDF): `docs/guide/Pinny-User-Guide.pdf`** - reviewing drawings and training the models; rebuilt with `docs/guide/build.py`
 * Contracts: `docs/contracts.md`
 * Training site plan (security baseline, architecture, steps): `docs/training-site-plan.md`
 * Running it on AWS (setup, deploy, backups, alerts): `docs/deployment.md`
