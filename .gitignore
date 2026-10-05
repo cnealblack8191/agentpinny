@@ -22,3 +22,4 @@ node_modules/
 .next/
 .env*
 docs/guide/shots/*-crop.png
+!docs/guide/Pinny-User-Guide.pdf
